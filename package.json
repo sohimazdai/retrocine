@@ -1,0 +1,15 @@
+{
+  "name": "kino-3d-room",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check dist/app.js && node --check dist/avatars.js && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "three": "0.180.0"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

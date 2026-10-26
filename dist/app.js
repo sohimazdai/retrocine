@@ -19,7 +19,14 @@ import {
 } from "./physics.js";
 import { animateRig, startAction } from "./animation.js";
 import { EmotionEffects, EMOTIONS } from "./emotions.js";
-import { roomViewports, fitNoteText } from "./layout.js";
+import { ROOM, floorBack, fitNoteText } from "./layout.js";
+import {
+  createFloor,
+  roomDistance,
+  ROOM_TARGET,
+  framePortrait,
+} from "./room.js";
+import { Playground } from "./playground.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
 const $ = (s) => document.querySelector(s),
@@ -87,12 +94,12 @@ const defaults = [
   ["Попробовать день без встреч", "idea", "Макс"],
 ];
 const notePositions = [
-  [-8, -3],
-  [-4, 4],
-  [-0.8, -2.9],
-  [4.2, 4.5],
-  [7.8, -2.8],
-  [0.1, 5.8],
+  [-10.5, -0.3],
+  [-3.8, 4.8],
+  [-0.8, -5.8],
+  [2.5, 5],
+  [10.5, 2],
+  [0.1, 8],
 ];
 let notes =
   read("kino-3d-notes-v2", null) ||
@@ -167,7 +174,7 @@ const defs = [
   },
 ];
 let cubes = read("kino-3d-cubes-v2", [
-  { x: -9, z: 5.4, size: 0.65, color: "#a696ce" },
+  { x: -10.3, z: 7.8, size: 0.65, color: "#a696ce" },
   { x: 6.5, z: 2, size: 0.65, color: "#ccad87" },
   { x: 10.5, z: -4, size: 0.65, color: "#9bbbbb" },
   { x: -1, z: 0.5, size: 0.65, color: "#c99ead" },
@@ -206,6 +213,11 @@ function save() {
       "kino-avatar-v1",
       JSON.stringify(players[0]?.profile || me),
     );
+    localStorage.setItem(
+      "kino-playground-v1",
+      JSON.stringify(playground.snapshot()),
+    );
+    localStorage.setItem("kino-room-layout-v3", "true");
   } catch {
     if (!storageFailed) {
       storageFailed = true;
@@ -216,7 +228,6 @@ function save() {
 const canvas = $("#world"),
   scene = new T.Scene();
 scene.background = new T.Color("#1c1b27");
-scene.fog = new T.Fog("#1c1b27", 55, 100);
 let renderer;
 try {
   renderer = new T.WebGLRenderer({
@@ -239,41 +250,30 @@ const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 120),
   raycaster = new T.Raycaster(),
   pointerNDC = new T.Vector2(),
   groundPlane = new T.Plane(new T.Vector3(0, 1, 0), 0),
-  pointerWorld = new T.Vector3(0, 0, 7),
-  lookTarget = new T.Vector3(0, 0, 0);
-let camYaw = 0,
-  camElevation = 53,
-  camZoom = 1,
-  baseDistance = 24;
-let views = roomViewports(innerWidth, innerHeight),
-  cinema = null,
+  pointerWorld = new T.Vector3(0, 0, 7);
+let camElevation = 60,
+  baseDistance = roomDistance(innerWidth / innerHeight);
+let cinema = null,
   avatarEditor = null;
 function updateCamera() {
-  const aspect = views.floor.width / views.floor.height;
-  baseDistance = Math.max(
-    26.5,
-    29 / (2 * Math.tan(T.MathUtils.degToRad(21.5)) * aspect),
-  );
-  const d = baseDistance / camZoom,
+  const d = baseDistance,
     el = (camElevation * Math.PI) / 180;
   camera.position.set(
-    Math.sin(camYaw) * Math.cos(el) * d,
-    Math.sin(el) * d,
-    Math.cos(camYaw) * Math.cos(el) * d,
+    0,
+    ROOM_TARGET.y + Math.sin(el) * d,
+    ROOM_TARGET.z + Math.cos(el) * d,
   );
-  camera.lookAt(0, 0, -0.6);
+  camera.lookAt(ROOM_TARGET);
   camera.updateMatrixWorld();
+  cinema?.updateCamera(camera);
 }
 function resize() {
   renderer.setSize(innerWidth, innerHeight);
-  views = roomViewports(innerWidth, innerHeight);
-  camera.aspect = views.floor.width / views.floor.height;
+  camera.aspect = innerWidth / innerHeight;
+  baseDistance = roomDistance(camera.aspect, camera.fov);
+  camera.far = Math.max(120, baseDistance + 40);
   camera.updateProjectionMatrix();
   updateCamera();
-  if (cinema) {
-    cinema.resize(innerWidth, innerHeight);
-    screenUpdate();
-  }
 }
 window.addEventListener("resize", resize);
 resize();
@@ -297,28 +297,8 @@ scene.add(keyLight);
 const rim = new T.DirectionalLight("#baa4f5", 1.4);
 rim.position.set(8, 10, -12);
 scene.add(rim);
-const base = box(scene, 90, 0.55, 90, "#484253", 0, -0.3, 0, 0.2);
-base.userData = { kind: "floor" };
-const floor = box(scene, 90, 0.055, 90, "#514959", 0, -0.003, 0, 0.025);
-floor.userData = { kind: "floor" };
-floor.receiveShadow = true;
-const gridVertices = [];
-for (let x = -42; x <= 42; x += 1.4)
-  gridVertices.push(x, 0.03, -42, x, 0.03, 42);
-for (let z = -42; z <= 42; z += 1.4)
-  gridVertices.push(-42, 0.03, z, 42, 0.03, z);
-const gg = new T.BufferGeometry();
-gg.setAttribute("position", new T.Float32BufferAttribute(gridVertices, 3));
-scene.add(
-  new T.LineSegments(
-    gg,
-    new T.LineBasicMaterial({
-      color: "#95869f",
-      transparent: true,
-      opacity: 0.12,
-    }),
-  ),
-);
+const floor = createFloor(scene);
+const playground = new Playground(scene, read("kino-playground-v1", {}));
 const bigGroup = new T.Group();
 bigGroup.userData = { kind: "big", id: "big" };
 scene.add(bigGroup);
@@ -329,7 +309,24 @@ for (const x of [-1.31, 1.31])
 bigGroup.position.set(big.x, 0, big.z);
 const cubeMeshes = new Map(),
   noteMeshes = new Map();
-let pickables = [floor, bigGroup];
+let pickables = [floor, bigGroup, ...playground.pickables];
+function clearFloorSpot(x, z, pad = 1.4) {
+  const boxes = [big, ...playground.colliders()];
+  for (let radius = 0; radius < 24; radius += 0.5) {
+    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+      const p = {
+        x: x + Math.sin(angle) * radius,
+        z: z + Math.cos(angle) * radius,
+      };
+      if (validPos(p) && !boxes.some((b) => inside(p.x, p.z, b, pad))) return p;
+    }
+  }
+  return { x, z };
+}
+if (!read("kino-room-layout-v3", false)) {
+  for (const n of notes) Object.assign(n, clearFloorSpot(n.x, n.z));
+  for (const c of cubes) Object.assign(c, clearFloorSpot(c.x, c.z, 0.9));
+}
 function addCubeMesh(c) {
   const root = new T.Group();
   root.userData = { kind: "cube", id: c.id };
@@ -413,12 +410,12 @@ function textureForNote(n) {
 function addNoteMesh(n) {
   const root = new T.Group();
   root.userData = { kind: "note", id: n.id };
-  root.position.set(n.x, n.y || 0, n.z);
+  n.y = 0;
+  root.position.set(n.x, 0.025, n.z);
   const pivot = new T.Group();
-  pivot.position.y = 1.34;
   root.add(pivot);
-  pivot.rotation.x = -0.55;
-  box(pivot, 2.3, 2.86, 0.095, palette[n.type], 0, 0, 0, 0.055);
+  pivot.rotation.x = -Math.PI / 2;
+  box(pivot, 2.3, 2.86, 0.025, palette[n.type], 0, 0, 0, 0.012);
   const texture = textureForNote(n),
     front = new T.Mesh(
       new T.PlaneGeometry(2.23, 2.78),
@@ -428,10 +425,8 @@ function addNoteMesh(n) {
         toneMapped: false,
       }),
     );
-  front.position.z = 0.051;
+  front.position.z = 0.015;
   pivot.add(front);
-  box(root, 0.12, 0.25, 0.12, "#8c7b99", 0, 0.13, -0.1, 0.035);
-  box(root, 1.2, 0.06, 0.65, "#776781", 0, 0.03, -0.1, 0.025);
   root.userData.pivot = pivot;
   root.userData.texture = texture;
   root.userData.front = front;
@@ -465,8 +460,7 @@ function portraitTexture(p) {
   a.root.rotation.y = -0.12;
   ps.add(a.root);
   const pc = new T.PerspectiveCamera(31, 1, 0.1, 10);
-  pc.position.set(0, 1.4, 4);
-  pc.lookAt(0, 1.05, 0);
+  framePortrait(pc, a);
   const rt = new T.WebGLRenderTarget(384, 384, { depthBuffer: true });
   const current = renderer.getRenderTarget();
   renderer.setScissorTest(false);
@@ -482,7 +476,9 @@ function portraitTexture(p) {
 }
 players.forEach(portraitTexture);
 cinema = new CinemaScreen(players, portraits);
-cinema.resize(innerWidth, innerHeight);
+scene.add(cinema.group);
+pickables.push(cinema.group);
+cinema.updateCamera(camera);
 const screenGroup = cinema.group,
   screenTiles = cinema.tiles,
   featured = cinema.featured;
@@ -501,6 +497,11 @@ function screenUpdate() {
     pinned,
     share: displayStream ? shareTexture : null,
   });
+  updateShareTools();
+}
+function updateShareTools() {
+  $("#shareTools").hidden = !displayStream;
+  $("#shareScale").textContent = Math.round(cinema.shareZoom * 100) + "%";
 }
 screenUpdate();
 const emotionEffects = new EmotionEffects(scene);
@@ -525,7 +526,7 @@ let tool = "snow",
   hovered = null,
   pending = null,
   orbitDrag = null,
-  mouseDown = null,
+  shareDrag = null,
   clock = performance.now(),
   accumulator = 0,
   worldTime = 0,
@@ -573,13 +574,9 @@ function visibleObject(object) {
   return true;
 }
 function rayAt(e) {
-  if (e.clientY < views.cinema.height) {
-    pointerWorld.set(((e.clientX / innerWidth) * 2 - 1) * 13, 0, -9);
-    return cinema.pick(e, raycaster);
-  }
   pointerNDC.set(
     (e.clientX / innerWidth) * 2 - 1,
-    1 - ((e.clientY - views.floor.y) / views.floor.height) * 2,
+    1 - (e.clientY / innerHeight) * 2,
   );
   raycaster.setFromCamera(pointerNDC, camera);
   const ground = raycaster.ray.intersectPlane(groundPlane, new T.Vector3());
@@ -590,10 +587,9 @@ function rayAt(e) {
     .find((h) => visibleObject(h.object));
 }
 function groundAt(e, y = 0) {
-  if (e.clientY < views.cinema.height) return null;
   pointerNDC.set(
     (e.clientX / innerWidth) * 2 - 1,
-    1 - ((e.clientY - views.floor.y) / views.floor.height) * 2,
+    1 - (e.clientY / innerHeight) * 2,
   );
   raycaster.setFromCamera(pointerNDC, camera);
   return raycaster.ray.intersectPlane(
@@ -602,7 +598,12 @@ function groundAt(e, y = 0) {
   );
 }
 function validPos(v) {
-  return v && Math.abs(v.x) < 12.7 && Math.abs(v.z) < 8.7;
+  return (
+    v &&
+    Math.abs(v.x) < ROOM.halfWidth - 1.4 &&
+    v.z > floorBack(v.x) + 1.6 &&
+    v.z < ROOM.front - 1.6
+  );
 }
 function highlight() {
   if (!selected) return;
@@ -613,6 +614,20 @@ function highlight() {
     label = "Кубик";
     buttons =
       '<button data-context="kick">Пнуть · E</button><button data-context="remove">Убрать</button>';
+  }
+  if (obj.kind === "ball") {
+    label = "Футбольный мяч";
+    buttons =
+      '<button data-context="kick">Пнуть · E</button><button data-context="move">Переместить</button><button data-context="resetBall">На исходную</button>';
+  }
+  if (obj.kind === "structure") {
+    const structure = playground.structures.get(obj.id);
+    label = structure.label;
+    buttons =
+      (structure.kind === "goal"
+        ? `<button data-context="resetBall">Мяч на исходную · ${playground.score} гол.</button>`
+        : '<button data-context="climb">Забраться</button>') +
+      '<button data-context="move">Переместить</button>';
   }
   if (obj.kind === "big") {
     label = "Большой куб";
@@ -630,13 +645,16 @@ function highlight() {
     buttons =
       '<button data-context="control">Управлять</button><button data-context="wave">Помахать</button><button data-context="customize">Настроить</button>';
   }
-  if (["screen", "tile"].includes(obj.kind)) {
+  if (["screen", "tile", "share"].includes(obj.kind)) {
     label = "Экран";
     buttons =
-      (obj.kind === "tile"
+      (obj.kind === "tile" && !displayStream
         ? '<button data-context="pin">Закрепить</button>'
         : "") +
-      '<button data-context="unpin">Все участники</button><button data-action="share">Показать экран</button>';
+      '<button data-context="unpin">Все участники</button>' +
+      (displayStream
+        ? '<button data-action="share">Остановить показ</button>'
+        : '<button data-action="share">Показать экран</button>');
   }
   $("#contextBar").innerHTML =
     `<strong>${esc(label)}</strong>${buttons}<button data-context="close" aria-label="Закрыть действия">×</button>`;
@@ -708,8 +726,11 @@ function burst(pos, kind) {
       age: 0,
     });
   }
-  if (kind?.userData.kind === "cube") {
-    const c = cubes.find((c) => c.id === kind.userData.id);
+  if (["cube", "ball"].includes(kind?.userData.kind)) {
+    const c =
+      kind.userData.kind === "ball"
+        ? playground.ball
+        : cubes.find((c) => c.id === kind.userData.id);
     if (c) kickCube(c, { x: active.x, z: active.z }, 3);
   }
   if (kind?.userData.kind === "avatar") {
@@ -733,7 +754,7 @@ function doJump() {
   }
 }
 function kickNearest() {
-  const near = cubes
+  const near = [...cubes, playground.ball]
     .filter(
       (c) =>
         Math.hypot(c.x - active.x, c.z - active.z) < 1.6 &&
@@ -745,7 +766,7 @@ function kickNearest() {
         Math.hypot(b.x - active.x, b.z - active.z),
     )[0];
   if (near) startAction(active, "kick", worldTime, { cube: near });
-  else toast("Подойдите к маленькому кубику и нажмите E", 1800);
+  else toast("Подойдите к мячу или маленькому кубику и нажмите E", 1800);
 }
 function modal(title, body, wide = false) {
   avatarEditor?.dispose();
@@ -792,6 +813,7 @@ function noteModal(id = null, pos = null, type = "good") {
           0,
           clamp(active.z + 1, -8, 8),
         );
+      Object.assign(p, clearFloorSpot(p.x, p.z));
       notes.push({
         id: uid(),
         text,
@@ -800,7 +822,7 @@ function noteModal(id = null, pos = null, type = "good") {
         votes: 0,
         x: p.x,
         z: p.z,
-        y: inside(p.x, p.z, big) ? big.h : 0,
+        y: 0,
       });
     }
     refreshNotes();
@@ -900,7 +922,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросить снежок</strong>Левый клик по сцене.<br>Персонажи поворачиваются к курсору.</div><div><strong>Кубики</strong><kbd>E</kbd> — пнуть рядом.<br>На большой куб можно запрыгнуть или выбрать «Забраться».</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Правая кнопка — действия в любом режиме.</div><div><strong>Стикеры</strong><kbd>N</kbd> и клик по площадке. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Камера</strong>Колесо — масштаб.<br>Средняя кнопка + движение — повернуть зал. Ракурс также доступен на панели.</div></div><p class="modal-text">Это локальная 3D-комната. Остальные персонажи демонстрационные; можно переключаться между ними. Данные сохраняются в этом браузере. Видео и звук пока не передаются другим людям.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросить снежок</strong>Левый клик по сцене.<br>Персонажи поворачиваются к курсору.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Правая кнопка — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 30–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Это локальная 3D-комната. Остальные персонажи демонстрационные; можно переключаться между ними. Данные сохраняются в этом браузере. Видео и звук пока не передаются другим людям.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -1022,6 +1044,18 @@ const actions = {
   mic: () => media("mic"),
   camera: () => media("camera"),
   share,
+  shareIn: () => {
+    cinema.zoomShare(1.25);
+    updateShareTools();
+  },
+  shareOut: () => {
+    cinema.zoomShare(0.8);
+    updateShareTools();
+  },
+  shareReset: () => {
+    cinema.zoomShare(1 / cinema.shareZoom);
+    updateShareTools();
+  },
   timerSettings,
   timer: () => {
     if (timerEnd) {
@@ -1042,27 +1076,15 @@ const actions = {
   view: () => {
     modal(
       "Ваш ракурс",
-      `<div class="label-row"><label for="elevation">Высота камеры</label><span id="elevationValue">${camElevation}°</span></div><input id="elevation" type="range" min="30" max="72" value="${camElevation}"><div class="label-row"><label for="angle">Поворот</label><span id="angleValue">${Math.round((camYaw * 180) / Math.PI)}°</span></div><input id="angle" type="range" min="-100" max="100" value="${(camYaw * 180) / Math.PI}"><div class="label-row"><label for="zoom">Масштаб</label><span id="zoomValue">${Math.round(camZoom * 100)}%</span></div><input id="zoom" type="range" min="70" max="175" value="${camZoom * 100}"><div class="modal-actions"><button class="secondary" id="resetView">Сбросить</button><button class="primary" data-action="close">Готово</button></div>`,
+      `<div class="label-row"><label for="elevation">Угол к полу</label><span id="elevationValue">${Math.round(camElevation)}°</span></div><input id="elevation" type="range" min="30" max="80" value="${camElevation}"><div class="modal-actions"><button class="secondary" id="resetView">Вернуть 60°</button><button class="primary" data-action="close">Готово</button></div>`,
     );
     $("#elevation").oninput = (e) => {
       camElevation = +e.target.value;
       $("#elevationValue").textContent = camElevation + "°";
       updateCamera();
     };
-    $("#angle").oninput = (e) => {
-      camYaw = (+e.target.value * Math.PI) / 180;
-      $("#angleValue").textContent = e.target.value + "°";
-      updateCamera();
-    };
-    $("#zoom").oninput = (e) => {
-      camZoom = +e.target.value / 100;
-      $("#zoomValue").textContent = e.target.value + "%";
-      updateCamera();
-    };
     $("#resetView").onclick = () => {
-      camElevation = 53;
-      camYaw = 0;
-      camZoom = 1;
+      camElevation = 60;
       updateCamera();
       $("#modal").close();
     };
@@ -1084,14 +1106,28 @@ function contextAction(action) {
   if (!selected) return;
   const { kind, id } = selected;
   if (action === "kick") {
-    const c = cubes.find((c) => c.id === id);
+    const c =
+      kind === "ball" ? playground.ball : cubes.find((c) => c.id === id);
     pending = { type: "kick", target: c, started: worldTime };
     closeContext();
   }
   if (action === "climb") {
-    pending = { type: "climb", target: big, started: worldTime, jumped: false };
+    const path =
+      kind === "big" ? [{ x: big.x, z: big.z, h: big.h }] : playground.path(id);
+    if (!path.length) return;
+    pending = {
+      type: "climb",
+      path,
+      index: 0,
+      target: path[0],
+      started: worldTime,
+    };
     closeContext();
     toast("Подхожу и забираюсь", 1800);
+  }
+  if (action === "resetBall") {
+    playground.resetBall();
+    closeContext();
   }
   if (action === "move") {
     setTool("interact");
@@ -1131,6 +1167,7 @@ function contextAction(action) {
   if (action === "customize")
     avatarModal(players.find((p) => p.profile.id === id));
   if (action === "pin") {
+    if (displayStream) return;
     pinned = id;
     screenUpdate();
     closeContext();
@@ -1207,9 +1244,7 @@ canvas.addEventListener("pointerdown", (e) => {
   if (e.button === 1) {
     e.preventDefault();
     orbitDrag = {
-      x: e.clientX,
       y: e.clientY,
-      yaw: camYaw,
       elevation: camElevation,
     };
     canvas.setPointerCapture(e.pointerId);
@@ -1221,7 +1256,12 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   if (e.button !== 0) return;
-  if (e.clientY < views.cinema.height) {
+  if (o?.userData.kind === "share" && cinema.shareZoom > 1 && h.uv) {
+    shareDrag = { uv: h.uv.clone() };
+    canvas.setPointerCapture(e.pointerId);
+    return;
+  }
+  if (["screen", "tile", "share"].includes(o?.userData.kind)) {
     select(o);
     return;
   }
@@ -1264,7 +1304,10 @@ canvas.addEventListener("pointerdown", (e) => {
     return;
   }
   select(o);
-  if (o && ["note", "cube", "big"].includes(o.userData.kind)) {
+  if (
+    o &&
+    ["note", "cube", "big", "ball", "structure"].includes(o.userData.kind)
+  ) {
     drag = {
       kind: o.userData.kind,
       id: o.userData.id,
@@ -1283,12 +1326,22 @@ canvas.addEventListener("pointermove", (e) => {
   const h = rayAt(e),
     o = h && owner(h.object);
   hovered = o;
+  if (shareDrag) {
+    const shareHit = raycaster.intersectObject(featured)[0];
+    if (shareHit?.uv) {
+      cinema.panShare(
+        shareHit.uv.x - shareDrag.uv.x,
+        shareHit.uv.y - shareDrag.uv.y,
+      );
+      shareDrag.uv.copy(shareHit.uv);
+    }
+    return;
+  }
   if (orbitDrag) {
-    camYaw = orbitDrag.yaw - (e.clientX - orbitDrag.x) * 0.006;
     camElevation = clamp(
       orbitDrag.elevation + (e.clientY - orbitDrag.y) * 0.12,
       30,
-      72,
+      80,
     );
     updateCamera();
     return;
@@ -1304,19 +1357,31 @@ canvas.addEventListener("pointermove", (e) => {
         z = clamp(pos.z + drag.offsetZ, -8.5, 8.5);
       if (drag.kind === "note") {
         const n = notes.find((n) => n.id === drag.id);
+        const spot = clearFloorSpot(x, z);
+        x = spot.x;
+        z = spot.z;
         n.x = x;
         n.z = z;
-        n.y = inside(x, z, big) ? big.h : 0;
-        noteMeshes.get(n.id).position.set(x, n.y, z);
+        n.y = 0;
+        noteMeshes.get(n.id).position.set(x, 0.025, z);
       }
-      if (drag.kind === "cube") {
-        const c = cubes.find((c) => c.id === drag.id);
+      if (["cube", "ball"].includes(drag.kind)) {
+        const c =
+          drag.kind === "ball"
+            ? playground.ball
+            : cubes.find((c) => c.id === drag.id);
         const dt = Math.max(0.01, (performance.now() - drag.lastTime) / 1000);
         c.vx = clamp((x - c.x) / dt, -10, 10);
         c.vz = clamp((z - c.z) / dt, -10, 10);
         c.x = x;
         c.z = z;
-        c.y = (inside(x, z, big) ? big.h : 0) + 0.9;
+        c.y =
+          Math.max(
+            0,
+            ...[big, ...playground.colliders()]
+              .filter((b) => inside(x, z, b) && !b.y)
+              .map((b) => b.h),
+          ) + 0.9;
         c.vy = 0;
       }
       if (drag.kind === "big") {
@@ -1333,15 +1398,31 @@ canvas.addEventListener("pointermove", (e) => {
             p.x += dx;
             p.z += dz;
           }
-        for (const n of notes)
-          if (n.y === big.h && inside(n.x, n.z, big)) {
-            n.x += dx;
-            n.z += dz;
-            noteMeshes.get(n.id).position.set(n.x, n.y, n.z);
-          }
         big.x = x;
         big.z = z;
         bigGroup.position.set(x, 0, z);
+      }
+      if (drag.kind === "structure") {
+        x = clamp(x, -10.7, 10.7);
+        z = clamp(z, -6.2, 7.3);
+        const s = playground.structures.get(drag.id),
+          dx = x - s.x,
+          dz = z - s.z;
+        for (const p of players) {
+          if (
+            p.grounded &&
+            s.localColliders.some(
+              (c) =>
+                Math.abs(p.y - c.h) < 0.02 &&
+                inside(p.x, p.z, { ...c, x: s.x + c.x, z: s.z + c.z }),
+            )
+          ) {
+            p.x += dx;
+            p.z += dz;
+          }
+        }
+        playground.move(drag.id, x, z);
+        pending = null;
       }
       drag.lastTime = performance.now();
     }
@@ -1357,9 +1438,13 @@ canvas.addEventListener("pointermove", (e) => {
           ? "Кубик · тянуть / пнуть"
           : d.kind === "big"
             ? "Большой куб · забраться"
-            : d.kind === "avatar"
-              ? players.find((p) => p.profile.id === d.id)?.profile.name
-              : "Экран · закрепить";
+            : d.kind === "ball"
+              ? "Мяч · тянуть / пнуть"
+              : d.kind === "structure"
+                ? `${playground.structures.get(d.id).label} · действия`
+                : d.kind === "avatar"
+                  ? players.find((p) => p.profile.id === d.id)?.profile.name
+                  : "Экран · закрепить";
     hint.textContent = text;
     hint.hidden = false;
     hint.style.left = Math.min(innerWidth - 200, e.clientX + 15) + "px";
@@ -1370,6 +1455,7 @@ function endDrag() {
   if (drag?.moved) save();
   drag = null;
   orbitDrag = null;
+  shareDrag = null;
   canvas.classList.remove("dragging");
 }
 canvas.addEventListener("pointerup", endDrag);
@@ -1388,8 +1474,10 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
-    camZoom = clamp(camZoom * Math.exp(-e.deltaY * 0.001), 0.7, 1.75);
-    updateCamera();
+    if (displayStream && owner(rayAt(e)?.object)?.userData.kind === "share") {
+      cinema.zoomShare(Math.exp(-e.deltaY * 0.0015));
+      updateShareTools();
+    }
   },
   { passive: false },
 );
@@ -1455,27 +1543,21 @@ function movement() {
   let x = (keys.has("right") ? 1 : 0) - (keys.has("left") ? 1 : 0),
     z = (keys.has("down") ? 1 : 0) - (keys.has("up") ? 1 : 0);
   return {
-    x: x * Math.cos(camYaw) + z * Math.sin(camYaw),
-    z: z * Math.cos(camYaw) - x * Math.sin(camYaw),
+    x,
+    z,
   };
 }
 function physics(dt) {
   worldTime += dt;
-  const noteBoxes = notes.map((n) => ({
-    x: n.x,
-    z: n.z,
-    w: 2.3,
-    d: 1.5,
-    h: (n.y || 0) + 2.62,
-  }));
-  const obstacles = [big, ...noteBoxes];
+  const obstacles = [big, ...playground.colliders()];
+  const dynamicObjects = [...cubes, playground.ball];
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
   if (pending && !$("#modal").open) {
     const t = pending.target,
       dx = t.x - active.x,
       dz = t.z - active.z,
       dist = Math.hypot(dx, dz);
-    if (worldTime - pending.started > 5) {
+    if (worldTime - pending.started > 20) {
       pending = null;
     } else if (pending.type === "kick") {
       if (dist < 1.25) {
@@ -1483,19 +1565,16 @@ function physics(dt) {
         pending = null;
       } else move = { x: dx / dist, z: dz / dist };
     } else if (pending.type === "climb") {
-      if (active.grounded && active.y >= big.h - 0.01) {
-        pending = null;
-        toast("Наверху! Space — прыгнуть, WASD — сойти.", 2000);
+      if (active.grounded && active.y >= t.h - 0.01 && dist < 0.35) {
+        pending.index++;
+        if (pending.index >= pending.path.length) {
+          pending = null;
+          toast("Наверху! Space — прыгнуть, WASD — сойти.", 2000);
+        } else pending.target = pending.path[pending.index];
       } else {
         move = dist > 0.1 ? { x: dx / dist, z: dz / dist } : { x: 0, z: 0 };
-        if (
-          !pending.jumped &&
-          Math.abs(dx) < 2.2 &&
-          Math.abs(dz) < 2.2 &&
-          active.grounded
-        ) {
+        if (active.y < t.h - 0.02 && dist < 2.35 && active.grounded) {
           jump(active);
-          pending.jumped = true;
         }
       }
     }
@@ -1516,7 +1595,7 @@ function physics(dt) {
         if (p.action.type === "kick") {
           const c = p.action.payload.cube;
           if (
-            cubes.includes(c) &&
+            dynamicObjects.includes(c) &&
             Math.hypot(c.x - p.x, c.z - p.z) < 1.9 &&
             Math.abs(c.y - p.y) < 1.1
           )
@@ -1527,11 +1606,11 @@ function physics(dt) {
     }
     p.hit = Math.max(0, p.hit - dt);
     p.land = Math.max(0, p.land - dt);
-    for (const c of cubes) {
+    for (const c of dynamicObjects) {
       if (drag?.id === c.id) continue;
       const d = Math.hypot(c.x - p.x, c.z - p.z);
       if (
-        d < 0.62 &&
+        d < c.size / 2 + 0.34 &&
         Math.abs(c.y - (p.y + 0.3)) < 0.55 &&
         p === active &&
         (move.x || move.z)
@@ -1543,12 +1622,21 @@ function physics(dt) {
       }
     }
   }
-  for (const c of cubes) {
+  const previousBall = { ...playground.ball };
+  for (const c of dynamicObjects) {
     if (drag?.moved && drag.id === c.id) continue;
     stepCube(c, obstacles, dt);
   }
-  for (let i = 0; i < cubes.length; i++)
-    for (let j = i + 1; j < cubes.length; j++) collideCubes(cubes[i], cubes[j]);
+  for (let i = 0; i < dynamicObjects.length; i++)
+    for (let j = i + 1; j < dynamicObjects.length; j++)
+      collideCubes(dynamicObjects[i], dynamicObjects[j]);
+  if (drag?.kind !== "ball" && playground.checkGoal(previousBall)) {
+    toast(
+      `Гол! Забито: ${playground.score} · мяч можно вернуть через меню ворот`,
+      3500,
+    );
+    react("firework");
+  }
   const removal = [];
   for (const snow of projectiles) {
     const old = snow.mesh.position.clone();
@@ -1645,13 +1733,17 @@ function visual(dt) {
     m.userData.pivot.rotation.z =
       Math.sin(m.userData.wobble * 38) * m.userData.wobble * 0.13;
   }
+  playground.update(dt);
   ring.position.set(
     active.x,
     (active.grounded
       ? active.y
-      : inside(active.x, active.z, big) && active.y >= big.h
-        ? big.h
-        : 0) + 0.04,
+      : Math.max(
+          0,
+          ...[big, ...playground.colliders()]
+            .filter((b) => inside(active.x, active.z, b) && active.y >= b.h)
+            .map((b) => b.h),
+        )) + 0.045,
     active.z,
   );
   ring.material.opacity = active.grounded ? 0.75 : 0.35;
@@ -1676,12 +1768,9 @@ function drawRoom(dt) {
     }
     renderer.setRenderTarget(null);
   }
-  renderer.setScissorTest(true);
-  renderer.setViewport(0, 0, views.floor.width, views.floor.height);
-  renderer.setScissor(0, 0, views.floor.width, views.floor.height);
-  renderer.render(scene, camera);
-  cinema.render(renderer, innerHeight);
   renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+  renderer.render(scene, camera);
   avatarEditor?.update(worldTime, dt);
 }
 function frame(now) {

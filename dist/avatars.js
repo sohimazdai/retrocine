@@ -100,6 +100,7 @@ export const HEADWEAR = [
   ["swim", "Плавательная"],
   ["cowboy", "Ковбойская"],
   ["cap", "Кепка"],
+  ["bear", "Голова медведя"],
 ];
 export const OUTFITS = [
   ["hoodie", "Худи"],
@@ -167,8 +168,8 @@ export const LOOKS = [
     name: "Обнимательный",
     color: "#ac7e5b",
     hairstyle: "short",
-    headwear: "none",
-    mask: "bear",
+    headwear: "bear",
+    mask: "none",
     outfit: "hoodie",
     footwear: "bare",
     pantsColor: "#8c674b",
@@ -193,10 +194,10 @@ export function normalizeProfile(profile) {
       profile.hairstyle ||
       (["long", "bun", "bald"].includes(legacy) ? legacy : "short"),
     headwear:
-      profile.headwear ||
+      (profile.mask === "bear" ? "bear" : profile.headwear) ||
       (["cap", "headphones"].includes(legacy) ? legacy : "none"),
     glasses: profile.glasses ?? legacy === "glasses",
-    mask: profile.mask || "none",
+    mask: "none",
     outfit: profile.outfit || "hoodie",
     footwear: profile.footwear || "sneakers",
     pantsColor: profile.pantsColor || "#454050",
@@ -402,7 +403,7 @@ export function avatar(input) {
   const mouthOpen = ball(mouth, "#5b3546", 0, 0, -0.004, 0.045, 0.038, 0.016);
   mouthOpen.visible = false;
   const flames = [];
-  if (p.hairstyle === "flame") {
+  if (p.hairstyle === "flame" && p.headwear !== "bear") {
     const flameMaterials = ["#ff6230", "#ffa12e", "#ffe89a"].map(
       (c) =>
         new T.MeshStandardMaterial({
@@ -429,7 +430,7 @@ export function avatar(input) {
       head.add(flame);
       flames.push(flame);
     }
-  } else if (p.hairstyle !== "bald") {
+  } else if (p.hairstyle !== "bald" && p.headwear !== "bear") {
     box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
     box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
     for (let i = 0; i < 5; i++) {
@@ -506,7 +507,7 @@ export function avatar(input) {
       box(head, 0.03, 0.18, 0.18, "#d9c7ed", side * 0.53, -0.025, -0.01, 0.025);
     }
   }
-  if (p.glasses) {
+  if (p.glasses && p.headwear !== "bear") {
     for (const side of [-1, 1]) {
       const rim = new T.Mesh(
         new T.TorusGeometry(0.167, 0.018, 8, 30),
@@ -518,7 +519,7 @@ export function avatar(input) {
     }
     box(head, 0.1, 0.022, 0.025, "#3a3044", 0, 0.055, 0.42, 0.005);
   }
-  if (p.mask === "bear") {
+  if (headwear === "bear") {
     face.visible = false;
     const bear = pivot(head, 0, 0, 0.025);
     box(bear, 1.01, 0.88, 0.86, "#926747", 0, 0.015, 0, 0.23);

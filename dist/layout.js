@@ -1,9 +1,28 @@
-export function roomViewports(width, height) {
-  const screenHeight = Math.round(height * 0.4);
+// Every point of the back wall is equally distant from a standing viewer.
+export const ROOM = {
+  halfWidth: 14.7,
+  front: 10.3,
+  wallWidth: 21,
+  wallHeight: 7.8,
+  radius: 19.2,
+  eyeY: 1.6,
+  eyeZ: 7.1,
+};
+export function screenPoint(x, y, inset = 0) {
+  const z =
+    ROOM.eyeZ - Math.sqrt(ROOM.radius ** 2 - x * x - (y - ROOM.eyeY) ** 2);
+  const scale = (ROOM.radius - inset) / ROOM.radius;
   return {
-    cinema: { x: 0, y: 0, width, height: screenHeight },
-    floor: { x: 0, y: screenHeight, width, height: height - screenHeight },
+    x: x * scale,
+    y: ROOM.eyeY + (y - ROOM.eyeY) * scale,
+    z: ROOM.eyeZ + (z - ROOM.eyeZ) * scale,
   };
+}
+export function floorBack(x) {
+  return screenPoint(
+    Math.max(-ROOM.wallWidth / 2, Math.min(ROOM.wallWidth / 2, x)),
+    0,
+  ).z;
 }
 
 export function participantGrid(count, width, height, gap = 10) {

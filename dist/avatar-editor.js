@@ -171,14 +171,7 @@ export class AvatarEditor {
     if (this.tab === "looks")
       panel.innerHTML = `<p class="wardrobe-description">Начните с образа и настройте каждую деталь.</p><div class="looks-grid">${LOOKS.map((look, i) => `<button type="button" data-look="${look.id}" class="look-card ${p.lookId === look.id ? "selected" : ""}"><span style="--look-color:${look.color}" class="look-glyph">${["✦", "◉", "☆", "♨", "ʕ•ᴥ•ʔ", "❄"][i]}</span><strong>${look.name}</strong></button>`).join("")}</div>`;
     if (this.tab === "head")
-      panel.innerHTML = `<label class="field-label">Кожа</label>${swatches("skin", ["#edbda1", "#e4b59b", "#bd8f70", "#90634d", "#5e4135"], p)}<label class="field-label">Причёска</label>${options("hairstyle", HAIRSTYLES, p)}<label class="field-label">Цвет волос</label>${swatches("hairColor", ["#493339", "#292530", "#a16d44", "#d6ae6c", "#a88cae"], p)}<label class="field-label">Головной убор</label>${options("headwear", HEADWEAR, p)}<label class="field-label">Маска ростовой куклы</label>${options(
-        "mask",
-        [
-          ["none", "Без маски"],
-          ["bear", "Медведь"],
-        ],
-        p,
-      )}<label class="field-label">Очки</label>${options(
+      panel.innerHTML = `<label class="field-label">Кожа</label>${swatches("skin", ["#edbda1", "#e4b59b", "#bd8f70", "#90634d", "#5e4135"], p)}<label class="field-label">Причёска</label>${options("hairstyle", HAIRSTYLES, p)}<label class="field-label">Цвет волос</label>${swatches("hairColor", ["#493339", "#292530", "#a16d44", "#d6ae6c", "#a88cae"], p)}<label class="field-label">Головной убор</label>${options("headwear", HEADWEAR, p)}<label class="field-label">Очки</label>${options(
         "glasses",
         [
           ["false", "Без очков"],

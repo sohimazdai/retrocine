@@ -1,8 +1,10 @@
+import { ROOM, floorBack } from "./layout.js";
+
 export const GRAVITY = 36,
   JUMP_SPEED = 12.8,
   SPEED = 5.1,
   RADIUS = 0.28;
-export const LIMITS = { x: 13.3, z: 9.5 };
+export const LIMITS = { x: ROOM.halfWidth - 0.35, z: ROOM.front - 0.35 };
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export function jump(body) {
   if (!body.grounded) return false;
@@ -11,10 +13,24 @@ export function jump(body) {
   return true;
 }
 export function inside(x, z, b, pad = 0) {
+  if (b.shape === "cylinder")
+    return Math.hypot(x - b.x, z - b.z) < b.radius + pad;
   return Math.abs(x - b.x) < b.w / 2 + pad && Math.abs(z - b.z) < b.d / 2 + pad;
 }
 export function resolveHorizontal(body, box) {
-  if (body.y >= box.h - 0.035 || body.y + 1.55 <= 0) return;
+  if (body.y >= box.h - 0.035 || body.y + 1.55 <= (box.y || 0)) return;
+  if (box.shape === "cylinder") {
+    const dx = body.x - box.x,
+      dz = body.z - box.z,
+      d = Math.hypot(dx, dz);
+    if (d < box.radius + RADIUS) {
+      const nx = d > 0.001 ? dx / d : 1,
+        nz = d > 0.001 ? dz / d : 0;
+      body.x = box.x + nx * (box.radius + RADIUS);
+      body.z = box.z + nz * (box.radius + RADIUS);
+    }
+    return;
+  }
   const nearX = clamp(body.x, box.x - box.w / 2, box.x + box.w / 2),
     nearZ = clamp(body.z, box.z - box.d / 2, box.z + box.d / 2);
   const dx = body.x - nearX,
@@ -60,7 +76,7 @@ export function stepBody(body, move, boxes, dt) {
   );
   body.z = clamp(
     body.z + (move.z / Math.max(1, len)) * SPEED * dt,
-    -LIMITS.z,
+    floorBack(body.x) + RADIUS,
     LIMITS.z,
   );
   for (const b of boxes) resolveHorizontal(body, b);
@@ -104,10 +120,27 @@ export function stepCube(c, boxes, dt) {
   c.y += c.vy * dt;
   let surface = 0;
   for (const b of boxes) {
-    if (inside(c.x, c.z, b, c.size / 2) && c.y - c.size / 2 < b.h) {
+    if (
+      inside(c.x, c.z, b, c.size / 2) &&
+      c.y - c.size / 2 < b.h &&
+      c.y + c.size / 2 > (b.y || 0)
+    ) {
       if (c.y - c.size / 2 > b.h - 0.3 && c.vy < 0)
         surface = Math.max(surface, b.h);
-      else {
+      else if (b.shape === "cylinder") {
+        const dx = c.x - b.x,
+          dz = c.z - b.z,
+          d = Math.hypot(dx, dz);
+        const nx = d > 0.001 ? dx / d : 1,
+          nz = d > 0.001 ? dz / d : 0;
+        c.x = b.x + nx * (b.radius + c.size / 2);
+        c.z = b.z + nz * (b.radius + c.size / 2);
+        const velocity = c.vx * nx + c.vz * nz;
+        if (velocity < 0) {
+          c.vx -= nx * velocity * 1.6;
+          c.vz -= nz * velocity * 1.6;
+        }
+      } else {
         let dx = c.x - b.x,
           dz = c.z - b.z;
         const px = b.w / 2 + c.size / 2 - Math.abs(dx),
@@ -126,17 +159,19 @@ export function stepCube(c, boxes, dt) {
   }
   if (c.y < c.size / 2 + surface) {
     c.y = c.size / 2 + surface;
-    c.vy = Math.abs(c.vy) > 1 ? -c.vy * 0.3 : 0;
-    const f = Math.exp(-3.2 * dt);
+    c.vy = Math.abs(c.vy) > 1 ? -c.vy * (c.restitution ?? 0.3) : 0;
+    const f = Math.exp(-(c.friction ?? 3.2) * dt);
     c.vx *= f;
     c.vz *= f;
     c.spin *= f;
   }
-  for (const axis of ["x", "z"])
-    if (Math.abs(c[axis]) > LIMITS[axis]) {
-      c[axis] = clamp(c[axis], -LIMITS[axis], LIMITS[axis]);
+  for (const axis of ["x", "z"]) {
+    const low = axis === "x" ? -LIMITS.x : floorBack(c.x) + c.size / 2;
+    if (c[axis] < low || c[axis] > LIMITS[axis]) {
+      c[axis] = clamp(c[axis], low, LIMITS[axis]);
       c["v" + axis] *= -0.6;
     }
+  }
   c.rotation = (c.rotation || 0) + (c.spin || 0) * dt;
   return c;
 }

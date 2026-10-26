@@ -11,6 +11,8 @@ import * as layoutModule from "../dist/layout.js";
 import * as emotionModule from "../dist/emotions.js";
 import * as cinemaModule from "../dist/cinema.js";
 import * as editorModule from "../dist/avatar-editor.js";
+import * as roomModule from "../dist/room.js";
+import * as playgroundModule from "../dist/playground.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
   new URL("../dist/index.html", import.meta.url),
@@ -95,6 +97,8 @@ function boot() {
     ...emotionModule,
     ...cinemaModule,
     ...editorModule,
+    ...roomModule,
+    ...playgroundModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -130,6 +134,8 @@ test("scene boot builds real meshes and a full viewport perspective camera", () 
   assert(a.run("players[0].elbows[0].parent === players[0].arms[0]"));
   assert.equal(a.run("noteMeshes.size"), 6);
   assert.equal(a.run("bigGroup.children[0].geometry.isBufferGeometry"), true);
+  assert(a.run("cinema.group.parent === scene"));
+  assert(a.run("cinema.scene === undefined"));
   assert.equal(a.w.document.querySelector("header"), null);
   a.tick(0.2);
 });
@@ -174,7 +180,7 @@ test("screen picking uses actual 3D triangle intersections", () => {
   const a = boot();
   a.tick(0.1);
   const coords = a.run(
-    "(()=>{const r=screenTiles[1].geometry.userData.rect;return {x:r.x+r.width/2,y:r.y+r.height/2}})()",
+    "(()=>{const r=screenTiles[1].geometry.userData.rect;const p=screenPoint(r.x+r.width/2,r.y+r.height/2,.035);const v=new T.Vector3(p.x,p.y,p.z).project(camera);return {x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2}})()",
   );
   a.pointer("pointerdown", coords.x, coords.y, 2);
   assert.equal(a.run("selected.kind"), "tile");
@@ -205,7 +211,7 @@ test("interaction mode drags a volumetric note and persists its position", () =>
   a.tick(0.1);
   a.run("setTool('interact')");
   const p = a.run(
-    "(()=>{const p=noteMeshes.values().next().value.userData.front.getWorldPosition(new T.Vector3()).project(camera);return {x:(p.x+1)*innerWidth/2,y:views.floor.y+(1-p.y)*views.floor.height/2}})()",
+    "(()=>{const p=noteMeshes.values().next().value.userData.front.getWorldPosition(new T.Vector3()).project(camera);return {x:(p.x+1)*innerWidth/2,y:(1-p.y)*innerHeight/2}})()",
   );
   const before = a.run("notes[0].x");
   a.pointer("pointerdown", p.x, p.y);
@@ -223,7 +229,7 @@ test("interaction mode can drag a small cube and release it into physics", () =>
   a.tick(0.1);
   a.run("setTool('interact')");
   const p = a.run(
-    "(()=>{const p=cubeMeshes.values().next().value.getWorldPosition(new T.Vector3()).project(camera);return {x:(p.x+1)*innerWidth/2,y:views.floor.y+(1-p.y)*views.floor.height/2}})()",
+    "(()=>{const p=cubeMeshes.values().next().value.getWorldPosition(new T.Vector3()).project(camera);return {x:(p.x+1)*innerWidth/2,y:(1-p.y)*innerHeight/2}})()",
   );
   const before = a.run("cubes[0].x");
   a.pointer("pointerdown", p.x, p.y);
@@ -249,29 +255,37 @@ test("enabling a camera preserves the square grid and applies cover UVs", () => 
   assert.equal(a.run("screenTiles.filter(t=>t.visible).length"), 6);
 });
 
-test("share screen hides every participant and restores the grid when it ends", () => {
+test("sharing moves all participants to the sides, preserving cameras, and restores the wall grid", () => {
   const a = boot();
+  a.run("camTexture=new T.Texture({videoWidth:1920,videoHeight:1080});screenUpdate()");
+  const cameraMap = a.run("screenTiles[0].material.map");
   a.run(
     "shareTexture=new T.Texture({videoWidth:1920,videoHeight:1080});displayStream={};screenUpdate()",
   );
-  assert.equal(a.run("screenTiles.some(t=>t.visible)"), false);
+  assert.equal(a.run("screenTiles.filter(t=>t.visible).length"), 6);
+  assert(
+    a.run("screenTiles.every(t=>Math.abs(t.position.x)>ROOM.wallWidth/2)"),
+  );
+  assert(a.run("screenTiles.filter(t=>t.userData.side==='left').length===3"));
   assert(a.run("featured.visible"));
+  assert.equal(a.run("screenTiles[0].material.map"), cameraMap);
   a.run("displayStream=null;screenUpdate()");
   assert.equal(a.run("screenTiles.filter(t=>t.visible).length"), 6);
+  assert(a.run("screenTiles.every(t=>t.position.x===0 && !t.userData.side)"));
+  assert.equal(a.run("screenTiles[0].material.map"), cameraMap);
 });
 
-test("curved screen stays genuinely curved while projected tile corners stay square", () => {
+test("tiles are square patches of the room's genuinely spherical wall", () => {
   const a = boot();
   a.tick(0.1);
   a.run("setParticipantCount(6)");
   const stats =
     a.run(`(()=>{const g=screenTiles[0].geometry,p=g.attributes.position;
  const zs=Array.from({length:p.count},(_,i)=>p.getZ(i));
- const rect=g.userData.rect;const v=new T.Vector3().fromBufferAttribute(p,Math.floor(p.count/2)).project(cinema.camera);
- return {depth:Math.max(...zs)-Math.min(...zs),ratio:rect.width/rect.height,views:views.cinema.height+views.floor.height};})()`);
+ const rect=g.userData.rect;
+ return {depth:Math.max(...zs)-Math.min(...zs),ratio:rect.width/rect.height};})()`);
   assert(stats.depth > 0.01);
   assert.equal(stats.ratio, 1);
-  assert.equal(stats.views, 936);
 });
 
 test("default floor camera keeps the front feet and rear jump inside its viewport", () => {
@@ -328,19 +342,114 @@ test("RPG preset and subsequent customization save without changing participant 
   a.run("avatarModal()");
   a.w.document.querySelector('[data-look="wildwest"]').click();
   a.w.document.querySelector('[data-editor-tab="head"]').click();
-  a.w.document.querySelector('[data-choice="mask"][data-value="bear"]').click();
+  a.w.document
+    .querySelector('[data-choice="headwear"][data-value="bear"]')
+    .click();
+  assert.equal(a.w.document.querySelector('[data-choice="mask"]'), null);
   a.w.document
     .querySelector("#avatarForm")
     .dispatchEvent(
       new a.w.Event("submit", { bubbles: true, cancelable: true }),
     );
   assert.equal(a.run("active.profile.id"), "self");
-  assert.equal(a.run("active.profile.headwear"), "cowboy");
-  assert.equal(a.run("active.profile.mask"), "bear");
+  assert.equal(a.run("active.profile.headwear"), "bear");
   assert.equal(
-    JSON.parse(a.w.localStorage.getItem("kino-avatar-v1")).mask,
+    JSON.parse(a.w.localStorage.getItem("kino-avatar-v1")).headwear,
     "bear",
   );
   assert.equal(a.run("avatarEditor"), null);
   a.tick(0.1);
+});
+
+test("angle moves one camera on a fixed radius; room wheel cannot zoom", () => {
+  const a = boot();
+  const distance = a.run("camera.position.distanceTo(ROOM_TARGET)");
+  for (const angle of [30, 60, 80]) {
+    a.run(`camElevation=${angle};updateCamera()`);
+    assert(
+      Math.abs(a.run("camera.position.distanceTo(ROOM_TARGET)") - distance) <
+        1e-9,
+    );
+    assert.equal(a.run("camera.aspect"), 1363 / 936);
+  }
+  const position = a.run("camera.position.clone()");
+  a.w.document
+    .querySelector("#world")
+    .dispatchEvent(
+      new a.w.WheelEvent("wheel", { deltaY: -500, clientX: 600, clientY: 600 }),
+    );
+  assert(a.run("camera.position").equals(position));
+  a.run("actions.view()");
+  assert.equal(a.w.document.querySelector("#elevation").max, "80");
+  assert.equal(a.w.document.querySelector("#zoom"), null);
+});
+
+test("share zoom and pan change only content and reset on stop", () => {
+  const a = boot();
+  const position = a.run("camera.position.clone()");
+  a.run(
+    "shareTexture=new T.Texture({videoWidth:1920,videoHeight:1080});displayStream={};screenUpdate();cinema.zoomShare(2);cinema.panShare(.1,.1)",
+  );
+  assert.equal(a.run("cinema.shareMap.repeat.x"), 0.5);
+  assert(a.run("cinema.shareMap.offset.x") < 0.25);
+  assert.equal(a.run("shareTexture.repeat.x"), 1);
+  assert(a.run("camera.position").equals(position));
+  a.run("displayStream=null;screenUpdate()");
+  assert.equal(a.run("cinema.shareZoom"), 1);
+  assert.equal(a.w.document.querySelector("#shareTools").hidden, true);
+});
+
+test("notes lie flat and characters can walk straight across them", () => {
+  const a = boot();
+  a.run(
+    "notes[0].x=0;notes[0].z=5;refreshNotes();active.x=0;active.z=7;keys.add('up')",
+  );
+  a.tick(0.7);
+  assert(a.run("active.z") < 4);
+  assert.equal(a.run("active.y"), 0);
+  assert.equal(
+    a.run("noteMeshes.values().next().value.userData.pivot.rotation.x"),
+    -Math.PI / 2,
+  );
+  assert(
+    a.run(
+      "new T.Box3().setFromObject(noteMeshes.values().next().value).getSize(new T.Vector3()).y",
+    ) < 0.08,
+  );
+});
+
+test("climb actions reach the pyramid summit and each spool", () => {
+  for (const [id, height] of [
+    ["pyramid", 2.56],
+    ["spool-a", 1.55],
+    ["spool-b", 1.9],
+  ]) {
+    const a = boot();
+    a.run(`selected={kind:'structure',id:'${id}'};contextAction('climb')`);
+    a.tick(12);
+    assert.equal(a.run("pending"), null, id);
+    assert(
+      Math.abs(a.run("active.y") - height) < 0.001,
+      `${id}: ${a.run("active.y")}`,
+    );
+    assert(a.run("active.grounded"));
+  }
+});
+
+test("football can be kicked, rolls, scores once and resets through goal action", () => {
+  const a = boot();
+  a.run(
+    "Object.assign(active,{x:8.1,z:-2.8,y:0});Object.assign(playground.ball,{x:8.1,z:-3.8,y:.42});kickNearest()",
+  );
+  a.tick(0.07);
+  assert.equal(a.run("playground.ball.vz"), 0);
+  a.tick(0.8);
+  assert.equal(a.run("playground.score"), 1);
+  assert(
+    a.run("playground.ballMesh.quaternion.angleTo(new T.Quaternion())") > 0.1,
+  );
+  a.tick(1);
+  assert.equal(a.run("playground.score"), 1);
+  a.run("selected={kind:'structure',id:'goal'};contextAction('resetBall')");
+  assert.equal(a.run("playground.ball.z"), a.run("playground.goal.z+4.3"));
 });

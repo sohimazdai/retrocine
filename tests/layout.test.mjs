@@ -1,24 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  roomViewports,
+  ROOM,
+  screenPoint,
+  floorBack,
   participantGrid,
   coverCrop,
   fitNoteText,
 } from "../dist/layout.js";
 
-test("floor occupies bottom three fifths without gaps at different viewport sizes", () => {
-  for (const [width, height] of [
-    [1440, 900],
-    [1920, 1080],
-    [390, 844],
-  ]) {
-    const v = roomViewports(width, height);
-    assert.equal(v.cinema.height, Math.round(height * 0.4));
-    assert.equal(v.floor.y, v.cinema.height);
-    assert.equal(v.floor.height + v.cinema.height, height);
-    assert.equal(v.floor.width, width);
-  }
+test("entire wall is equidistant from standing viewer and meets the floor", () => {
+  for (let x = -ROOM.wallWidth / 2; x <= ROOM.wallWidth / 2; x += 0.5)
+    for (let y = 0; y <= ROOM.wallHeight; y += 0.3) {
+      const p = screenPoint(x, y);
+      assert(
+        Math.abs(
+          Math.hypot(p.x, p.y - ROOM.eyeY, p.z - ROOM.eyeZ) - ROOM.radius,
+        ) < 1e-10,
+      );
+      if (y === 0) assert.equal(p.z, floorBack(x));
+    }
 });
 test("two participants use two equal squares; six form exactly three by two", () => {
   const two = participantGrid(2, 1440, 400);

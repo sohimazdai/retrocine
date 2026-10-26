@@ -26,6 +26,23 @@
     </main>
     <div id="objectHint" class="object-hint" hidden></div>
     <div id="contextBar" class="context-island" hidden></div>
+    <div
+      id="shareTools"
+      class="share-island"
+      hidden
+      aria-label="Масштаб демонстрации"
+    >
+      <button data-action="shareOut" aria-label="Уменьшить демонстрацию">
+        −
+      </button>
+      <span id="shareScale">100%</span>
+      <button data-action="shareIn" aria-label="Увеличить демонстрацию">
+        +
+      </button>
+      <button data-action="shareReset" title="Показать демонстрацию целиком">
+        Сбросить
+      </button>
+    </div>
     <div id="timerIsland" class="timer-island" hidden>
       <button data-action="timer" id="timerToggle" title="Пауза">Ⅱ</button
       ><button data-action="timerSettings" id="timerText">05:00</button
@@ -75,7 +92,7 @@
         <span data-icon="screen"></span><span class="tip">Показать экран</span>
       </button>
       <div class="divider"></div>
-      <button class="tool" data-action="view" title="Ракурс и масштаб">
+      <button class="tool" data-action="view" title="Угол к полу: 30–80°">
         <span data-icon="orbit"></span><span class="tip">Ракурс</span></button
       ><button class="tool" data-action="help" title="Управление">
         <span data-icon="help"></span><span class="tip">Управление</span>

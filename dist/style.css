@@ -1044,3 +1044,34 @@ dialog.avatar-dialog {
     font-size: 31px;
   }
 }
+.share-island {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #292532ed;
+  border: 1px solid #ffffff20;
+  border-radius: 18px;
+  box-shadow: 0 8px 28px #0003;
+  z-index: 15;
+  font-size: 12px;
+}
+.share-island button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 10px;
+  color: #eee8f5;
+  background: #ffffff10;
+  cursor: pointer;
+}
+.share-island button:hover {
+  background: #ffffff24;
+}
+.share-island[hidden] {
+  display: none;
+}

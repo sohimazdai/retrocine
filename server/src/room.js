@@ -282,8 +282,10 @@ export class Room {
       for (const m of stepPushes(this.state, pushers, elapsed)) this.pendingProps.set(m.id, m);
     let steps = 0;
     while (this.acc >= PHYS_DT && steps < 12) {
-      if (stepWorld(this.state, PHYS_DT, dragged))
-        this.broadcast({ t: "goal", score: this.state.score, by: this.state.lastTouch || null });
+      for (const event of stepWorld(this.state, PHYS_DT, dragged)) {
+        this.broadcast(event);
+        this.markDirty();
+      }
       this.acc -= PHYS_DT;
       steps++;
     }

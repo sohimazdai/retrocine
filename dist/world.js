@@ -1,205 +1,196 @@
-// Pure description of the room's props, shared by the browser and the sync server.
-// No Three.js here: the server imports this file to run the same physics as the client.
+// World rules shared by the browser and the sync server (no Three.js): the current map's props and
+// their colliders, loose balls and cubes, goals, hoops and zones.
 import { clamp, inside } from "./physics.js";
+import { ROOM, floorBack } from "./layout.js";
+import { mapDef } from "./maps/index.js";
 
-// weight: how many avatars (Shift) it takes to push it; lift: how many, from opposite sides, to lift it.
-export const BIG = { w: 2.8, d: 2.8, h: 1.65, weight: 2, lift: 3 };
-export const BIG_DEFAULT = { x: 2.4, z: -1.1 };
-export const BIG_BOUNDS = { x: 10, z: 7 };
-export const STRUCTURE_BOUNDS = { x: 10.7, zMin: -6.2, zMax: 7.3 };
 export const DRAG_BOUNDS = { x: 12, z: 8.5 };
 export const MAX_NOTES = 80;
 export const MAX_CUBES = 24;
 export const NOTE_TYPES = ["good", "improve", "idea"];
 export const CUBE_COLORS = ["#a696ce", "#ccad87", "#9bbbbb", "#c99ead"];
 export const CUBE_SIZE = 0.65;
+export const LIFT_HEIGHT = 1.75;
+export const PUSH_SPEED = 1.9;
 
-const tiers = Array.from({ length: 4 }, (_, i) => ({
-  x: 0,
-  z: 0,
-  w: 4.4 - i * 1.05,
-  d: 4.4 - i * 1.05,
-  h: (i + 1) * 0.64,
-}));
-const spool = (h) => [
-  { x: 0, z: 0, shape: "cylinder", radius: 1.25, w: 2.5, d: 2.5, h },
-];
-export const GOAL_COLLIDERS = [
-  { x: -2.1, z: 0, w: 0.15, d: 0.15, h: 2.55 },
-  { x: 2.1, z: 0, w: 0.15, d: 0.15, h: 2.55 },
-  { x: 0, z: 0, w: 4.35, d: 0.15, y: 2.4, h: 2.55 },
-  { x: 0, z: -1.45, w: 4.3, d: 0.06, h: 2.55 },
-  { x: -2.1, z: -0.75, w: 0.05, d: 1.4, h: 2.55 },
-  { x: 2.1, z: -0.75, w: 0.05, d: 1.4, h: 2.55 },
-];
-export const STRUCTURES = [
-  {
-    id: "pyramid",
-    weight: 3,
-    lift: 4,
-    label: "Пирамида",
-    kind: "pyramid",
-    x: -6.5,
-    z: -3.7,
-    colliders: tiers,
-    waypoints: tiers.map((tier, i) => ({
-      x: 0,
-      z: i === 3 ? 0 : tier.d / 2 - 0.32,
-      h: tier.h,
-    })),
-  },
-  {
-    id: "spool-a",
-    weight: 1,
-    lift: 2,
-    label: "Кабельная катушка",
-    kind: "spool",
-    x: -8.3,
-    z: 3.7,
-    h: 1.55,
-    colliders: spool(1.55),
-    waypoints: [{ x: 0, z: 0, h: 1.55 }],
-  },
-  {
-    id: "spool-b",
-    weight: 1,
-    lift: 2,
-    label: "Кабельная катушка",
-    kind: "spool",
-    x: 6.2,
-    z: 5.8,
-    h: 1.9,
-    colliders: spool(1.9),
-    waypoints: [{ x: 0, z: 0, h: 1.9 }],
-  },
-  {
-    id: "goal",
-    weight: 1,
-    lift: 2,
-    label: "Футбольные ворота",
-    kind: "goal",
-    x: 8.1,
-    z: -4.8,
-    colliders: GOAL_COLLIDERS,
-    waypoints: [],
-  },
-];
-export const STRUCTURE_IDS = STRUCTURES.map((s) => s.id);
+// Loose physical objects other than cubes.
+export const BALLS = {
+  football: { size: 0.84, restitution: 0.64, friction: 1.15, label: "Футбольный мяч" },
+  basketball: { size: 0.74, restitution: 0.8, friction: 0.9, label: "Баскетбольный мяч" },
+  playball: { size: 0.6, restitution: 0.78, friction: 1, label: "Мяч" },
+  stone: { size: 0.5, restitution: 0.15, friction: 5, label: "Камень" },
+  pebble: { size: 0.3, restitution: 0.2, friction: 4.5, label: "Камешек" },
+  barrel: { size: 0.8, restitution: 0.2, friction: 3.2, label: "Бочка" },
+  mug: { size: 0.28, restitution: 0.1, friction: 0.5, label: "Кружка" },
+  paintball: { size: 0.5, restitution: 0.55, friction: 1.6, label: "Мяч" },
+};
 
-export function clampStructure(x, z) {
-  return {
-    x: clamp(x, -STRUCTURE_BOUNDS.x, STRUCTURE_BOUNDS.x),
-    z: clamp(z, STRUCTURE_BOUNDS.zMin, STRUCTURE_BOUNDS.zMax),
-  };
+// Props may be turned by quarter turns (rot, radians). Same convention as Object3D.rotation.y.
+function turn(c, rot) {
+  const q = ((Math.round((rot || 0) / (Math.PI / 2)) % 4) + 4) % 4;
+  if (!q) return c;
+  const cos = [1, 0, -1, 0][q],
+    sin = [0, 1, 0, -1][q];
+  return { ...c, x: c.x * cos + c.z * sin, z: -c.x * sin + c.z * cos, w: q % 2 ? c.d : c.w, d: q % 2 ? c.w : c.d };
 }
-export function clampBig(x, z) {
-  return {
-    x: clamp(x, -BIG_BOUNDS.x, BIG_BOUNDS.x),
-    z: clamp(z, -BIG_BOUNDS.z, BIG_BOUNDS.z),
-  };
-}
-export function defaultStructures() {
-  return Object.fromEntries(STRUCTURES.map((s) => [s.id, { x: s.x, z: s.z }]));
-}
-// positions: { [id]: {x, z} } → world-space collider boxes.
-// A lifted prop floats at p.y: avatars can walk under it, or stand on top of it.
-const lifted = (c, y) => (y ? { ...c, y: (c.y || 0) + y, h: c.h + y } : c);
-export function structureColliders(positions) {
-  return STRUCTURES.flatMap((s) => {
-    const p = positions?.[s.id] || s;
-    return s.colliders.map((c) => lifted({ ...c, x: p.x + c.x, z: p.z + c.z }, p.y));
-  });
-}
-export function bigBox(big) {
-  return lifted({ ...BIG, x: big.x, z: big.z, id: "big" }, big.y);
-}
-export function obstacles(big, positions) {
-  return [bigBox(big), ...structureColliders(positions)];
-}
-export function ballDefaults() {
-  return {
-    id: "football",
-    kind: "ball",
-    x: 7.5,
-    z: -0.5,
-    y: 0.42,
-    size: 0.84,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    spin: 0,
-    rotation: 0,
-    restitution: 0.64,
-    friction: 1.15,
-  };
-}
-export function ballResetPosition(goal) {
-  return { x: goal.x, z: goal.z + 4.3, y: 0.42, vx: 0, vy: 0, vz: 0, spin: 0 };
-}
-// Crossing the goal line inside the mouth counts once until the ball leaves the goal area.
-export function checkGoal(ball, previous, goal, flags) {
-  const line = goal.z - 0.15;
-  if (!flags.scored && previous.z >= line && ball.z < line) {
-    const t = (previous.z - line) / (previous.z - ball.z);
-    const x = previous.x + (ball.x - previous.x) * t;
-    const y = previous.y + (ball.y - previous.y) * t;
-    if (Math.abs(x - goal.x) < 2.025 - ball.size / 2 && y + ball.size / 2 < 2.4) {
-      flags.scored = true;
-      return true;
-    }
+function footprint(colliders) {
+  const round = colliders.length === 1 && colliders[0].shape === "cylinder";
+  if (round) {
+    const c = colliders[0];
+    return { round, r: c.radius, cx: c.x, cz: c.z, hw: c.radius, hd: c.radius, h: c.h };
   }
-  if (ball.z > goal.z + 1) flags.scored = false;
-  return false;
+  let x0 = Infinity,
+    x1 = -Infinity,
+    z0 = Infinity,
+    z1 = -Infinity,
+    h = 0;
+  for (const c of colliders) {
+    const hw = c.shape === "cylinder" ? c.radius : c.w / 2,
+      hd = c.shape === "cylinder" ? c.radius : c.d / 2;
+    x0 = Math.min(x0, c.x - hw);
+    x1 = Math.max(x1, c.x + hw);
+    z0 = Math.min(z0, c.z - hd);
+    z1 = Math.max(z1, c.z + hd);
+    h = Math.max(h, c.h);
+  }
+  return { round, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, h };
 }
-export function defaultCubes(newId) {
-  return [
-    { x: -10.3, z: 7.8, color: "#a696ce" },
-    { x: 6.5, z: 2, color: "#ccad87" },
-    { x: 10.5, z: -4, color: "#9bbbbb" },
-    { x: -1, z: 0.5, color: "#c99ead" },
-  ].map((c) => makeCube({ ...c, id: newId() }));
+const propCache = new WeakMap();
+// Props of a map with their colliders turned into place and a footprint for pushing.
+export function mapProps(map) {
+  if (propCache.has(map)) return propCache.get(map);
+  const list = (map.props || []).map((p) => {
+    const local = p.colliders.map((c) => turn(c, p.rot));
+    return { ...p, weight: p.weight ?? Infinity, lift: p.lift ?? Infinity, local, ...footprint(local) };
+  });
+  propCache.set(map, list);
+  return list;
 }
-export function makeCube({ id, x, z, y, color }) {
-  return {
-    id,
-    x,
-    z,
-    y: y ?? CUBE_SIZE / 2,
-    size: CUBE_SIZE,
-    color,
-    vx: 0,
-    vy: 0,
-    vz: 0,
-    spin: 0,
-    rotation: 0,
-  };
+export const propInfo = (map, id) => mapProps(map).find((p) => p.id === id);
+// A lifted prop floats at pos.y: avatars can walk under it or stand on top of it.
+const lifted = (c, y) => (y ? { ...c, y: (c.y || 0) + y, h: c.h + y } : c);
+export function propColliders(info, pos) {
+  const p = pos || info;
+  return info.local.map((c) => lifted({ ...c, x: p.x + c.x, z: p.z + c.z, prop: info.id }, p.y));
 }
-export function supportHeight(x, z, big, positions) {
+export function obstacles(map, positions) {
+  return [...(map.statics || []), ...mapProps(map).flatMap((p) => propColliders(p, positions?.[p.id]))];
+}
+export function defaultPositions(map) {
+  return Object.fromEntries(mapProps(map).map((p) => [p.id, { x: p.x, z: p.z }]));
+}
+// Keeps a prop's footprint on the floor.
+export function clampProp(info, x, z) {
+  const limit = ROOM.halfWidth - 0.3 - info.hw;
+  x = clamp(x + info.cx, -limit, limit) - info.cx;
+  const back = Math.max(floorBack(x + info.cx - info.hw), floorBack(x + info.cx + info.hw)) + 0.3 + info.hd;
+  z = clamp(z + info.cz, back, ROOM.front - 0.3 - info.hd) - info.cz;
+  return { x, z };
+}
+export function supportHeight(x, z, map, positions) {
   return Math.max(
     0,
-    ...obstacles(big, positions)
+    ...obstacles(map, positions)
       .filter((b) => inside(x, z, b) && !b.y)
       .map((b) => b.h),
   );
 }
 
-// ——— Movable props: footprints for pushing and lifting ———
-function footprint(colliders) {
-  const round = colliders.length === 1 && colliders[0].shape === "cylinder";
-  if (round) return { round, r: colliders[0].radius, hw: colliders[0].radius, hd: colliders[0].radius, h: colliders[0].h };
-  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, h = 0;
-  for (const c of colliders) {
-    x0 = Math.min(x0, c.x - c.w / 2);
-    x1 = Math.max(x1, c.x + c.w / 2);
-    z0 = Math.min(z0, c.z - c.d / 2);
-    z1 = Math.max(z1, c.z + c.d / 2);
-    h = Math.max(h, c.h);
-  }
-  return { round, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, h };
+export function makeBall(def) {
+  const kind = BALLS[def.kind] || BALLS.football;
+  const size = def.size || kind.size;
+  return {
+    id: def.id,
+    kind: def.kind,
+    x: def.x,
+    z: def.z,
+    y: def.y ?? size / 2,
+    size,
+    restitution: kind.restitution,
+    friction: kind.friction,
+    color: def.color,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    spin: 0,
+    rotation: 0,
+  };
 }
-export const PROPS = [
-  { id: "big", label: "Большой куб", weight: BIG.weight, lift: BIG.lift, round: false, cx: 0, cz: 0, hw: BIG.w / 2, hd: BIG.d / 2, h: BIG.h },
-  ...STRUCTURES.map((s) => ({ id: s.id, label: s.label, weight: s.weight, lift: s.lift, cx: 0, cz: 0, ...footprint(s.colliders) })),
-];
-export const LIFT_HEIGHT = 1.75;
-export const PUSH_SPEED = 1.9;
+export const defaultBalls = (map) => (map.balls || []).map(makeBall);
+export function makeCube({ id, x, z, y, color }) {
+  return { id, x, z, y: y ?? CUBE_SIZE / 2, size: CUBE_SIZE, color, vx: 0, vy: 0, vz: 0, spin: 0, rotation: 0 };
+}
+export const defaultCubes = (map, newId) => (map.cubes || []).map((c) => makeCube({ ...c, id: newId() }));
+
+const toLocal = (rot, dx, dz) => ({
+  x: dx * Math.cos(rot || 0) - dz * Math.sin(rot || 0),
+  z: dx * Math.sin(rot || 0) + dz * Math.cos(rot || 0),
+});
+export const toWorld = (rot, lx, lz) => ({
+  x: lx * Math.cos(rot || 0) + lz * Math.sin(rot || 0),
+  z: -lx * Math.sin(rot || 0) + lz * Math.cos(rot || 0),
+});
+// Football goals: props with goal: true. The mouth faces local +z; the net is behind.
+export function goalsOf(map, positions) {
+  return mapProps(map)
+    .filter((p) => p.goal)
+    .map((p) => ({ id: p.id, label: p.label, rot: p.rot || 0, ...(positions?.[p.id] || p), spot: p.ballSpot || { x: 0, z: 4.3 } }));
+}
+// Crossing the goal line inside the mouth counts once until the ball leaves the goal area.
+export function checkGoal(ball, previous, goal, flags) {
+  const now = toLocal(goal.rot, ball.x - goal.x, ball.z - goal.z),
+    before = toLocal(goal.rot, previous.x - goal.x, previous.z - goal.z);
+  const line = -0.15,
+    key = "goal:" + goal.id + ":" + ball.id;
+  if (!flags[key] && before.z >= line && now.z < line && !goal.y) {
+    const t = (before.z - line) / (before.z - now.z);
+    const x = before.x + (now.x - before.x) * t;
+    const y = previous.y + (ball.y - previous.y) * t;
+    if (Math.abs(x) < 2.025 - ball.size / 2 && y + ball.size / 2 < 2.4) {
+      flags[key] = true;
+      return true;
+    }
+  }
+  if (now.z > 1) flags[key] = false;
+  return false;
+}
+export function ballResetPosition(map, positions, ball) {
+  const def = (map.balls || []).find((b) => b.id === ball.id);
+  const goal = ball.kind === "football" && !def?.home && goalsOf(map, positions)[0];
+  let x = def?.x ?? 0,
+    z = def?.z ?? 4;
+  if (goal) {
+    const o = toWorld(goal.rot, goal.spot.x, goal.spot.z);
+    x = goal.x + o.x;
+    z = goal.z + o.z;
+  }
+  return { x, z, y: ball.size / 2, vx: 0, vy: 0, vz: 0, spin: 0 };
+}
+// Basketball hoops: props with hoop: { x, z, y, r } in local coordinates.
+export function hoopsOf(map, positions) {
+  return mapProps(map)
+    .filter((p) => p.hoop)
+    .map((p) => {
+      const pos = positions?.[p.id] || p,
+        o = toWorld(p.rot, p.hoop.x, p.hoop.z);
+      return { id: p.id, label: p.label, x: pos.x + o.x, z: pos.z + o.z, y: p.hoop.y + (pos.y || 0), r: p.hoop.r };
+    });
+}
+// A ball falling down through the ring scores.
+export function checkHoop(ball, previous, hoop, flags) {
+  const key = "hoop:" + hoop.id + ":" + ball.id;
+  if (previous.y >= hoop.y && ball.y < hoop.y && ball.vy < 0) {
+    const t = (previous.y - hoop.y) / (previous.y - ball.y || 1);
+    const x = previous.x + (ball.x - previous.x) * t,
+      z = previous.z + (ball.z - previous.z) * t;
+    if (Math.hypot(x - hoop.x, z - hoop.z) < hoop.r - ball.size * 0.3 && !flags[key]) {
+      flags[key] = true;
+      return true;
+    }
+  }
+  if (ball.y > hoop.y + 0.6 || Math.hypot(ball.x - hoop.x, ball.z - hoop.z) > 2) flags[key] = false;
+  return false;
+}
+export const zonesOf = (map) => map.zones || [];
+export const inZone = (zone, x, z) => x >= zone.x0 && x <= zone.x1 && z >= zone.z0 && z <= zone.z1;
+export { mapDef };

@@ -187,10 +187,11 @@ test("goals are detected on the server and announced with the score", async () =
   const a = client(port);
   await a.join("football");
   const room = app.rooms.get("football");
-  Object.assign(room.state.ball, { x: 8.1, z: -4.3, y: 0.42, vx: 0, vz: -6, vy: 0 });
+  Object.assign(room.state.balls[0], { x: 8.1, z: -4.3, y: 0.42, vx: 0, vz: -6, vy: 0 });
   room.startPhysics();
   const goal = await a.wait((m) => m.t === "goal");
   assert.equal(goal.score, 1);
+  assert.equal(goal.goal, "goal");
   a.close();
   await app.close();
 });
@@ -352,7 +353,7 @@ test("grenades explode only when thrown, respect the cooldown and blast objects 
   await a.join("boom");
   await b.join("boom");
   const room = app.rooms.get("boom");
-  const ball = room.state.ball;
+  const ball = room.state.balls[0];
   a.send({ t: "boom", kind: "grenade", pid: "fake", x: ball.x, y: 0.3, z: ball.z });
   a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g1", pw: 1.3 });
   a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g2" });

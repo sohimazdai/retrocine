@@ -100,16 +100,16 @@ export function createFloor(scene) {
   }
   const grid = new T.BufferGeometry();
   grid.setAttribute("position", new T.Float32BufferAttribute(lines, 3));
-  scene.add(
-    new T.LineSegments(
-      grid,
-      new T.LineBasicMaterial({
-        color: "#a193af",
-        transparent: true,
-        opacity: 0.13,
-      }),
-    ),
+  const gridLines = new T.LineSegments(
+    grid,
+    new T.LineBasicMaterial({
+      color: "#a193af",
+      transparent: true,
+      opacity: 0.13,
+    }),
   );
+  scene.add(gridLines);
+  floor.userData.grid = gridLines;
   return floor;
 }
 

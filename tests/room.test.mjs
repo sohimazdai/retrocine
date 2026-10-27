@@ -17,7 +17,7 @@ import {
 } from "../dist/room.js";
 import { CinemaScreen } from "../dist/cinema.js";
 import { stepBody, stepCube } from "../dist/physics.js";
-import { Playground } from "../dist/playground.js";
+import { obstacles, defaultPositions, defaultBalls, goalsOf, checkGoal, mapDef } from "../dist/world.js";
 
 function roomCamera(aspect, degrees) {
   const camera = fitRoomCamera(new T.PerspectiveCamera(43, aspect, 0.1, 400), degrees);
@@ -162,23 +162,17 @@ test("spools use round collisions, support landing and let the ball bounce", () 
 });
 
 test("goal is open at the front, stops shots in its net and rejects shots above its bar", () => {
-  const playground = new Playground(new T.Scene());
-  const goal = playground.goal;
+  const map = mapDef("cinema"),
+    positions = defaultPositions(map),
+    colliders = obstacles(map, positions);
+  const goal = goalsOf(map, positions)[0];
   const body = { x: goal.x, z: goal.z + 0.8, y: 0, vy: 0, grounded: true };
-  for (let i = 0; i < 30; i++)
-    stepBody(body, { x: 0, z: -1 }, playground.colliders(), 1 / 120);
+  for (let i = 0; i < 30; i++) stepBody(body, { x: 0, z: -1 }, colliders, 1 / 120);
   assert(body.z < goal.z);
-  const b = playground.ball;
-  Object.assign(b, {
-    x: goal.x,
-    z: goal.z + 0.8,
-    y: 0.42,
-    vx: 0,
-    vz: -10,
-    vy: 0,
-  });
-  for (let i = 0; i < 50; i++) stepCube(b, playground.colliders(), 1 / 120);
+  const b = defaultBalls(map)[0];
+  Object.assign(b, { x: goal.x, z: goal.z + 0.8, y: 0.42, vx: 0, vz: -10, vy: 0 });
+  for (let i = 0; i < 50; i++) stepCube(b, colliders, 1 / 120);
   assert(b.z >= goal.z - 1.45 + 0.42 - 0.04);
   Object.assign(b, { x: goal.x, z: goal.z - 0.3, y: 3 });
-  assert.equal(playground.checkGoal({ x: b.x, z: goal.z + 0.3, y: 3 }), false);
+  assert.equal(checkGoal(b, { x: b.x, z: goal.z + 0.3, y: 3 }, goal, {}), false);
 });

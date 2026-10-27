@@ -28,10 +28,11 @@ import {
   ELEVATION,
   framePortrait,
 } from "./room.js";
-import { Playground } from "./playground.js";
+import { MapScene } from "./mapscene.js";
+import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { BIG, obstacles, PROPS } from "./world.js";
+import { mapDef, mapProps, clampProp, BALLS } from "./world.js";
 import {
   PROJECTILES,
   projectile,
@@ -49,11 +50,15 @@ import {
   findObject,
   timerLeft,
   stepPushes,
+  stepWorld,
+  stateObstacles,
+  dynamicObjects,
+  freeSpot,
 } from "./state.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
 import { Media } from "./media.js";
 import { apiUrl, currentRoom, roomLink } from "./config.js";
-import { MAPS, mapInfo, DEFAULT_MAP } from "./maps.js";
+import { MAPS, DEFAULT_MAP } from "./maps/index.js";
 const $ = (s) => document.querySelector(s),
   $$ = (s) => [...document.querySelectorAll(s)],
   esc = (s) =>
@@ -139,15 +144,9 @@ let me = read("kino-avatar-v1", {
 const world = createState(read(roomKey, null) || {}, uid);
 let notes = world.notes,
   cubes = world.cubes;
-const big = { ...BIG, ...world.big, id: "big" };
-world.big = big;
 function syncAliases() {
   notes = world.notes;
   cubes = world.cubes;
-  if (world.big !== big) {
-    Object.assign(big, world.big);
-    world.big = big;
-  }
 }
 let net = null,
   mediaClient = null;
@@ -214,7 +213,8 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-scene.add(new T.HemisphereLight("#eee1ff", "#484054", 2.1));
+const hemi = new T.HemisphereLight("#eee1ff", "#484054", 2.1);
+scene.add(hemi);
 const keyLight = new T.DirectionalLight("#fff2df", 3.6);
 keyLight.position.set(-10, 20, 9);
 keyLight.castShadow = true;
@@ -235,24 +235,14 @@ const rim = new T.DirectionalLight("#baa4f5", 1.4);
 rim.position.set(8, 10, -12);
 scene.add(rim);
 const floor = createFloor(scene);
-const playground = new Playground(scene, world.structures);
-Object.assign(playground.ball, world.ball);
-world.ball = playground.ball;
-playground.flags = world.flags;
-playground.score = world.score;
-const bigGroup = new T.Group();
-bigGroup.userData = { kind: "big", id: "big" };
-scene.add(bigGroup);
-box(bigGroup, big.w, big.h, big.d, "#9988b5", 0, big.h / 2, 0, 0.12);
-box(bigGroup, 2.56, 0.03, 2.56, "#b5a5cc", 0, big.h + 0.012, 0, 0.04);
-for (const x of [-1.31, 1.31])
-  box(bigGroup, 0.022, 1.35, 0.025, "#c5b2df", x, 0.83, 1.397, 0.005);
-bigGroup.position.set(big.x, 0, big.z);
+// The selected map: scenery, props and balls. Rebuilt when the room switches maps.
+const mapScene = new MapScene(scene, { floor, grid: floor.userData.grid, hemi, key: keyLight, rim });
+mapScene.build(mapDef(world.map), world.structures, world.balls);
 const cubeMeshes = new Map(),
   noteMeshes = new Map();
-let pickables = [floor, bigGroup, ...playground.pickables];
+let pickables = [floor, ...mapScene.pickables];
 function clearFloorSpot(x, z, pad = 1.4) {
-  const boxes = [big, ...playground.colliders()];
+  const boxes = mapScene.colliders().filter((b) => !b.y && b.h > 0.1);
   for (let radius = 0; radius < 24; radius += 0.5) {
     for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
       const p = {
@@ -727,23 +717,20 @@ function highlight() {
       '<button data-context="kick">Пнуть · E</button><button data-context="remove">Убрать</button>';
   }
   if (obj.kind === "ball") {
-    label = "Футбольный мяч";
+    const b = findObject(world, obj.id);
+    label = BALLS[b?.kind]?.label || "Мяч";
     buttons =
       '<button data-context="kick">Пнуть · E</button><button data-context="move">Переместить</button><button data-context="resetBall">На исходную</button>';
   }
   if (obj.kind === "structure") {
-    const structure = playground.structures.get(obj.id);
+    const structure = mapScene.props.get(obj.id);
     label = structure.label;
     buttons =
-      (structure.kind === "goal"
-        ? `<button data-context="resetBall">Мяч на исходную · ${playground.score} гол.</button>`
-        : '<button data-context="climb">Забраться</button>') +
-      '<button data-context="move">Переместить</button>';
-  }
-  if (obj.kind === "big") {
-    label = "Большой куб";
-    buttons =
-      '<button data-context="climb">Забраться</button><button data-context="move">Переместить</button>';
+      (structure.info.goal || structure.info.hoop
+        ? `<button data-context="resetBall">Мяч на исходную · ${world.scores[obj.id] || 0} ${structure.info.hoop ? "очк." : "гол."}</button>`
+        : "") +
+      (structure.waypoints.length ? '<button data-context="climb">Забраться</button>' : "") +
+      (structure.movable ? '<button data-context="move">Переместить</button>' : "");
   }
   if (obj.kind === "note") {
     label = "Стикер";
@@ -898,12 +885,12 @@ function burst(pos, kind, snowOwner = "self", pr = null) {
     speed = pr ? pr.v.length() : 12,
     normal = pr?.normal || new T.Vector3(0, 1, 0);
   if (k.splat) {
-    const parent = kind?.userData.kind === "avatar" || ["cube", "ball", "big", "structure"].includes(kind?.userData.kind) ? kind : null;
+    const parent = ["avatar", "cube", "ball", "structure"].includes(kind?.userData.kind) ? kind : null;
     effects.splat(pos, normal, k.splat, parent);
     effects.puff(pos, k.splat, 6, 2.6, 0.03);
   } else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : k.id === "tennis" ? 3 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
   if (["cube", "ball"].includes(kind?.userData.kind) && snowOwner === "self") {
-    const c = kind.userData.kind === "ball" ? playground.ball : cubes.find((c) => c.id === kind.userData.id);
+    const c = findObject(world, kind.userData.id);
     if (c) {
       const dir = pr ? pr.v.clone().setY(0).normalize() : new T.Vector3(c.x - active.x, 0, c.z - active.z).normalize();
       kickObject(c, { x: c.x - dir.x, z: c.z - dir.z }, clamp(k.impact * (speed / 12), 0.6, 9));
@@ -977,7 +964,7 @@ function onBoom(m) {
   if (Math.abs(m.z - floorBack(m.x)) < m.r) screenGroup.userData.wobble = 0.5;
   // Loose objects start flying at once; the server's state follows and corrects them.
   if (net.connected)
-    for (const o of [...cubes, playground.ball]) {
+    for (const o of dynamicObjects(world)) {
       const dx = o.x - m.x,
         dz = o.z - m.z,
         dist = Math.hypot(dx, dz, o.y - m.y);
@@ -996,7 +983,7 @@ function doJump() {
   }
 }
 function kickNearest() {
-  const near = [...cubes, playground.ball]
+  const near = dynamicObjects(world)
     .filter(
       (c) =>
         Math.hypot(c.x - active.x, c.z - active.z) < 1.6 &&
@@ -1359,8 +1346,7 @@ function contextAction(action) {
     closeContext();
   }
   if (action === "climb") {
-    const path =
-      kind === "big" ? [{ x: big.x, z: big.z, h: big.h }] : playground.path(id);
+    const path = mapScene.path(id);
     if (!path.length) return;
     pending = {
       type: "climb",
@@ -1373,8 +1359,8 @@ function contextAction(action) {
     toast("Подхожу и забираюсь", 1800);
   }
   if (action === "resetBall") {
-    if (!net.connected) playground.resetBall();
-    op({ t: "ball.reset" });
+    const prop = mapScene.props.get(id);
+    op({ t: "ball.reset", ...(prop?.info.hoop ? { id: world.balls.find((b) => b.kind === "basketball")?.id } : {}) });
     closeContext();
   }
   if (action === "move") {
@@ -1421,6 +1407,7 @@ document.addEventListener("click", (e) => {
     setTool(b.dataset.tool);
     canvas.focus();
   }
+  if (b.dataset.map && b.dataset.map !== world.map) op({ t: "map.set", id: b.dataset.map });
   if (b.dataset.weapon) {
     setWeapon(b.dataset.weapon);
     toggleWeaponPicker(false);
@@ -1529,7 +1516,7 @@ canvas.addEventListener("pointerdown", (e) => {
   select(o);
   if (
     o &&
-    ["note", "cube", "big", "ball", "structure"].includes(o.userData.kind)
+    (["note", "cube", "ball"].includes(o.userData.kind) || (o.userData.kind === "structure" && mapScene.props.get(o.userData.id)?.movable))
   ) {
     drag = {
       kind: o.userData.kind,
@@ -1590,10 +1577,7 @@ canvas.addEventListener("pointermove", (e) => {
         throttled("note", () => op({ t: "note.move", id: n.id, x, z }));
       }
       if (["cube", "ball"].includes(drag.kind)) {
-        const c =
-          drag.kind === "ball"
-            ? playground.ball
-            : cubes.find((c) => c.id === drag.id);
+        const c = findObject(world, drag.id);
         const dt = Math.max(0.01, (performance.now() - drag.lastTime) / 1000);
         c.vx = clamp((x - c.x) / dt, -10, 10);
         c.vz = clamp((z - c.z) / dt, -10, 10);
@@ -1602,7 +1586,8 @@ canvas.addEventListener("pointermove", (e) => {
         c.y =
           Math.max(
             0,
-            ...[big, ...playground.colliders()]
+            ...mapScene
+              .colliders()
               .filter((b) => inside(x, z, b) && !b.y)
               .map((b) => b.h),
           ) + 0.9;
@@ -1611,15 +1596,8 @@ canvas.addEventListener("pointermove", (e) => {
         if (net.connected)
           throttled("obj", () => net.send({ t: "obj.drag", id: c.id, x, z }));
       }
-      if (drag.kind === "big") {
-        x = clamp(x, -10, 10);
-        z = clamp(z, -7, 7);
-        moveStructure("big", x, z);
-        throttled("struct", () => op({ t: "struct.move", id: "big", x, z }));
-      }
       if (drag.kind === "structure") {
-        x = clamp(x, -10.7, 10.7);
-        z = clamp(z, -6.2, 7.3);
+        ({ x, z } = clampProp(mapScene.props.get(drag.id).info, x, z));
         moveStructure(drag.id, x, z);
         throttled("struct", () => op({ t: "struct.move", id: drag.id, x, z }));
         pending = null;
@@ -1636,12 +1614,10 @@ canvas.addEventListener("pointermove", (e) => {
         ? "Стикер · тянуть / редактировать"
         : d.kind === "cube"
           ? "Кубик · тянуть / пнуть"
-          : d.kind === "big"
-            ? "Большой куб · забраться"
-            : d.kind === "ball"
+          : d.kind === "ball"
               ? "Мяч · тянуть / пнуть"
               : d.kind === "structure"
-                ? `${playground.structures.get(d.id).label} · действия`
+                ? `${mapScene.props.get(d.id)?.label || "Предмет"} · действия`
                 : d.kind === "avatar"
                   ? players.find((p) => p.profile.id === d.id)?.profile.name
                   : "Экран · закрепить";
@@ -1661,9 +1637,8 @@ function endDrag() {
       const c = findObject(world, drag.id);
       if (c) net.send({ t: "obj.release", id: c.id, vx: c.vx, vz: c.vz });
     }
-    if (drag.kind === "big") op({ t: "struct.move", id: "big", x: big.x, z: big.z });
     if (drag.kind === "structure") {
-      const s = playground.structures.get(drag.id);
+      const s = mapScene.props.get(drag.id);
       op({ t: "struct.move", id: s.id, x: s.x, z: s.z });
     }
     save();
@@ -1801,8 +1776,8 @@ function movement() {
 }
 function physics(dt) {
   worldTime += dt;
-  const obstacles = [big, ...playground.colliders()];
-  const dynamicObjects = [...cubes, playground.ball];
+  const obstacles = mapScene.colliders();
+  const loose = dynamicObjects(world);
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
   if (pending && !$("#modal").open) {
     const t = pending.target,
@@ -1849,7 +1824,7 @@ function physics(dt) {
         if (p.action.type === "kick" && p === active) {
           const c = p.action.payload.cube;
           if (
-            dynamicObjects.includes(c) &&
+            loose.includes(c) &&
             Math.hypot(c.x - p.x, c.z - p.z) < 1.9 &&
             Math.abs(c.y - p.y) < 1.1
           )
@@ -1860,7 +1835,7 @@ function physics(dt) {
     }
     p.hit = Math.max(0, p.hit - dt);
     p.land = Math.max(0, p.land - dt);
-    for (const c of dynamicObjects) {
+    for (const c of loose) {
       if (drag?.id === c.id) continue;
       const d = Math.hypot(c.x - p.x, c.z - p.z);
       if (
@@ -1876,23 +1851,10 @@ function physics(dt) {
       }
     }
   }
-  const previousBall = { ...playground.ball };
-  for (const c of dynamicObjects) {
-    if (drag?.moved && drag.id === c.id) continue;
-    stepCube(c, obstacles, dt);
-  }
-  for (let i = 0; i < dynamicObjects.length; i++)
-    for (let j = i + 1; j < dynamicObjects.length; j++)
-      collideCubes(dynamicObjects[i], dynamicObjects[j]);
-  // Online the server decides goals and announces them; offline the browser does.
-  if (!net.connected && drag?.kind !== "ball" && playground.checkGoal(previousBall)) {
-    world.score = playground.score;
-    toast(
-      `Гол! Забито: ${playground.score} · мяч можно вернуть через меню ворот`,
-      3500,
-    );
-    react("firework");
-  }
+  // Cubes and balls: the same simulation as the server (currents, river wrap, goals, hoops).
+  // Online the server is the referee and its corrections arrive; offline the browser announces.
+  const events = stepWorld(world, dt, (o) => drag?.moved && drag.id === o.id);
+  if (!net.connected) for (const event of events) onServer(event);
   updatePushing(move, dt);
   const removal = [];
   for (const pr of projectiles) {
@@ -2045,7 +2007,7 @@ function visual(dt) {
   }
   // Server corrections are blended in: the remaining error decays over ~100 ms.
   const decay = Math.exp(-12 * dt);
-  for (const c of [...cubes, playground.ball]) {
+  for (const c of dynamicObjects(world)) {
     c.ox = (c.ox || 0) * decay;
     c.oy = (c.oy || 0) * decay;
     c.oz = (c.oz || 0) * decay;
@@ -2063,14 +2025,15 @@ function visual(dt) {
     m.userData.pivot.rotation.z =
       Math.sin(m.userData.wobble * 38) * m.userData.wobble * 0.13;
   }
-  playground.update(dt);
+  mapScene.update(dt, worldTime);
   ring.position.set(
     active.x,
     (active.grounded
       ? active.y
       : Math.max(
           0,
-          ...[big, ...playground.colliders()]
+          ...mapScene
+            .colliders()
             .filter((b) => inside(active.x, active.z, b) && active.y >= b.h)
             .map((b) => b.h),
         )) + 0.045,
@@ -2130,7 +2093,8 @@ function op(msg) {
 // Kicks, pushes and snowball hits: predicted locally at once, confirmed by the server.
 function kickObject(c, from, power) {
   kickCube(c, from, power);
-  if (c === playground.ball) c.lastTouch = "self";
+  if (!net?.connected && world.balls.includes(c)) (world.lastTouch ||= {})[c.id] = "self";
+
   net?.send({ t: "obj.kick", id: c.id, x: r3(from.x), z: r3(from.z), a: r3(from.angle || 0), power });
 }
 const throttleClock = {};
@@ -2142,34 +2106,21 @@ function throttled(key, fn, interval = 50) {
 }
 // Moves a structure (or the big cube) and carries your avatar if it stands on top.
 function moveStructure(id, x, z, y = 0) {
-  const carry = (colliders, dx, dz, dy) => {
-    if (
-      active.grounded &&
-      colliders.some((c) => Math.abs(active.y - c.h) < 0.02 && inside(active.x, active.z, c))
-    ) {
-      active.x += dx;
-      active.z += dz;
-      active.y += dy;
-    }
-  };
-  if (id === "big") {
-    carry([{ ...big, h: big.h + (big.y || 0) }], x - big.x, z - big.z, y - (big.y || 0));
-    big.x = x;
-    big.z = z;
-    big.y = y;
-    bigGroup.position.set(x, y, z);
-    return;
-  }
-  const s = playground.structures.get(id);
+  const s = mapScene.props.get(id);
   if (!s) return;
-  carry(
-    s.localColliders.map((c) => ({ ...c, x: s.x + c.x, z: s.z + c.z, h: c.h + (s.y || 0) })),
-    x - s.x,
-    z - s.z,
-    y - (s.y || 0),
-  );
-  playground.move(id, x, z, y);
+  const dy = y - (s.y || 0);
+  // Carry your avatar if it stands on top of what moves.
+  if (
+    active.grounded &&
+    s.localColliders.some((c) => Math.abs(active.y - (c.h + (s.y || 0))) < 0.02 && inside(active.x, active.z, { ...c, x: s.x + c.x, z: s.z + c.z }))
+  ) {
+    active.x += x - s.x;
+    active.z += z - s.z;
+    active.y += dy;
+  }
+  mapScene.move(id, x, z, y);
   world.structures[id] = y ? { x, z, y } : { x, z };
+  world.v = (world.v || 0) + 1;
 }
 // ——— Shift: sprint, push, lift ———
 let sprinting = false,
@@ -2183,9 +2134,9 @@ function updatePushing(move, dt) {
   if (!sprinting) return;
   if (!pushState && (move.x || move.z)) {
     const len = Math.hypot(move.x, move.z);
-    for (const prop of PROPS) {
-      const pos = prop.id === "big" ? big : playground.structures.get(prop.id);
-      if (!pos || pos.y) continue;
+    for (const prop of mapProps(mapDef(world.map))) {
+      const pos = mapScene.props.get(prop.id);
+      if (!pos || pos.y || !Number.isFinite(prop.weight)) continue;
       const dx = active.x - (pos.x + prop.cx),
         dz = active.z - (pos.z + prop.cz);
       const gap = prop.round
@@ -2298,7 +2249,7 @@ function upsertNote(note) {
 // then hide the correction by letting the visual offset decay.
 function applyObjects(m) {
   const lag = clamp((clockNow() - m.s) / 1000, 0, 0.25);
-  const obs = obstacles(big, world.structures);
+  const obs = stateObstacles(world);
   for (const packed of m.o) {
     const o = findObject(world, packed[0]);
     if (!o || (drag?.moved && drag.id === o.id)) continue;
@@ -2326,33 +2277,59 @@ function applyObjects(m) {
 }
 let placedOnce = false,
   welcomed = false;
+// Replaces the room state (on joining, and when someone switches the map).
+function loadState(fresh, objs) {
+  const mapChanged = fresh.map !== mapScene.map?.id;
+  Object.assign(world, {
+    map: fresh.map,
+    notes: fresh.notes,
+    cubes: fresh.cubes,
+    balls: fresh.balls,
+    structures: fresh.structures,
+    scores: fresh.scores,
+    timer: fresh.timer,
+    flags: {},
+    lifts: {},
+  });
+  world.v = (world.v || 0) + 1;
+  for (const id of [...cubeMeshes.keys()]) removeCubeMesh(id);
+  syncAliases();
+  for (const packed of objs || []) {
+    const o = findObject(world, packed[0]);
+    if (o) Object.assign(o, unpackObject(packed), { ox: 0, oy: 0, oz: 0 });
+  }
+  const old = new Set(mapScene.pickables);
+  if (mapChanged) mapScene.build(mapDef(world.map), world.structures, world.balls);
+  else {
+    for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0);
+    mapScene.setBalls(world.balls);
+  }
+  pickables = [...pickables.filter((p) => !old.has(p)), ...mapScene.pickables];
+  cinema.frame.material.color.set(mapScene.theme.frame);
+  cubes.forEach(addCubeMesh);
+  refreshNotes();
+  renderTimer();
+  for (const id of Object.keys(liftedBy)) delete liftedBy[id];
+  if (mapChanged) {
+    // Step out of anything solid on the new map.
+    if (mapScene.colliders().some((b) => !b.y && b.h > 0.2 && inside(active.x, active.z, b, 0.3))) {
+      Object.assign(active, freeSpot(world, active.x, active.z, 0.6), { y: 0, vy: 0, grounded: true });
+    }
+    projectiles.splice(0).forEach((pr) => scene.remove(pr.mesh));
+    if (settingsOpen()) renderSettings();
+  }
+}
 function onWelcome(m) {
   myVoter = m.voter || clientUid;
   for (const p of players.slice(1)) removeRemote(p.profile.id, true);
   for (const peer of m.peers) addRemote(peer.id, peer.profile, peer.pose, true);
-  const fresh = createState(m.state, uid);
-  world.notes = fresh.notes;
-  for (const id of [...cubeMeshes.keys()]) removeCubeMesh(id);
-  world.cubes = fresh.cubes;
-  world.timer = fresh.timer;
-  world.score = playground.score = fresh.score;
-  Object.assign(big, fresh.big);
-  bigGroup.position.set(big.x, 0, big.z);
-  for (const [id, pos] of Object.entries(fresh.structures)) moveStructure(id, pos.x, pos.z);
-  syncAliases();
-  for (const packed of m.objs || []) {
-    const o = findObject(world, packed[0]);
-    if (o) Object.assign(o, unpackObject(packed), { ox: 0, oy: 0, oz: 0 });
-  }
-  cubes.forEach(addCubeMesh);
-  refreshNotes();
+  loadState(createState(m.state, uid), m.objs);
   if (!placedOnce && m.you?.pose) {
     placedOnce = true;
     Object.assign(active, { x: m.you.pose.x, z: m.you.pose.z, y: 0, vy: 0, grounded: true });
   }
   lastPose = null;
   refreshParticipants();
-  renderTimer();
   if (!welcomed) {
     welcomed = true;
     toast(
@@ -2425,14 +2402,23 @@ function onServer(m, at) {
     case "boom":
       onBoom(m);
       break;
-    case "goal": {
-      world.score = playground.score = m.score;
-      const scorer = m.by === net.id ? active : remotes.get(m.by);
+    case "goal":
+    case "basket": {
+      world.scores[m.goal || m.hoop] = m.score;
+      const scorer = m.by === net.id || m.by === "self" ? active : remotes.get(m.by);
       toast(
-        `Гол${scorer ? ` — ${scorer.profile.name}` : ""}! Забито: ${m.score} · мяч можно вернуть через меню ворот`,
+        m.t === "goal"
+          ? `Гол${scorer ? ` — ${scorer.profile.name}` : ""}! ${m.label || "Ворота"}: ${m.score} · мяч можно вернуть через меню ворот`
+          : `Попадание${scorer ? ` — ${scorer.profile.name}` : ""}! ${m.label || "Кольцо"}: ${m.score} очк.`,
         3500,
       );
       emotionEffects.start(scorer || active, "firework", worldTime);
+      break;
+    }
+    case "reset": {
+      loadState(createState(m.state, uid), m.objs);
+      const who = m.by === net.id || m.by === "self" ? "Вы" : remotes.get(m.by)?.profile.name || m.name || "Кто-то";
+      toast(`${who} — карта «${mapDef(world.map).title}»`, 3500);
       break;
     }
     case "timer":

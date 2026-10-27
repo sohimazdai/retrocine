@@ -12,7 +12,6 @@ import * as emotionModule from "../dist/emotions.js";
 import * as cinemaModule from "../dist/cinema.js";
 import * as editorModule from "../dist/avatar-editor.js";
 import * as roomModule from "../dist/room.js";
-import * as playgroundModule from "../dist/playground.js";
 import * as worldModule from "../dist/world.js";
 import * as stateModule from "../dist/state.js";
 import * as netModule from "../dist/net.js";
@@ -21,6 +20,9 @@ import * as configModule from "../dist/config.js";
 import * as mapsModule from "../dist/maps.js";
 import * as projectilesModule from "../dist/projectiles.js";
 import * as effectsModule from "../dist/effects.js";
+import * as mapsceneModule from "../dist/mapscene.js";
+import * as propsModule from "../dist/props.js";
+import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
   new URL("../dist/index.html", import.meta.url),
@@ -193,7 +195,6 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...cinemaModule,
     ...editorModule,
     ...roomModule,
-    ...playgroundModule,
     ...worldModule,
     ...stateModule,
     ...netModule,
@@ -202,6 +203,8 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...mapsModule,
     ...projectilesModule,
     ...effectsModule,
+    ...mapsceneModule,
+    ...propsModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -241,7 +244,7 @@ test("scene boot builds real meshes and a full viewport perspective camera", () 
   assert(a.run("players[0].knees[0].parent === players[0].legs[0]"));
   assert(a.run("players[0].elbows[0].parent === players[0].arms[0]"));
   assert.equal(a.run("noteMeshes.size"), 6);
-  assert.equal(a.run("bigGroup.children[0].geometry.isBufferGeometry"), true);
+  assert.equal(a.run("mapScene.props.get('big').root.children[0].geometry.isBufferGeometry"), true);
   assert(a.run("cinema.group.parent === scene"));
   assert(a.run("cinema.scene === undefined"));
   assert.equal(a.w.document.querySelector("header"), null);
@@ -646,19 +649,19 @@ test("football can be kicked, rolls, scores once and resets through goal action"
   // Offline the browser referees; online the server does (see the multiplayer tests).
   const a = boot({ offline: true });
   a.run(
-    "Object.assign(active,{x:8.1,z:-2.8,y:0});Object.assign(playground.ball,{x:8.1,z:-3.8,y:.42});kickNearest()",
+    "Object.assign(active,{x:8.1,z:-2.8,y:0});Object.assign(world.balls[0],{x:8.1,z:-3.8,y:.42});kickNearest()",
   );
   a.tick(0.07);
-  assert.equal(a.run("playground.ball.vz"), 0);
+  assert.equal(a.run("world.balls[0].vz"), 0);
   a.tick(0.8);
-  assert.equal(a.run("playground.score"), 1);
+  assert.equal(a.run("world.scores.goal"), 1);
   assert(
-    a.run("playground.ballMesh.quaternion.angleTo(new T.Quaternion())") > 0.1,
+    a.run("mapScene.ballMeshes.get('football').mesh.quaternion.angleTo(new T.Quaternion())") > 0.1,
   );
   a.tick(1);
-  assert.equal(a.run("playground.score"), 1);
+  assert.equal(a.run("world.scores.goal"), 1);
   a.run("selected={kind:'structure',id:'goal'};contextAction('resetBall')");
-  assert.equal(a.run("playground.ball.z"), a.run("playground.goal.z+4.3"));
+  assert.equal(a.run("world.balls[0].z"), a.run("mapScene.props.get('goal').z+4.3"));
 });
 
 // ——— Multiplayer client ———
@@ -731,8 +734,8 @@ test("kicks are predicted instantly and confirmed by the server; corrections ble
 
 test("server announces goals, shared timer and votes; remote throws and emotions play locally", () => {
   const a = boot();
-  a.server.emit({ t: "goal", score: 3, by: "anya" });
-  assert.equal(a.run("playground.score"), 3);
+  a.server.emit({ t: "goal", goal: "goal", label: "Футбольные ворота", score: 3, by: "anya" });
+  assert.equal(a.run("world.scores.goal"), 3);
   assert.match(a.w.document.querySelector("#toast").textContent, /Аня/);
   a.run("actions.timer()");
   assert.equal(a.server.of("timer.toggle").length, 1);
@@ -869,7 +872,7 @@ test("Shift: faster running and pushing a light prop; the pose tells the server"
     sprint = run(true);
   assert(sprint > walk * 1.5, `sprint ${sprint} vs walk ${walk}`);
   // Pushing a spool from the left: the pose carries Shift and the input direction.
-  a.run("const s=playground.structures.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0})");
+  a.run("const s=mapScene.props.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0})");
   a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
   a.run("keys.add('right')");
   a.tick(0.3);
@@ -879,9 +882,9 @@ test("Shift: faster running and pushing a light prop; the pose tells the server"
   assert.equal(pose.ps, 1, "pushing pose");
   // The server moves the spool and everyone receives it.
   a.server.emit({ t: "struct", id: "spool-b", x: 6.6, z: 5.8, y: 0 });
-  assert.equal(a.run("playground.structures.get('spool-b').x"), 6.6);
+  assert.equal(a.run("mapScene.props.get('spool-b').x"), 6.6);
   a.server.emit({ t: "struct", id: "spool-b", x: 6.6, z: 5.8, y: 1.75, by: ["me", "max"] });
-  assert.equal(a.run("playground.structures.get('spool-b').root.position.y"), 1.75);
+  assert.equal(a.run("mapScene.props.get('spool-b').root.position.y"), 1.75);
   a.tick(0.05);
   assert.equal(a.run("pushState"), 2, "lifting pose while you hold it");
 });
@@ -890,12 +893,12 @@ test("offline, one avatar pushes a spool but not the pyramid", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
   a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
-  a.run("const s=playground.structures.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0});keys.add('right')");
-  const x0 = a.run("playground.structures.get('spool-b').x");
+  a.run("const s=mapScene.props.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0});keys.add('right')");
+  const x0 = a.run("mapScene.props.get('spool-b').x");
   a.tick(1);
-  assert(a.run("playground.structures.get('spool-b').x") > x0 + 0.5);
-  a.run("keys.clear();const p=playground.structures.get('pyramid');Object.assign(active,{x:p.x-2.6,z:p.z,y:0});keys.add('right')");
-  const px = a.run("playground.structures.get('pyramid').x");
+  assert(a.run("mapScene.props.get('spool-b').x") > x0 + 0.5);
+  a.run("keys.clear();const p=mapScene.props.get('pyramid');Object.assign(active,{x:p.x-2.6,z:p.z,y:0});keys.add('right')");
+  const px = a.run("mapScene.props.get('pyramid').x");
   a.tick(1);
-  assert.equal(a.run("playground.structures.get('pyramid').x"), px);
+  assert.equal(a.run("mapScene.props.get('pyramid').x"), px);
 });

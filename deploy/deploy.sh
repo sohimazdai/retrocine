@@ -6,10 +6,10 @@
 #   ./deploy/deploy.sh --status         — что работает
 #   ./deploy/deploy.sh --logs [N]       — журнал сервера синхронизации
 #   ./deploy/deploy.sh --rollback       — вернуть предыдущие релизы
-# Хосты: CINE_API_HOST (по умолчанию vps@185.209.162.2), CINE_WEB_HOST (vps@45.159.189.71).
+# Хосты: CINE_API_HOST (по умолчанию vps@185.209.160.44), CINE_WEB_HOST (vps@45.159.189.71).
 # Код уходит архивом коммита (git archive): незакоммиченные правки не попадают.
 set -euo pipefail
-API_HOST="${CINE_API_HOST:-vps@185.209.162.2}"
+API_HOST="${CINE_API_HOST:-vps@185.209.160.44}"
 WEB_HOST="${CINE_WEB_HOST:-vps@45.159.189.71}"
 api(){ ssh -o ServerAliveInterval=30 "$API_HOST" sudo /usr/local/bin/retrocine-deploy "$@"; }
 web(){ ssh -o ServerAliveInterval=30 "$WEB_HOST" sudo /usr/local/bin/cine-deploy "$@"; }

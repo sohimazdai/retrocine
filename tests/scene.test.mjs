@@ -13,14 +13,77 @@ import * as cinemaModule from "../dist/cinema.js";
 import * as editorModule from "../dist/avatar-editor.js";
 import * as roomModule from "../dist/room.js";
 import * as playgroundModule from "../dist/playground.js";
+import * as worldModule from "../dist/world.js";
+import * as stateModule from "../dist/state.js";
+import * as netModule from "../dist/net.js";
+import * as mediaModule from "../dist/media.js";
+import * as configModule from "../dist/config.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
   new URL("../dist/index.html", import.meta.url),
   "utf8",
 );
-function boot({ pixelRatio = 1 } = {}) {
-  const dom = new JSDOM(html, { url: "https://kino.test/" }),
+// The demo room the old single-player prototype showed: five colleagues and six stickers.
+// Tests run against a small in-process stand-in for the sync server that applies the same
+// state operations (state.js) and answers synchronously.
+const DEMO_PEERS = [
+  { id: "anya", profile: { name: "Аня", color: "#d99e86", skin: "#ecc0a6", hat: "bun" }, pose: { x: -9, z: 2 } },
+  { id: "max", profile: { name: "Макс", color: "#9eb493", skin: "#bd8f70", hat: "cap" }, pose: { x: 5.8, z: -0.8 } },
+  { id: "lena", profile: { name: "Лена", color: "#c69eaf", skin: "#edbda1", hat: "long" }, pose: { x: -6, z: 6 } },
+  { id: "dima", profile: { name: "Дима", color: "#89a4bf", skin: "#d7a17d", hat: "glasses" }, pose: { x: 8.8, z: 5.3 } },
+  { id: "sonya", profile: { name: "Соня", color: "#bcae8b", skin: "#e4b59b", hat: "short", outfit: "suit" }, pose: { x: -11, z: -5.5 } },
+].map((p) => ({ ...p, pose: { y: 0, a: 0, vy: 0, g: 1, ...p.pose } }));
+const DEMO_NOTES = [
+  ["Классно выкатили новый онбординг 🚀", "good", "Аня", -10.5, -0.3],
+  ["Помогаем друг другу с ревью", "good", "Макс", -3.8, 4.8],
+  ["Меньше встреч без повестки", "improve", "Лена", -0.8, -5.8],
+  ["Больше времени на тестирование", "improve", "Дима", 2.5, 5],
+  ["Пятничные демо команды ✨", "idea", "Аня", 10.5, 2],
+  ["Попробовать день без встреч", "idea", "Макс", 0.1, 8],
+].map(([text, type, author, x, z], i) => ({ id: "note-" + i, text, type, author, votes: (i % 3) + 1, voters: [], x, z }));
+function fakeServer(peers, notes) {
+  let n = 0;
+  const newId = () => "srv-" + ++n;
+  const state = stateModule.createState({ notes: structuredClone(notes) }, newId);
+  const server = { sent: [], state, socket: null, uid: null, clock: () => 0 };
+  server.emit = (m) => server.socket.onmessage({ data: JSON.stringify(m) });
+  server.of = (t) => server.sent.filter((m) => m.t === t);
+  server.Socket = class {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 1;
+      server.socket = this;
+    }
+    send(data) {
+      const m = JSON.parse(data);
+      server.sent.push(m);
+      if (m.t === "hello") {
+        server.uid = m.uid;
+        server.emit({
+          t: "welcome", id: "me", voter: "voter-key", room: m.room, s: server.clock(),
+          you: { pose: { x: -2.8, y: 0, z: 1.3, a: 0, vy: 0, g: 1 } },
+          peers: structuredClone(peers),
+          state: stateModule.serializeState(state),
+          objs: stateModule.dynamicObjects(state).map(stateModule.packObject),
+          rtc: null,
+        });
+      } else if (m.t === "ping") server.emit({ t: "pong", c: m.c, s: server.clock() });
+      else if (stateModule.STATE_OPS.has(m.t)) {
+        const r = stateModule.applyOp(state, m, { uid: "voter-key", peer: "me", name: "Вы", now: server.clock(), newId });
+        if (r) for (const o of r.out) if (!o.others) server.emit(o.msg);
+      }
+    }
+    close() {
+      this.readyState = 3;
+    }
+  };
+  return server;
+}
+function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEMO_NOTES } = {}) {
+  const dom = new JSDOM(html, { url: "https://kino.test/cine/?r=test-room" }),
     w = dom.window;
+  w.localStorage.setItem("kino-avatar-v1", JSON.stringify({ name: "Тестер", color: "#ae92d6", skin: "#e4b59b", hat: "headphones" }));
+  const server = offline ? null : fakeServer(peers, notes);
   Object.defineProperty(w, "devicePixelRatio", { value: pixelRatio });
   let now = 0,
     raf;
@@ -103,6 +166,8 @@ function boot({ pixelRatio = 1 } = {}) {
   }
   const sandbox = {
     window: w,
+    location: w.location,
+    history: w.history,
     document: w.document,
     localStorage: w.localStorage,
     navigator: w.navigator,
@@ -113,6 +178,7 @@ function boot({ pixelRatio = 1 } = {}) {
     setTimeout: () => 1,
     clearTimeout() {},
     setInterval() {},
+    clearInterval() {},
     requestAnimationFrame: (f) => (raf = f),
     console,
     THREE: { ...Three, WebGLRenderer: Renderer },
@@ -125,9 +191,15 @@ function boot({ pixelRatio = 1 } = {}) {
     ...editorModule,
     ...roomModule,
     ...playgroundModule,
+    ...worldModule,
+    ...stateModule,
+    ...netModule,
+    ...mediaModule,
+    ...configModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
+    ...(server ? { WebSocket: server.Socket } : {}),
   };
   const context = vm.createContext(sandbox);
   let source = fs
@@ -135,6 +207,10 @@ function boot({ pixelRatio = 1 } = {}) {
     .replace(/^import[\s\S]*?;\n/gm, "");
   vm.runInContext("const T=THREE;\n" + source, context, { timeout: 5000 });
   const run = (s) => vm.runInContext(s, context);
+  if (server) {
+    server.clock = () => run("net.serverNow()");
+    server.socket.onopen();
+  }
   const tick = (seconds = 1) => {
     for (let i = 0; i < seconds * 120; i++) {
       now += 1000 / 120;
@@ -150,7 +226,7 @@ function boot({ pixelRatio = 1 } = {}) {
         bubbles: true,
       }),
     );
-  return { w, run, tick, pointer };
+  return { w, run, tick, pointer, server };
 }
 test("scene boot builds real meshes and a full viewport perspective camera", () => {
   const a = boot();
@@ -272,7 +348,11 @@ test("cursor causes volumetric avatars to rotate", () => {
   a.pointer("pointermove", 1100, 700);
   a.tick(0.2);
   assert(a.run("active.root.rotation.y") > 0.1);
-  assert(a.run("players[1].root.rotation.y") > 0.1);
+  // Others face where their owners look: the angle arrives with their pose.
+  const s = a.run("net.serverNow()");
+  a.server.emit({ t: "pose", id: "anya", s, x: -9, y: 0, z: 2, a: 1.2, vy: 0, g: 1 });
+  a.tick(0.4);
+  assert(Math.abs(a.run("players[1].root.rotation.y") - 1.2) < 0.01);
 });
 test("large cube climb action reaches its top", () => {
   const a = boot();
@@ -295,21 +375,33 @@ test("screen picking uses actual 3D triangle intersections", () => {
   assert.equal(a.run("featured.visible"), true);
   assert.equal(a.run("screenTiles.some(m=>m.visible)"), false);
 });
-test("existing local notes migrate and editor creates a real 3D panel", () => {
+test("sticker editor goes through the server and its answer creates a real 3D panel", () => {
   const a = boot();
-  a.run("noteModal()");
-  a.w.document.querySelector("#noteText").value = "Проверка объёмного стикера";
-  a.w.document
-    .querySelector("#noteForm")
-    .dispatchEvent(
-      new a.w.Event("submit", { bubbles: true, cancelable: true }),
-    );
+  const submit = (text) => {
+    a.run("noteModal()");
+    a.w.document.querySelector("#noteText").value = text;
+    a.w.document
+      .querySelector("#noteForm")
+      .dispatchEvent(new a.w.Event("submit", { bubbles: true, cancelable: true }));
+  };
+  submit("Проверка объёмного стикера");
+  assert.equal(a.server.of("note.add").length, 1);
+  assert.equal(a.server.of("note.add")[0].text, "Проверка объёмного стикера");
   assert.equal(a.run("notes.length"), 7);
   assert.equal(a.run("noteMeshes.size"), 7);
-  assert.equal(
-    JSON.parse(a.w.localStorage.getItem("kino-3d-notes-v2")).length,
-    7,
-  );
+  assert.equal(a.run("notes.at(-1).author"), "Вы", "author comes from the server");
+  // Offline the same editor works locally and the room is cached in this browser.
+  const b = boot({ offline: true });
+  assert.equal(b.run("net.status"), "offline");
+  b.run("noteModal()");
+  b.w.document.querySelector("#noteText").value = "Без сервера";
+  b.w.document
+    .querySelector("#noteForm")
+    .dispatchEvent(new b.w.Event("submit", { bubbles: true, cancelable: true }));
+  assert.equal(b.run("notes.length"), 1);
+  assert.equal(b.run("noteMeshes.size"), 1);
+  const cached = JSON.parse(b.w.localStorage.getItem("kino-room-v3:test-room"));
+  assert.equal(cached.notes[0].text, "Без сервера");
 });
 
 test("interaction mode drags a volumetric note and persists its position", () => {
@@ -325,10 +417,10 @@ test("interaction mode drags a volumetric note and persists its position", () =>
   a.pointer("pointermove", p.x + 100, p.y);
   a.pointer("pointerup", p.x + 100, p.y);
   assert(a.run("notes[0].x") > before + 1);
-  assert.equal(
-    a.run("notes[0].x"),
-    JSON.parse(a.w.localStorage.getItem("kino-3d-notes-v2"))[0].x,
-  );
+  const moves = a.server.of("note.move");
+  assert(moves.length >= 1, "moves stream to the server while dragging");
+  assert.equal(moves.at(-1).x, a.run("notes[0].x"), "the final position is sent on release");
+  assert.equal(a.server.state.notes[0].x, a.run("notes[0].x"));
 });
 test("interaction mode can drag a small cube and release it into physics", () => {
   const a = boot();
@@ -386,7 +478,7 @@ test("sharing moves all participants to the sides, preserving cameras, and resto
 test("tiles are square patches of the room's genuinely spherical wall", () => {
   const a = boot();
   a.tick(0.1);
-  a.run("setParticipantCount(6)");
+  assert.equal(a.run("screenTiles.length"), 6);
   const stats =
     a.run(`(()=>{const g=screenTiles[0].geometry,p=g.attributes.position;
  const zs=Array.from({length:p.count},(_,i)=>p.getZ(i));
@@ -545,7 +637,8 @@ test("climb actions reach the pyramid summit and each spool", () => {
 });
 
 test("football can be kicked, rolls, scores once and resets through goal action", () => {
-  const a = boot();
+  // Offline the browser referees; online the server does (see the multiplayer tests).
+  const a = boot({ offline: true });
   a.run(
     "Object.assign(active,{x:8.1,z:-2.8,y:0});Object.assign(playground.ball,{x:8.1,z:-3.8,y:.42});kickNearest()",
   );
@@ -560,4 +653,115 @@ test("football can be kicked, rolls, scores once and resets through goal action"
   assert.equal(a.run("playground.score"), 1);
   a.run("selected={kind:'structure',id:'goal'};contextAction('resetBall')");
   assert.equal(a.run("playground.ball.z"), a.run("playground.goal.z+4.3"));
+});
+
+// ——— Multiplayer client ———
+test("remote participants join, move smoothly from their poses and leave", () => {
+  const a = boot({ peers: [] });
+  assert.equal(a.run("players.length"), 1);
+  a.server.emit({ t: "join", id: "oleg", profile: { name: "Олег", color: "#88aacc" }, pose: { x: 0, y: 0, z: 3, a: 0, vy: 0, g: 1 } });
+  assert.equal(a.run("players.length"), 2);
+  assert.equal(a.run("screenTiles.length"), 2);
+  assert.equal(a.run("players[1].profile.name"), "Олег");
+  assert.equal(a.run("players[1].label.parent === players[1].root"), true, "name tag above the head");
+  // Poses 1/30 s apart: rendering stays between samples, never jumps to the newest one.
+  const t0 = a.run("net.serverNow()");
+  // 15 steps of walking, then the samples a stopped avatar keeps sending for a moment.
+  for (let i = 0; i <= 20; i++)
+    a.server.emit({ t: "pose", id: "oleg", s: t0 + i * 33, x: Math.min(i, 15) * 0.17, y: 0, z: 3, a: 0, vy: 0, g: 1 });
+  const xs = [];
+  for (let i = 0; i < 60; i++) {
+    a.tick(1 / 60);
+    xs.push(a.run("players[1].x"));
+  }
+  for (let i = 1; i < xs.length; i++) assert(xs[i] >= xs[i - 1] - 1e-9, "monotonic motion");
+  assert(Math.max(...xs.slice(1).map((x, i) => x - xs[i])) < 0.12, "no jumps between frames");
+  assert(Math.abs(xs.at(-1) - 15 * 0.17) < 0.01, "ends exactly where the owner stopped");
+  assert(a.run("players[1].velocityX") >= 0);
+  a.server.emit({ t: "profile", id: "oleg", profile: { name: "Олег П.", color: "#88aacc" } });
+  assert.equal(a.run("players[1].profile.name"), "Олег П.");
+  a.server.emit({ t: "leave", id: "oleg" });
+  assert.equal(a.run("players.length"), 1);
+  assert.equal(a.run("screenTiles.length"), 1);
+  assert.equal(a.run("portraits.has('oleg')"), false);
+});
+
+test("your avatar streams poses at up to 30 per second and idles at one per second", () => {
+  const a = boot({ peers: [] });
+  a.tick(0.5);
+  a.server.sent.length = 0;
+  a.run("keys.add('right')");
+  a.tick(1);
+  const moving = a.server.of("pose").length;
+  assert(moving >= 27 && moving <= 31, `poses while moving: ${moving}`);
+  a.run("keys.delete('right')");
+  a.tick(0.5);
+  a.server.sent.length = 0;
+  a.tick(3);
+  const idle = a.server.of("pose").length;
+  assert(idle >= 2 && idle <= 4, `heartbeat poses while idle: ${idle}`);
+  const last = a.server.of("pose").at(-1);
+  assert.equal(last.x, Math.round(a.run("active.x") * 1000) / 1000);
+});
+
+test("kicks are predicted instantly and confirmed by the server; corrections blend smoothly", () => {
+  const a = boot({ peers: [] });
+  a.run("cubes[0].x=active.x+1;cubes[0].z=active.z;cubes[0].y=0.325;kickNearest()");
+  assert.equal(a.server.of("act").at(-1).k, "kick", "others see the kick animation");
+  a.tick(0.3);
+  const kick = a.server.of("obj.kick").at(-1);
+  assert.equal(kick.id, a.run("cubes[0].id"));
+  assert.equal(kick.power, 8);
+  assert(a.run("Math.abs(cubes[0].vx)") > 1, "moves before the server answers");
+  // The server's state differs a little: position snaps logically, the mesh eases over.
+  const c = a.run("({id:cubes[0].id,x:cubes[0].x,z:cubes[0].z})");
+  a.server.emit({ t: "objs", s: a.run("net.serverNow()"), o: [[c.id, c.x + 0.3, 0.325, c.z, 0, 0, 0, 0, 0]] });
+  assert(Math.abs(a.run("cubes[0].x") - (c.x + 0.3)) < 1e-6);
+  assert(Math.abs(a.run("cubes[0].ox") + 0.3) < 1e-6, "visual offset hides the correction");
+  a.tick(0.5);
+  assert(Math.abs(a.run("cubes[0].ox")) < 0.01, "offset decays");
+  assert(Math.abs(a.run("cubeMeshes.get(cubes[0].id).position.x") - a.run("cubes[0].x")) < 0.01);
+});
+
+test("server announces goals, shared timer and votes; remote throws and emotions play locally", () => {
+  const a = boot();
+  a.server.emit({ t: "goal", score: 3, by: "anya" });
+  assert.equal(a.run("playground.score"), 3);
+  assert.match(a.w.document.querySelector("#toast").textContent, /Аня/);
+  a.run("actions.timer()");
+  assert.equal(a.server.of("timer.toggle").length, 1);
+  assert.equal(a.w.document.querySelector("#timerIsland").hidden, false);
+  assert.equal(a.run("world.timer.running"), true);
+  const id = a.run("notes[0].id");
+  a.run(`contextAction.call(null,'close');selected={kind:'note',id:'${id}'};contextAction('vote')`);
+  assert.equal(a.run(`votedByMe(notes[0])`), true);
+  assert.equal(a.run(`voteCount(notes[0])`), 2);
+  const s = a.run("net.serverNow()");
+  a.server.emit({ t: "act", id: "max", s, k: "throw", to: [0, 0.2, 3] });
+  a.server.emit({ t: "act", id: "lena", s, k: "emote", e: "heart" });
+  a.tick(0.5);
+  assert(a.run("projectiles.length + particles.length") > 0, "remote snowball flies in your scene");
+  assert.equal(a.run("players.find(p=>p.profile.id==='lena').emote.type"), "heart");
+});
+
+test("room link, presence chip and media fallbacks", () => {
+  const a = boot();
+  a.tick(0.1);
+  a.run("renderPresence()");
+  assert.equal(a.w.document.querySelector("#netStatus").dataset.state, "online");
+  assert.match(a.w.document.querySelector("#netStatus").textContent, /6 участников/);
+  a.run("roomModal()");
+  assert.match(a.w.document.querySelector("#roomLink").value, /\?r=test-room$/);
+  assert.equal(a.w.document.querySelectorAll(".people li").length, 6);
+  // Remote camera and screen tracks become textures on the right tile / the wall.
+  const video = a.w.document.createElement("video");
+  Object.defineProperty(video, "videoWidth", { value: 1280 });
+  Object.defineProperty(video, "videoHeight", { value: 720 });
+  a.run("onVideo")("max", "camera", video);
+  assert(a.run("cameraTextures.has('max')"));
+  a.run("onVideo")("dima", "screen", video);
+  assert.equal(a.run("featured.visible"), true);
+  assert.equal(a.run("cinema.media.share === liveVideo.screen.get('dima').texture"), true);
+  a.server.emit({ t: "leave", id: "dima" });
+  assert.equal(a.run("featured.visible"), false, "share disappears with its owner");
 });

@@ -29,6 +29,18 @@ import {
 import { Playground } from "./playground.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
+import { BIG, obstacles } from "./world.js";
+import {
+  createState,
+  serializeState,
+  applyOp,
+  unpackObject,
+  findObject,
+  timerLeft,
+} from "./state.js";
+import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
+import { Media } from "./media.js";
+import { apiUrl, currentRoom, roomLink } from "./config.js";
 const $ = (s) => document.querySelector(s),
   $$ = (s) => [...document.querySelectorAll(s)],
   esc = (s) =>
@@ -63,6 +75,8 @@ const icons = {
   orbit:
     '<ellipse cx="12" cy="12" rx="10" ry="5" transform="rotate(-30 12 12)"/><ellipse cx="12" cy="12" rx="5" ry="10" transform="rotate(-30 12 12)"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5M12 17h.01"/>',
+  invite:
+    '<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-4.9M19 14v6M16 17h6"/>',
 };
 $$("[data-icon]").forEach(
   (e) =>
@@ -84,140 +98,54 @@ const palette = { good: "#b7cfa8", improve: "#dfacb9", idea: "#ead49b" },
     improve: "Что можно улучшить",
     idea: "Новые идеи",
   };
-const oldNotes = read("kino-notes-v1", null);
-const defaults = [
-  ["Классно выкатили новый онбординг 🚀", "good", "Аня"],
-  ["Помогаем друг другу с ревью", "good", "Макс"],
-  ["Меньше встреч без повестки", "improve", "Лена"],
-  ["Больше времени на тестирование", "improve", "Дима"],
-  ["Пятничные демо команды ✨", "idea", "Аня"],
-  ["Попробовать день без встреч", "idea", "Макс"],
-];
-const notePositions = [
-  [-10.5, -0.3],
-  [-3.8, 4.8],
-  [-0.8, -5.8],
-  [2.5, 5],
-  [10.5, 2],
-  [0.1, 8],
-];
-let notes =
-  read("kino-3d-notes-v2", null) ||
-  (
-    oldNotes ||
-    defaults.map(([text, type, author], i) => ({
-      text,
-      type,
-      author,
-      votes: (i % 3) + 1,
-    }))
-  ).map((n, i) => ({
-    ...n,
-    id: n.id || uid(),
-    x: notePositions[i % 6][0] + Math.floor(i / 6) * 0.3,
-    z: notePositions[i % 6][1],
-    y: 0,
-  }));
+// Identity of this browser (stable across visits) and the room from ?r= in the address.
+let clientUid = read("kino-client-v1", null);
+if (typeof clientUid !== "string" || clientUid.length < 8) {
+  clientUid = uid().replace(/[^\w-]/g, "");
+  try {
+    localStorage.setItem("kino-client-v1", JSON.stringify(clientUid));
+  } catch {}
+}
+// Votes are keyed by an opaque per-room id the server derives from clientUid.
+let myVoter = clientUid;
+const roomId = currentRoom(location, history);
+const API_URL = apiUrl(location),
+  OFFLINE = API_URL === "off",
+  inviteLink = () => roomLink(roomId, location);
+const roomKey = "kino-room-v3:" + roomId;
 let me = read("kino-avatar-v1", {
-  name: "Вы",
+  name: "",
   color: "#ae92d6",
   skin: "#e4b59b",
   hat: "headphones",
 });
-const defs = [
-  { ...me, id: "self", x: -2.8, z: 1.3 },
-  {
-    id: "anya",
-    name: "Аня",
-    color: "#d99e86",
-    skin: "#ecc0a6",
-    hat: "bun",
-    x: -9,
-    z: 2,
-  },
-  {
-    id: "max",
-    name: "Макс",
-    color: "#9eb493",
-    skin: "#bd8f70",
-    hat: "cap",
-    x: 5.8,
-    z: -0.8,
-  },
-  {
-    id: "lena",
-    name: "Лена",
-    color: "#c69eaf",
-    skin: "#edbda1",
-    hat: "long",
-    x: -6,
-    z: 6,
-  },
-  {
-    id: "dima",
-    name: "Дима",
-    color: "#89a4bf",
-    skin: "#d7a17d",
-    hat: "glasses",
-    x: 8.8,
-    z: 5.3,
-  },
-  {
-    id: "sonya",
-    name: "Соня",
-    color: "#bcae8b",
-    skin: "#e4b59b",
-    hat: "short",
-    outfit: "suit",
-    x: -11,
-    z: -5.5,
-  },
-];
-let cubes = read("kino-3d-cubes-v2", [
-  { x: -10.3, z: 7.8, size: 0.65, color: "#a696ce" },
-  { x: 6.5, z: 2, size: 0.65, color: "#ccad87" },
-  { x: 10.5, z: -4, size: 0.65, color: "#9bbbbb" },
-  { x: -1, z: 0.5, size: 0.65, color: "#c99ead" },
-]).map((c) => ({
-  ...c,
-  y: c.size / 2,
-  vx: 0,
-  vy: 0,
-  vz: 0,
-  spin: 0,
-  rotation: 0,
-  id: c.id || uid(),
-}));
-let big = {
-  ...read("kino-3d-big-v2", { x: 2.4, z: -1.1 }),
-  w: 2.8,
-  d: 2.8,
-  h: 1.65,
-  id: "big",
-};
+// The room's shared state. The server is the authority; without a connection the same
+// operations run locally (state.js) and are cached in this browser.
+const world = createState(read(roomKey, null) || {}, uid);
+let notes = world.notes,
+  cubes = world.cubes;
+const big = { ...BIG, ...world.big, id: "big" };
+world.big = big;
+function syncAliases() {
+  notes = world.notes;
+  cubes = world.cubes;
+  if (world.big !== big) {
+    Object.assign(big, world.big);
+    world.big = big;
+  }
+}
+let net = null,
+  mediaClient = null;
+const r3 = (v) => Math.round(v * 1000) / 1000;
 let storageFailed = false;
 function save() {
   try {
-    localStorage.setItem("kino-3d-notes-v2", JSON.stringify(notes));
-    localStorage.setItem(
-      "kino-3d-cubes-v2",
-      JSON.stringify(
-        cubes.map(({ x, z, size, color, id }) => ({ x, z, size, color, id })),
-      ),
-    );
-    localStorage.setItem(
-      "kino-3d-big-v2",
-      JSON.stringify({ x: big.x, z: big.z }),
-    );
     localStorage.setItem(
       "kino-avatar-v1",
       JSON.stringify(players[0]?.profile || me),
     );
-    localStorage.setItem(
-      "kino-playground-v1",
-      JSON.stringify(playground.snapshot()),
-    );
-    localStorage.setItem("kino-room-layout-v3", "true");
+    if (!net?.connected)
+      localStorage.setItem(roomKey, JSON.stringify(serializeState(world)));
   } catch {
     if (!storageFailed) {
       storageFailed = true;
@@ -298,7 +226,11 @@ const rim = new T.DirectionalLight("#baa4f5", 1.4);
 rim.position.set(8, 10, -12);
 scene.add(rim);
 const floor = createFloor(scene);
-const playground = new Playground(scene, read("kino-playground-v1", {}));
+const playground = new Playground(scene, world.structures);
+Object.assign(playground.ball, world.ball);
+world.ball = playground.ball;
+playground.flags = world.flags;
+playground.score = world.score;
 const bigGroup = new T.Group();
 bigGroup.userData = { kind: "big", id: "big" };
 scene.add(bigGroup);
@@ -323,10 +255,6 @@ function clearFloorSpot(x, z, pad = 1.4) {
   }
   return { x, z };
 }
-if (!read("kino-room-layout-v3", false)) {
-  for (const n of notes) Object.assign(n, clearFloorSpot(n.x, n.z));
-  for (const c of cubes) Object.assign(c, clearFloorSpot(c.x, c.z, 0.9));
-}
 function addCubeMesh(c) {
   const root = new T.Group();
   root.userData = { kind: "cube", id: c.id };
@@ -348,19 +276,62 @@ function addCubeMesh(c) {
   pickables.push(root);
 }
 cubes.forEach(addCubeMesh);
-const players = defs.map((p) => ({
-  ...avatar(p),
-  profile: normalizeProfile(p),
-  x: p.x,
-  z: p.z,
-  y: 0,
-  vy: 0,
-  grounded: true,
-  angle: 0,
-  walk: 0,
-  hit: 0,
-  land: 0,
-}));
+function makePlayer(profile, pose) {
+  return {
+    ...avatar(profile),
+    profile: normalizeProfile(profile),
+    x: pose.x,
+    z: pose.z,
+    y: pose.y || 0,
+    vy: 0,
+    grounded: true,
+    angle: pose.a ?? 0,
+    walk: 0,
+    hit: 0,
+    land: 0,
+  };
+}
+// Name tags float above heads; they turn green while that person speaks.
+function drawLabel(p) {
+  const cv = p.label.material.map.image,
+    c = cv.getContext("2d"),
+    name = (p.profile.name || "Вы") + (p === players[0] ? " · вы" : "");
+  c.clearRect?.(0, 0, cv.width, cv.height);
+  c.font = "600 50px system-ui, sans-serif";
+  const w = Math.min(cv.width - 8, (c.measureText(name).width || 200) + 64);
+  c.fillStyle = p.speaking ? "#3d8f5fe6" : "#1c1b27c4";
+  if (c.roundRect) {
+    c.beginPath();
+    c.roundRect((cv.width - w) / 2, 22, w, 84, 42);
+    c.fill();
+  } else c.fillRect((cv.width - w) / 2, 22, w, 84);
+  c.fillStyle = "#ffffff";
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText((p.speaking ? "● " : "") + name, cv.width / 2, 66);
+  p.label.material.map.needsUpdate = true;
+}
+function nameLabel(p) {
+  const cv = document.createElement("canvas");
+  cv.width = 640;
+  cv.height = 128;
+  const texture = new T.CanvasTexture(cv);
+  texture.colorSpace = T.SRGBColorSpace;
+  const sprite = new T.Sprite(
+    new T.SpriteMaterial({ map: texture, depthTest: false, transparent: true }),
+  );
+  sprite.scale.set(4.2, 0.84, 1);
+  sprite.position.set(0, 2.85, 0);
+  sprite.renderOrder = 10;
+  sprite.raycast = () => {};
+  p.root.add(sprite);
+  p.label = sprite;
+  drawLabel(p);
+}
+// players[0] is always you; everyone else is a remote participant driven by the network.
+const players = [makePlayer({ ...me, id: "self" }, { x: -2.8, z: 1.3 })];
+nameLabel(players[0]);
+const remotes = new Map();
 players.forEach((p) => {
   scene.add(p.root);
   pickables.push(p.root);
@@ -377,6 +348,8 @@ const ring = new T.Mesh(
 );
 ring.rotation.x = -Math.PI / 2;
 scene.add(ring);
+const voteCount = (n) => (n.votes || 0) + (n.voters?.length || 0),
+  votedByMe = (n) => !!n.voters?.includes(myVoter);
 function textureForNote(n) {
   const cv = document.createElement("canvas");
   cv.width = 640;
@@ -400,7 +373,7 @@ function textureForNote(n) {
   c.fillText(n.author || "Вы", 42, 748);
   c.textAlign = "right";
   c.font = "32px system-ui";
-  c.fillText("♡ " + ((n.votes || 0) + (n.voted ? 1 : 0)), 598, 748);
+  c.fillText("♡ " + voteCount(n), 598, 748);
   const texture = new T.CanvasTexture(cv);
   texture.colorSpace = T.SRGBColorSpace;
   texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -434,17 +407,26 @@ function addNoteMesh(n) {
   noteMeshes.set(n.id, root);
   pickables.push(root);
 }
+function removeNoteMesh(id) {
+  const r = noteMeshes.get(id);
+  if (!r) return;
+  scene.remove(r);
+  pickables = pickables.filter((p) => p !== r);
+  r.userData.texture.dispose();
+  r.userData.front.material.dispose();
+  r.userData.front.geometry.dispose();
+  noteMeshes.delete(id);
+}
 function refreshNotes() {
-  for (const r of noteMeshes.values()) {
-    scene.remove(r);
-    pickables = pickables.filter((p) => p !== r);
-    r.userData.texture.dispose();
-    r.userData.front.material.dispose();
-    r.userData.front.geometry.dispose();
-  }
-  noteMeshes.clear();
+  for (const id of [...noteMeshes.keys()]) removeNoteMesh(id);
   notes.forEach(addNoteMesh);
   save();
+}
+function refreshNote(n) {
+  const wobble = noteMeshes.get(n.id)?.userData.wobble;
+  removeNoteMesh(n.id);
+  addNoteMesh(n);
+  if (wobble) noteMeshes.get(n.id).userData.wobble = wobble;
 }
 notes.forEach(addNoteMesh);
 // Each screen image is a render of the actual volumetric avatar, not an illustrated sprite.
@@ -462,16 +444,56 @@ function portraitTexture(p) {
   const pc = new T.PerspectiveCamera(31, 1, 0.1, 10);
   framePortrait(pc, a);
   const rt = new T.WebGLRenderTarget(384, 384, { depthBuffer: true });
+  const entry = { target: rt, scene: ps, camera: pc, avatar: a, caption: portraitCaption(p) };
   const current = renderer.getRenderTarget();
   renderer.setScissorTest(false);
   renderer.setRenderTarget(rt);
-  renderer.render(ps, pc);
+  renderPortrait(entry);
   renderer.setRenderTarget(current);
-  const old = portraits.get(p.profile.id);
-  old?.target.dispose();
-  if (old) disposeAvatar(old.avatar);
-  portraits.set(p.profile.id, { target: rt, scene: ps, camera: pc, avatar: a });
+  disposePortrait(portraits.get(p.profile.id));
+  portraits.set(p.profile.id, entry);
   return rt.texture;
+}
+// The participant's name is drawn over the bottom of their square on the wall.
+const captionCamera = new T.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+captionCamera.position.z = 1;
+function portraitCaption(p) {
+  const cv = document.createElement("canvas");
+  cv.width = 384;
+  cv.height = 64;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#16141ea8";
+  c.fillRect(0, 0, 384, 64);
+  c.font = "600 30px system-ui, sans-serif";
+  c.fillStyle = "#ffffff";
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText((p.profile.name || "Вы") + (p.profile.id === "self" ? " · вы" : ""), 192, 34);
+  const texture = new T.CanvasTexture(cv);
+  texture.colorSpace = T.SRGBColorSpace;
+  const mesh = new T.Mesh(
+    new T.PlaneGeometry(2, 64 / 192),
+    new T.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }),
+  );
+  mesh.position.set(0, -1 + 32 / 192, 0.5);
+  const scene = new T.Scene();
+  scene.add(mesh);
+  return { scene, mesh, texture };
+}
+function renderPortrait(entry) {
+  renderer.render(entry.scene, entry.camera);
+  const autoClear = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.render(entry.caption.scene, captionCamera);
+  renderer.autoClear = autoClear;
+}
+function disposePortrait(entry) {
+  if (!entry) return;
+  entry.target.dispose();
+  disposeAvatar(entry.avatar);
+  entry.caption.texture.dispose();
+  entry.caption.mesh.geometry.dispose();
+  entry.caption.mesh.material.dispose();
 }
 players.forEach(portraitTexture);
 cinema = new CinemaScreen(players, portraits);
@@ -479,8 +501,8 @@ scene.add(cinema.group);
 pickables.push(cinema.group);
 cinema.updateCamera(camera);
 const screenGroup = cinema.group,
-  screenTiles = cinema.tiles,
   featured = cinema.featured;
+let screenTiles = cinema.tiles;
 let pinned = null,
   camStream = null,
   micStream = null,
@@ -488,36 +510,115 @@ let pinned = null,
   camTexture = null,
   shareTexture = null;
 const cameraTextures = new Map();
+// Video from the media server: cameras and screen shares of everyone, including your own.
+const liveVideo = { camera: new Map(), screen: new Map() };
+let localMedia = { mic: false, cam: false, screen: false };
+function onVideo(id, kind, el) {
+  const map = liveVideo[kind];
+  if (!map) return;
+  const old = map.get(id);
+  if (old) {
+    old.texture.dispose();
+    map.delete(id);
+  }
+  if (el) {
+    const texture = new T.VideoTexture(el);
+    texture.colorSpace = T.SRGBColorSpace;
+    map.set(id, { el, texture, at: performance.now() });
+    el.addEventListener("loadedmetadata", () => screenUpdate());
+    el.addEventListener("resize", () => screenUpdate());
+  }
+  if (kind === "screen") pinned = null;
+  screenUpdate();
+}
+function currentShare() {
+  if (displayStream) return shareTexture;
+  const shares = [...liveVideo.screen.values()].sort((a, b) => b.at - a.at);
+  return shares[0]?.texture || null;
+}
 function screenUpdate() {
+  cameraTextures.clear();
+  for (const [id, v] of liveVideo.camera) cameraTextures.set(id, v.texture);
   if (camTexture) cameraTextures.set("self", camTexture);
-  else cameraTextures.delete("self");
-  cinema.setMedia({
-    cameras: cameraTextures,
-    pinned,
-    share: displayStream ? shareTexture : null,
-  });
+  cinema.setMedia({ cameras: cameraTextures, pinned, share: currentShare() });
   updateShareTools();
 }
 function updateShareTools() {
-  $("#shareTools").hidden = !displayStream;
+  $("#shareTools").hidden = !cinema.media?.share;
   $("#shareScale").textContent = Math.round(cinema.shareZoom * 100) + "%";
 }
 screenUpdate();
 const emotionEffects = new EmotionEffects(scene);
-function setParticipantCount(count) {
-  cinema.setCount(count);
-  players.forEach(
-    (player, index) => (player.root.visible = index < cinema.count),
-  );
-  if (players.indexOf(active) >= cinema.count) active = players[0];
-  if (
-    pinned &&
-    !players
-      .slice(0, cinema.count)
-      .some((player) => player.profile.id === pinned)
-  )
-    pinned = null;
+function refreshParticipants() {
+  cinema.setPlayers(players);
+  screenTiles = cinema.tiles;
+  if (pinned && !players.some((p) => p.profile.id === pinned)) pinned = null;
   screenUpdate();
+  renderPresence();
+}
+function addRemote(id, profile, pose, batch = false) {
+  if (remotes.has(id)) {
+    updateRemoteProfile(id, profile);
+    return;
+  }
+  if (players.length >= 16) return;
+  const start = pose || { x: 0, z: 4, y: 0, a: Math.PI, g: 1 };
+  const p = makePlayer({ ...profile, id }, start);
+  p.remote = true;
+  p.buffer = new PoseBuffer();
+  p.events = [];
+  p.speaking = false;
+  p.buffer.push({ a: 0, vy: 0, g: 1, y: 0, ...start }, clockNow() - 1, clockNow());
+  players.push(p);
+  remotes.set(id, p);
+  nameLabel(p);
+  scene.add(p.root);
+  pickables.push(p.root);
+  portraitTexture(p);
+  if (!batch) {
+    refreshParticipants();
+    toast(`${p.profile.name} в комнате`, 2200);
+  }
+}
+function removeRemote(id, batch = false) {
+  const p = remotes.get(id);
+  if (!p) return;
+  remotes.delete(id);
+  players.splice(players.indexOf(p), 1);
+  scene.remove(p.root);
+  pickables = pickables.filter((o) => o !== p.root);
+  p.label?.material.map.dispose();
+  disposeAvatar(p);
+  disposePortrait(portraits.get(id));
+  portraits.delete(id);
+  for (const kind of ["camera", "screen"]) {
+    liveVideo[kind].get(id)?.texture.dispose();
+    liveVideo[kind].delete(id);
+  }
+  if (selected?.id === id) closeContext();
+  if (!batch) {
+    refreshParticipants();
+    toast(`${p.profile.name} вышел(а)`, 2200);
+  }
+}
+function rebuildAvatar(p, profile) {
+  scene.remove(p.root);
+  pickables = pickables.filter((o) => o !== p.root);
+  p.label?.material.map.dispose();
+  disposeAvatar(p);
+  Object.assign(p, avatar(profile));
+  p.profile = profile;
+  p.motion = null;
+  nameLabel(p);
+  scene.add(p.root);
+  pickables.push(p.root);
+  portraitTexture(p);
+}
+function updateRemoteProfile(id, profile) {
+  const p = remotes.get(id);
+  if (!p) return;
+  rebuildAvatar(p, normalizeProfile({ ...profile, id }));
+  refreshParticipants();
 }
 let tool = "snow",
   selected = null,
@@ -639,19 +740,24 @@ function highlight() {
       '<button data-context="edit">Редактировать</button><button data-context="vote">♡ Голос</button><button data-context="move">Переместить</button>';
   }
   if (obj.kind === "avatar") {
+    const self = obj.id === "self";
     label =
-      players.find((p) => p.profile.id === obj.id)?.profile.name || "Аватар";
-    buttons =
-      '<button data-context="control">Управлять</button><button data-context="wave">Помахать</button><button data-context="customize">Настроить</button>';
+      (players.find((p) => p.profile.id === obj.id)?.profile.name || "Аватар") +
+      (self ? " · вы" : "");
+    buttons = self
+      ? '<button data-context="customize">Настроить</button><button data-context="wave">Помахать</button>'
+      : '<button data-context="wave">Помахать</button>' +
+        (cinema.media?.share ? "" : '<button data-context="pin">На весь экран</button>');
   }
   if (["screen", "tile", "share"].includes(obj.kind)) {
+    const sharing = !!displayStream || localMedia.screen;
     label = "Экран";
     buttons =
-      (obj.kind === "tile" && !displayStream
+      (obj.kind === "tile" && !cinema.media?.share
         ? '<button data-context="pin">Закрепить</button>'
         : "") +
       '<button data-context="unpin">Все участники</button>' +
-      (displayStream
+      (sharing
         ? '<button data-action="share">Остановить показ</button>'
         : '<button data-action="share">Показать экран</button>');
   }
@@ -687,7 +793,8 @@ function throwSnow(hit) {
     const p = players.find((p) => p.profile.id === targetOwner.userData.id);
     to.set(p.x, p.y + 1.05, p.z);
   }
-  startAction(active, "throw", worldTime, { to });
+  if (startAction(active, "throw", worldTime, { to }))
+    net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3) });
 }
 function releaseSnow(player, to) {
   const from = new T.Vector3(player.x, player.y + 1.08, player.z);
@@ -710,7 +817,7 @@ function releaseSnow(player, to) {
   scene.add(mesh);
   projectiles.push({ mesh, v, age: 0, owner: player.profile.id });
 }
-function burst(pos, kind) {
+function burst(pos, kind, snowOwner = "self") {
   for (let i = 0; i < 10; i++) {
     const m = new T.Mesh(particleGeo, snowMat);
     m.position.copy(pos);
@@ -725,18 +832,19 @@ function burst(pos, kind) {
       age: 0,
     });
   }
-  if (["cube", "ball"].includes(kind?.userData.kind)) {
+  if (["cube", "ball"].includes(kind?.userData.kind) && snowOwner === "self") {
     const c =
       kind.userData.kind === "ball"
         ? playground.ball
         : cubes.find((c) => c.id === kind.userData.id);
-    if (c) kickCube(c, { x: active.x, z: active.z }, 3);
+    if (c) kickObject(c, active, 3);
   }
   if (kind?.userData.kind === "avatar") {
     const p = players.find((p) => p.profile.id === kind.userData.id);
     if (p) {
       p.hit = 0.55;
-      if (p.grounded) {
+      // Only your own avatar hops; others hop on their screens and it arrives with their pose.
+      if (p === active && p.grounded) {
         p.vy = 2.1;
         p.grounded = false;
       }
@@ -764,7 +872,8 @@ function kickNearest() {
         Math.hypot(a.x - active.x, a.z - active.z) -
         Math.hypot(b.x - active.x, b.z - active.z),
     )[0];
-  if (near) startAction(active, "kick", worldTime, { cube: near });
+  if (near && startAction(active, "kick", worldTime, { cube: near }))
+    net.send({ t: "act", k: "kick", target: near.id });
   else toast("Подойдите к мячу или маленькому кубику и нажмите E", 1800);
 }
 function modal(title, body, wide = false) {
@@ -797,10 +906,8 @@ function noteModal(id = null, pos = null, type = "good") {
     e.preventDefault();
     const text = $("#noteText").value.trim();
     if (!text) return;
-    if (n) {
-      n.text = text;
-      n.type = $("#noteType").value;
-    } else {
+    if (n) op({ t: "note.edit", id: n.id, text, type: $("#noteType").value });
+    else {
       if (notes.length >= 80) {
         toast("В комнате уже 80 стикеров");
         return;
@@ -813,29 +920,21 @@ function noteModal(id = null, pos = null, type = "good") {
           clamp(active.z + 1, -8, 8),
         );
       Object.assign(p, clearFloorSpot(p.x, p.z));
-      notes.push({
-        id: uid(),
-        text,
-        type: $("#noteType").value,
-        author: active.profile.name,
-        votes: 0,
-        x: p.x,
-        z: p.z,
-        y: 0,
-      });
+      op({ t: "note.add", text, type: $("#noteType").value, x: p.x, z: p.z });
     }
-    refreshNotes();
     $("#modal").close();
     closeContext();
   };
   if (n)
     $("#deleteNote").onclick = () => {
-      notes = notes.filter((x) => x.id !== n.id);
-      refreshNotes();
+      op({ t: "note.del", id: n.id });
       $("#modal").close();
       closeContext();
     };
   setTimeout(() => $("#noteText").focus(), 60);
+}
+function boardOpen() {
+  return $("#modal").open && !!$("#modalContent .board-columns");
 }
 function board() {
   modal(
@@ -847,7 +946,7 @@ function board() {
             .filter((n) => n.type === t)
             .map(
               (n) =>
-                `<article class="note-card ${t}" draggable="true" data-note="${n.id}"><button class="note-text" data-edit="${n.id}">${esc(n.text)}</button><div class="note-bottom"><span>${esc(n.author)}</span><button class="vote ${n.voted ? "selected" : ""}" data-vote="${n.id}">♡ ${(n.votes || 0) + (n.voted ? 1 : 0)}</button></div></article>`,
+                `<article class="note-card ${t}" draggable="true" data-note="${n.id}"><button class="note-text" data-edit="${n.id}">${esc(n.text)}</button><div class="note-bottom"><span>${esc(n.author)}</span><button class="vote ${votedByMe(n) ? "selected" : ""}" data-vote="${n.id}">♡ ${voteCount(n)}</button></div></article>`,
             )
             .join(
               "",
@@ -867,17 +966,11 @@ function avatarModal(p = active) {
     $("#modalContent"),
     draft,
     (profile) => {
-      scene.remove(p.root);
-      pickables = pickables.filter((o) => o !== p.root);
-      disposeAvatar(p);
-      Object.assign(p, avatar(profile));
-      p.profile = profile;
-      p.motion = null;
-      scene.add(p.root);
-      pickables.push(p.root);
-      portraitTexture(p);
+      rebuildAvatar(p, profile);
       screenUpdate();
       save();
+      if (p === active) net.send({ t: "profile", profile: publicProfile() });
+      renderPresence();
       $("#modal").close();
     },
     T.WebGLRenderer,
@@ -885,43 +978,43 @@ function avatarModal(p = active) {
 }
 function react(type, p = active) {
   emotionEffects.start(p, type, worldTime);
+  if (p === active) net.send({ t: "act", k: "emote", e: String(type) });
 }
-let timerRemaining = 300,
-  timerEnd = null;
+function publicProfile() {
+  const { id, ...rest } = active.profile;
+  return rest;
+}
+let timerDoneFor = null;
 function renderTimer() {
-  let n = timerEnd
-    ? Math.max(0, Math.ceil((timerEnd - Date.now()) / 1000))
-    : timerRemaining;
+  const timer = world.timer,
+    n = timerLeft(timer, clockNow());
+  $("#timerIsland").hidden = !timer.visible;
   $("#timerText").textContent =
     String(Math.floor(n / 60)).padStart(2, "0") +
     ":" +
     String(n % 60).padStart(2, "0");
-  $("#timerToggle").textContent = timerEnd ? "Ⅱ" : "▶";
-  if (timerEnd && n === 0) {
-    timerEnd = null;
-    timerRemaining = 0;
+  $("#timerToggle").textContent = timer.running ? "Ⅱ" : "▶";
+  if (timer.running && n === 0 && timerDoneFor !== timer.endAt) {
+    timerDoneFor = timer.endAt;
     toast("Время вышло — обсудим идеи?");
-    react("⏰");
+    emotionEffects.start(active, "firework", worldTime);
   }
 }
 function timerSettings() {
   modal(
     "Таймер",
-    `<form id="timerForm"><label class="field-label" for="minutes">Минуты</label><input id="minutes" type="number" min="1" max="60" value="${Math.max(1, Math.ceil(timerRemaining / 60))}" required><div class="modal-actions"><button class="primary">Запустить</button></div></form>`,
+    `<form id="timerForm"><label class="field-label" for="minutes">Минуты</label><input id="minutes" type="number" min="1" max="60" value="${Math.max(1, Math.ceil((world.timer.remaining || 300) / 60))}" required><p class="modal-text">Таймер общий: его видят и останавливают все участники.</p><div class="modal-actions"><button class="primary">Запустить</button></div></form>`,
   );
   $("#timerForm").onsubmit = (e) => {
     e.preventDefault();
-    timerRemaining = clamp(Number($("#minutes").value), 1, 60) * 60;
-    timerEnd = Date.now() + timerRemaining * 1000;
-    $("#timerIsland").hidden = false;
-    renderTimer();
+    op({ t: "timer.start", minutes: clamp(Number($("#minutes").value), 1, 60) });
     $("#modal").close();
   };
 }
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросить снежок</strong>Левый клик по сцене.<br>Персонажи поворачиваются к курсору.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Правая кнопка — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 30–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Это локальная 3D-комната. Остальные персонажи демонстрационные; можно переключаться между ними. Данные сохраняются в этом браузере. Видео и звук пока не передаются другим людям.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросить снежок</strong>Левый клик по сцене.<br>Персонажи поворачиваются к курсору.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Правая кнопка — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 30–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег — кнопка «Пригласить» или меню «k».</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -934,7 +1027,49 @@ function mediaVideo(stream) {
   v.play().catch(() => {});
   return v;
 }
+function mediaButtons() {
+  const set = (sel, on) => {
+    $(sel).classList.toggle("on", on);
+    $(sel).classList.toggle("off", !on);
+  };
+  if (mediaClient.ready) {
+    set("#micBtn", localMedia.mic);
+    set("#camBtn", localMedia.cam);
+    $("#shareBtn").classList.toggle("on", localMedia.screen);
+  }
+}
+async function liveMedia(kind) {
+  const key = { mic: "mic", camera: "cam", share: "screen" }[kind];
+  const on = !localMedia[key];
+  const btn = $(kind === "mic" ? "#micBtn" : kind === "camera" ? "#camBtn" : "#shareBtn");
+  btn.disabled = true;
+  try {
+    if (kind === "mic") await mediaClient.setMic(on);
+    if (kind === "camera") await mediaClient.setCam(on);
+    if (kind === "share") await mediaClient.setShare(on);
+    if (on)
+      toast(
+        kind === "mic"
+          ? "Микрофон включён — вас слышат все в комнате"
+          : kind === "camera"
+            ? "Камера включена — её видят все в комнате"
+            : "Показ экрана включён для всех",
+        2600,
+      );
+  } catch (e) {
+    if (e?.name !== "NotAllowedError" || kind !== "share")
+      toast(
+        e?.name === "NotAllowedError"
+          ? "Доступ к устройству не разрешён"
+          : "Устройство недоступно",
+      );
+  } finally {
+    btn.disabled = false;
+    mediaButtons();
+  }
+}
 async function media(kind) {
+  if (mediaClient.ready) return liveMedia(kind);
   const cameraMode = kind === "camera",
     existing = cameraMode ? camStream : micStream,
     btn = $(cameraMode ? "#camBtn" : "#micBtn");
@@ -969,8 +1104,8 @@ async function media(kind) {
     screenUpdate();
     toast(
       cameraMode
-        ? "Ваша камера на 3D-экране. Видео видно только вам."
-        : "Микрофон включён локально. Звук не передаётся.",
+        ? "Нет связи с медиасервером: камера видна только вам."
+        : "Нет связи с медиасервером: микрофон включён только локально.",
     );
   } catch (e) {
     toast(
@@ -991,6 +1126,7 @@ function stopShare() {
   screenUpdate();
 }
 async function share() {
+  if (mediaClient.ready && !displayStream) return liveMedia("share");
   if (displayStream) {
     stopShare();
     return;
@@ -1011,16 +1147,17 @@ async function share() {
     $("#shareBtn").classList.add("on");
     pinned = null;
     screenUpdate();
-    toast("Показ экрана включён локально");
+    toast("Нет связи с медиасервером: показ виден только вам");
   } catch {}
 }
 function exportNotes() {
   const data = {
       room: "kinō",
       exportedAt: new Date().toISOString(),
-      notes: notes.map((n) => ({
+      roomId,
+      notes: notes.map(({ voters, ...n }) => ({
         ...n,
-        votes: (n.votes || 0) + (n.voted ? 1 : 0),
+        votes: voteCount(n),
       })),
     },
     a = document.createElement("a");
@@ -1056,16 +1193,13 @@ const actions = {
     updateShareTools();
   },
   timerSettings,
-  timer: () => {
-    if (timerEnd) {
-      timerRemaining = Math.max(0, Math.ceil((timerEnd - Date.now()) / 1000));
-      timerEnd = null;
-    } else timerEnd = Date.now() + (timerRemaining || 300) * 1000;
-    renderTimer();
-  },
-  timerClose: () => {
-    $("#timerIsland").hidden = true;
-    timerEnd = null;
+  timer: () => op({ t: "timer.toggle" }),
+  timerClose: () => op({ t: "timer.hide" }),
+  invite: () => copyLink(),
+  newRoom: () => {
+    const url = new URL(location.href);
+    url.searchParams.delete("r");
+    location.href = url.toString();
   },
   reaction: () =>
     modal(
@@ -1088,14 +1222,7 @@ const actions = {
       $("#modal").close();
     };
   },
-  room: () => {
-    modal(
-      "kinō",
-      `<label class="field-label" for="participantCount">Участников в демо-комнате</label><select id="participantCount">${players.map((_, i) => `<option value="${i + 1}" ${cinema.count === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select><p class="modal-text">Стикеры, кубики и ваш аватар сохраняются на этом устройстве.</p><div class="modal-actions"><button class="secondary" data-action="help">Управление</button><button class="primary" data-action="export">Скачать итоги</button></div><p class="modal-text">Локальный прототип · совместные звонки пока не подключены.</p>`,
-    );
-    $("#participantCount").onchange = (event) =>
-      setParticipantCount(+event.target.value);
-  },
+  room: () => roomModal(),
 };
 function contextAction(action) {
   if (action === "close") {
@@ -1105,8 +1232,7 @@ function contextAction(action) {
   if (!selected) return;
   const { kind, id } = selected;
   if (action === "kick") {
-    const c =
-      kind === "ball" ? playground.ball : cubes.find((c) => c.id === id);
+    const c = findObject(world, id);
     pending = { type: "kick", target: c, started: worldTime };
     closeContext();
   }
@@ -1125,7 +1251,8 @@ function contextAction(action) {
     toast("Подхожу и забираюсь", 1800);
   }
   if (action === "resetBall") {
-    playground.resetBall();
+    if (!net.connected) playground.resetBall();
+    op({ t: "ball.reset" });
     closeContext();
   }
   if (action === "move") {
@@ -1134,49 +1261,33 @@ function contextAction(action) {
     closeContext();
   }
   if (action === "remove" && kind === "cube") {
-    const root = cubeMeshes.get(id);
-    scene.remove(root);
-    pickables = pickables.filter((o) => o !== root);
-    cubeMeshes.delete(id);
-    cubes = cubes.filter((c) => c.id !== id);
-    save();
+    op({ t: "cube.del", id });
     closeContext();
   }
   if (action === "edit") noteModal(id);
   if (action === "vote") {
     const n = notes.find((n) => n.id === id);
-    n.voted = !n.voted;
-    refreshNotes();
-    toast(n.voted ? "Голос учтён" : "Голос снят", 1800);
-  }
-  if (action === "control") {
-    active = players.find((p) => p.profile.id === id);
-    pending = null;
-    closeContext();
-    status();
-    toast(`Вы управляете: ${active.profile.name}`, 2000);
+    toast(votedByMe(n) ? "Голос снят" : "Голос учтён", 1800);
+    op({ t: "note.vote", id });
   }
   if (action === "wave") {
-    react(
-      "👋",
-      players.find((p) => p.profile.id === id),
-    );
+    react("salute");
     closeContext();
   }
-  if (action === "customize")
-    avatarModal(players.find((p) => p.profile.id === id));
+  if (action === "customize") avatarModal(active);
   if (action === "pin") {
-    if (displayStream) return;
+    if (cinema.media?.share) return;
     pinned = id;
     screenUpdate();
     closeContext();
   }
   if (action === "unpin") {
     pinned = null;
-    stopShare();
+    if (displayStream) stopShare();
     screenUpdate();
     closeContext();
   }
+  if (action === "copy") copyLink();
 }
 document.addEventListener("click", (e) => {
   const b = e.target.closest("button");
@@ -1188,12 +1299,7 @@ document.addEventListener("click", (e) => {
   }
   if (b.dataset.context) contextAction(b.dataset.context);
   if (b.dataset.edit) noteModal(b.dataset.edit);
-  if (b.dataset.vote) {
-    const n = notes.find((n) => n.id === b.dataset.vote);
-    n.voted = !n.voted;
-    refreshNotes();
-    board();
-  }
+  if (b.dataset.vote) op({ t: "note.vote", id: b.dataset.vote });
   if (b.dataset.add) noteModal(null, null, b.dataset.add);
   if (b.dataset.emoji) {
     react(b.dataset.emoji);
@@ -1230,11 +1336,8 @@ document.addEventListener("drop", (e) => {
   if (!col) return;
   e.preventDefault();
   const n = notes.find((n) => n.id === e.dataTransfer.getData("text/plain"));
-  if (n) {
-    n.type = col.dataset.column;
-    refreshNotes();
-    board();
-  }
+  if (n && n.type !== col.dataset.column)
+    op({ t: "note.type", id: n.id, type: col.dataset.column });
 });
 canvas.addEventListener("pointerdown", (e) => {
   canvas.focus();
@@ -1281,23 +1384,7 @@ canvas.addEventListener("pointerdown", (e) => {
         toast("На площадке уже 24 кубика");
         return;
       }
-      const c = {
-        id: uid(),
-        x: pos.x,
-        z: pos.z,
-        y: 0.36,
-        size: 0.65,
-        vx: 0,
-        vy: 0,
-        vz: 0,
-        spin: 0,
-        rotation: 0,
-        color: ["#a696ce", "#ccad87", "#9bbbbb", "#c99ead"][cubes.length % 4],
-      };
-      if (inside(c.x, c.z, big)) c.y = big.h + 0.36;
-      cubes.push(c);
-      addCubeMesh(c);
-      save();
+      op({ t: "cube.add", x: pos.x, z: pos.z });
     }
     setTool("snow");
     return;
@@ -1363,6 +1450,7 @@ canvas.addEventListener("pointermove", (e) => {
         n.z = z;
         n.y = 0;
         noteMeshes.get(n.id).position.set(x, 0.025, z);
+        throttled("note", () => op({ t: "note.move", id: n.id, x, z }));
       }
       if (["cube", "ball"].includes(drag.kind)) {
         const c =
@@ -1382,45 +1470,21 @@ canvas.addEventListener("pointermove", (e) => {
               .map((b) => b.h),
           ) + 0.9;
         c.vy = 0;
+        c.ox = c.oy = c.oz = 0;
+        if (net.connected)
+          throttled("obj", () => net.send({ t: "obj.drag", id: c.id, x, z }));
       }
       if (drag.kind === "big") {
         x = clamp(x, -10, 10);
         z = clamp(z, -7, 7);
-        const dx = x - big.x,
-          dz = z - big.z;
-        for (const p of players)
-          if (
-            p.grounded &&
-            Math.abs(p.y - big.h) < 0.01 &&
-            inside(p.x, p.z, big)
-          ) {
-            p.x += dx;
-            p.z += dz;
-          }
-        big.x = x;
-        big.z = z;
-        bigGroup.position.set(x, 0, z);
+        moveStructure("big", x, z);
+        throttled("struct", () => op({ t: "struct.move", id: "big", x, z }));
       }
       if (drag.kind === "structure") {
         x = clamp(x, -10.7, 10.7);
         z = clamp(z, -6.2, 7.3);
-        const s = playground.structures.get(drag.id),
-          dx = x - s.x,
-          dz = z - s.z;
-        for (const p of players) {
-          if (
-            p.grounded &&
-            s.localColliders.some(
-              (c) =>
-                Math.abs(p.y - c.h) < 0.02 &&
-                inside(p.x, p.z, { ...c, x: s.x + c.x, z: s.z + c.z }),
-            )
-          ) {
-            p.x += dx;
-            p.z += dz;
-          }
-        }
-        playground.move(drag.id, x, z);
+        moveStructure(drag.id, x, z);
+        throttled("struct", () => op({ t: "struct.move", id: drag.id, x, z }));
         pending = null;
       }
       drag.lastTime = performance.now();
@@ -1451,7 +1515,22 @@ canvas.addEventListener("pointermove", (e) => {
   } else hint.hidden = true;
 });
 function endDrag() {
-  if (drag?.moved) save();
+  if (drag?.moved) {
+    if (drag.kind === "note") {
+      const n = notes.find((n) => n.id === drag.id);
+      if (n) op({ t: "note.move", id: n.id, x: n.x, z: n.z });
+    }
+    if (["cube", "ball"].includes(drag.kind) && net.connected) {
+      const c = findObject(world, drag.id);
+      if (c) net.send({ t: "obj.release", id: c.id, vx: c.vx, vz: c.vz });
+    }
+    if (drag.kind === "big") op({ t: "struct.move", id: "big", x: big.x, z: big.z });
+    if (drag.kind === "structure") {
+      const s = playground.structures.get(drag.id);
+      op({ t: "struct.move", id: s.id, x: s.x, z: s.z });
+    }
+    save();
+  }
   drag = null;
   orbitDrag = null;
   shareDrag = null;
@@ -1473,7 +1552,7 @@ canvas.addEventListener(
   "wheel",
   (e) => {
     e.preventDefault();
-    if (displayStream && owner(rayAt(e)?.object)?.userData.kind === "share") {
+    if (cinema.media?.share && owner(rayAt(e)?.object)?.userData.kind === "share") {
       cinema.zoomShare(Math.exp(-e.deltaY * 0.0015));
       updateShareTools();
     }
@@ -1582,23 +1661,25 @@ function physics(dt) {
     const wasGrounded = p.grounded,
       oldX = p.x,
       oldZ = p.z;
-    stepBody(p, p === active ? move : { x: 0, z: 0 }, obstacles, dt);
-    p.velocityX = (p.x - oldX) / dt;
-    p.velocityZ = (p.z - oldZ) / dt;
-    if (!wasGrounded && p.grounded) p.land = 0.2;
+    if (!p.remote) {
+      stepBody(p, move, obstacles, dt);
+      p.velocityX = (p.x - oldX) / dt;
+      p.velocityZ = (p.z - oldZ) / dt;
+      if (!wasGrounded && p.grounded) p.land = 0.2;
+    }
     if (p.action) {
       const age = worldTime - p.action.started;
       if (!p.action.released && age >= p.action.release) {
         p.action.released = true;
         if (p.action.type === "throw") releaseSnow(p, p.action.payload.to);
-        if (p.action.type === "kick") {
+        if (p.action.type === "kick" && p === active) {
           const c = p.action.payload.cube;
           if (
             dynamicObjects.includes(c) &&
             Math.hypot(c.x - p.x, c.z - p.z) < 1.9 &&
             Math.abs(c.y - p.y) < 1.1
           )
-            kickCube(c, p, 8);
+            kickObject(c, p, 8);
         }
       }
       if (age >= p.action.duration) p.action = null;
@@ -1615,7 +1696,7 @@ function physics(dt) {
         (move.x || move.z)
       ) {
         if (!c.lastKick || worldTime - c.lastKick > 0.4) {
-          kickCube(c, p, 3.8);
+          kickObject(c, p, 3.8);
           c.lastKick = worldTime;
         }
       }
@@ -1629,7 +1710,9 @@ function physics(dt) {
   for (let i = 0; i < dynamicObjects.length; i++)
     for (let j = i + 1; j < dynamicObjects.length; j++)
       collideCubes(dynamicObjects[i], dynamicObjects[j]);
-  if (drag?.kind !== "ball" && playground.checkGoal(previousBall)) {
+  // Online the server decides goals and announces them; offline the browser does.
+  if (!net.connected && drag?.kind !== "ball" && playground.checkGoal(previousBall)) {
+    world.score = playground.score;
     toast(
       `Гол! Забито: ${playground.score} · мяч можно вернуть через меню ворот`,
       3500,
@@ -1654,7 +1737,11 @@ function physics(dt) {
       .find((h) => visibleObject(h.object));
     if (hit || snow.mesh.position.y < 0.08 || snow.age > 3) {
       if (snow.age < 3)
-        burst(hit?.point || snow.mesh.position, hit && owner(hit.object));
+        burst(
+          hit?.point || snow.mesh.position,
+          hit && owner(hit.object),
+          snow.owner,
+        );
       removal.push(snow);
     }
   }
@@ -1682,14 +1769,20 @@ function physics(dt) {
   }
 }
 function visual(dt) {
+  // Remote avatars are sampled once per rendered frame, so their motion is as smooth as the display.
+  for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
-    const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
-      delta = Math.atan2(
-        Math.sin(desired - p.angle),
-        Math.cos(desired - p.angle),
-      );
-    p.angle += delta * (1 - Math.exp(-10 * dt));
+    if (!p.remote) {
+      // You face your cursor; others face where their owners look (sent with their pose).
+      const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
+        delta = Math.atan2(
+          Math.sin(desired - p.angle),
+          Math.cos(desired - p.angle),
+        );
+      p.angle += delta * (1 - Math.exp(-10 * dt));
+      p.angle = Math.atan2(Math.sin(p.angle), Math.cos(p.angle));
+    }
     p.root.rotation.y = p.angle;
     const vx = p.velocityX || 0,
       vz = p.velocityZ || 0,
@@ -1710,19 +1803,32 @@ function visual(dt) {
         emote: p.emote,
         hit: p.hit,
         seed: p.x * 0.13,
-        lookPitch: clamp(
-          1.3 /
-            Math.max(2, Math.hypot(pointerWorld.x - p.x, pointerWorld.z - p.z)),
-          0,
-          0.18,
-        ),
+        lookPitch: p.remote
+          ? 0.06
+          : clamp(
+              1.3 /
+                Math.max(
+                  2,
+                  Math.hypot(pointerWorld.x - p.x, pointerWorld.z - p.z),
+                ),
+              0,
+              0.18,
+            ),
       },
       dt,
     );
   }
+  // Server corrections are blended in: the remaining error decays over ~100 ms.
+  const decay = Math.exp(-12 * dt);
+  for (const c of [...cubes, playground.ball]) {
+    c.ox = (c.ox || 0) * decay;
+    c.oy = (c.oy || 0) * decay;
+    c.oz = (c.oz || 0) * decay;
+  }
   for (const c of cubes) {
     const m = cubeMeshes.get(c.id);
-    m.position.set(c.x, c.y, c.z);
+    if (!m) continue;
+    m.position.set(c.x + c.ox, c.y + c.oy, c.z + c.oz);
     m.rotation.y = c.rotation;
     m.rotation.z =
       Math.abs(c.vx) + Math.abs(c.vz) > 0.3 ? Math.sin(c.rotation) * 0.11 : 0;
@@ -1762,7 +1868,7 @@ function drawRoom(dt) {
         0.12,
       );
       renderer.setRenderTarget(portrait.target);
-      renderer.render(portrait.scene, portrait.camera);
+      renderPortrait(portrait);
     }
     renderer.setRenderTarget(null);
   }
@@ -1770,6 +1876,413 @@ function drawRoom(dt) {
   renderer.setViewport(0, 0, innerWidth, innerHeight);
   renderer.render(scene, camera);
   avatarEditor?.update(worldTime, dt);
+}
+// ——— Multiplayer ———————————————————————————————————————————————————————————
+// The server is authoritative for the shared state and the physics of cubes and the ball.
+// Your own avatar moves instantly on your screen; others are interpolated from their poses.
+function clockNow() {
+  return net?.connected ? net.serverNow() : Date.now();
+}
+// Sends a state operation. Without a connection it is applied locally with the same rules.
+function op(msg) {
+  if (net?.connected) {
+    net.send(msg);
+    return;
+  }
+  if (msg.t.startsWith("obj.")) return;
+  const result = applyOp(world, msg, {
+    uid: myVoter,
+    peer: "self",
+    name: active.profile.name || "Вы",
+    now: clockNow(),
+    newId: uid,
+  });
+  if (!result) return;
+  for (const { msg: out, others } of result.out) if (!others) onServer(out);
+  syncAliases();
+  save();
+}
+// Kicks, pushes and snowball hits: predicted locally at once, confirmed by the server.
+function kickObject(c, from, power) {
+  kickCube(c, from, power);
+  if (c === playground.ball) c.lastTouch = "self";
+  net?.send({ t: "obj.kick", id: c.id, x: r3(from.x), z: r3(from.z), a: r3(from.angle || 0), power });
+}
+const throttleClock = {};
+function throttled(key, fn, interval = 50) {
+  const now = performance.now();
+  if (now - (throttleClock[key] || 0) < interval) return;
+  throttleClock[key] = now;
+  fn();
+}
+// Moves a structure (or the big cube) and carries your avatar if it stands on top.
+function moveStructure(id, x, z) {
+  const carry = (colliders, dx, dz) => {
+    if (
+      active.grounded &&
+      colliders.some((c) => Math.abs(active.y - c.h) < 0.02 && inside(active.x, active.z, c))
+    ) {
+      active.x += dx;
+      active.z += dz;
+    }
+  };
+  if (id === "big") {
+    carry([big], x - big.x, z - big.z);
+    big.x = x;
+    big.z = z;
+    bigGroup.position.set(x, 0, z);
+    return;
+  }
+  const s = playground.structures.get(id);
+  if (!s) return;
+  carry(
+    s.localColliders.map((c) => ({ ...c, x: s.x + c.x, z: s.z + c.z })),
+    x - s.x,
+    z - s.z,
+  );
+  playground.move(id, x, z);
+  world.structures[id] = { x, z };
+}
+function updateRemote(p, dt) {
+  const renderAt = clockNow() - p.buffer.delay();
+  while (p.events.length && p.events[0].s <= renderAt) remoteEvent(p, p.events.shift());
+  const s = p.buffer.sample(renderAt);
+  if (!s) return;
+  if (!(dt > 0)) return;
+  const vx = (s.x - p.x) / dt,
+    vz = (s.z - p.z) / dt;
+  p.velocityX = (p.velocityX || 0) + (vx - (p.velocityX || 0)) * 0.25;
+  p.velocityZ = (p.velocityZ || 0) + (vz - (p.velocityZ || 0)) * 0.25;
+  const wasGrounded = p.grounded;
+  p.x = s.x;
+  p.y = s.y;
+  p.z = s.z;
+  p.vy = s.vy;
+  p.grounded = !!s.g;
+  p.angle = s.a;
+  if (!wasGrounded && p.grounded) p.land = 0.2;
+}
+function remoteEvent(p, ev) {
+  if (ev.k === "throw" && Array.isArray(ev.to))
+    startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to) });
+  if (ev.k === "kick")
+    startAction(p, "kick", worldTime, { cube: findObject(world, ev.target) || null });
+  if (ev.k === "emote") emotionEffects.start(p, ev.e, worldTime);
+}
+let lastPoseSent = -Infinity,
+  lastPose = null,
+  movedAt = -Infinity;
+function currentPose() {
+  return {
+    x: r3(active.x),
+    y: r3(active.y),
+    z: r3(active.z),
+    a: Math.round(active.angle * 100) / 100,
+    vy: Math.round(active.vy * 100) / 100,
+    g: active.grounded ? 1 : 0,
+  };
+}
+// Up to 30 poses a second while moving (plus a few after stopping so others land exactly),
+// one per second while idle.
+function sendPose(now) {
+  if (!net?.connected) return;
+  const pose = currentPose();
+  const changed =
+    !lastPose ||
+    lastPose.x !== pose.x ||
+    lastPose.y !== pose.y ||
+    lastPose.z !== pose.z ||
+    lastPose.g !== pose.g ||
+    Math.abs(lastPose.a - pose.a) > 0.02;
+  if (changed) movedAt = now;
+  const since = now - lastPoseSent;
+  const due = now - movedAt < 200 ? since >= POSE_INTERVAL : since >= HEARTBEAT;
+  if (!due) return;
+  net.send({ t: "pose", ...pose });
+  lastPoseSent = now;
+  lastPose = pose;
+}
+function ensureCubeMesh(c) {
+  if (!cubeMeshes.has(c.id)) addCubeMesh(c);
+}
+function removeCubeMesh(id) {
+  const root = cubeMeshes.get(id);
+  if (!root) return;
+  scene.remove(root);
+  pickables = pickables.filter((o) => o !== root);
+  cubeMeshes.delete(id);
+}
+function upsertNote(note) {
+  let n = world.notes.find((x) => x.id === note.id);
+  if (n) Object.assign(n, note);
+  else world.notes.push((n = { ...note }));
+  syncAliases();
+  if (drag?.id === n.id) n.x = noteMeshes.get(n.id)?.position.x ?? n.x;
+  refreshNote(n);
+  if (boardOpen()) board();
+}
+// Server physics states arrive a little late: replay them forward by the measured latency,
+// then hide the correction by letting the visual offset decay.
+function applyObjects(m) {
+  const lag = clamp((clockNow() - m.s) / 1000, 0, 0.25);
+  const obs = obstacles(big, world.structures);
+  for (const packed of m.o) {
+    const o = findObject(world, packed[0]);
+    if (!o || (drag?.moved && drag.id === o.id)) continue;
+    const s = { ...o, ...unpackObject(packed) };
+    for (let t = 0; t + 1e-9 < lag; t += 1 / 120) stepCube(s, obs, 1 / 120);
+    const ex = o.x - s.x,
+      ey = o.y - s.y,
+      ez = o.z - s.z;
+    if (Math.hypot(ex, ey, ez) < 1.5) {
+      o.ox = clamp((o.ox || 0) + ex, -1, 1);
+      o.oy = clamp((o.oy || 0) + ey, -1, 1);
+      o.oz = clamp((o.oz || 0) + ez, -1, 1);
+    } else o.ox = o.oy = o.oz = 0;
+    Object.assign(o, {
+      x: s.x,
+      y: s.y,
+      z: s.z,
+      vx: s.vx,
+      vy: s.vy,
+      vz: s.vz,
+      spin: s.spin,
+      rotation: s.rotation,
+    });
+  }
+}
+let placedOnce = false,
+  welcomed = false;
+function onWelcome(m) {
+  myVoter = m.voter || clientUid;
+  for (const p of players.slice(1)) removeRemote(p.profile.id, true);
+  for (const peer of m.peers) addRemote(peer.id, peer.profile, peer.pose, true);
+  const fresh = createState(m.state, uid);
+  world.notes = fresh.notes;
+  for (const id of [...cubeMeshes.keys()]) removeCubeMesh(id);
+  world.cubes = fresh.cubes;
+  world.timer = fresh.timer;
+  world.score = playground.score = fresh.score;
+  Object.assign(big, fresh.big);
+  bigGroup.position.set(big.x, 0, big.z);
+  for (const [id, pos] of Object.entries(fresh.structures)) moveStructure(id, pos.x, pos.z);
+  syncAliases();
+  for (const packed of m.objs || []) {
+    const o = findObject(world, packed[0]);
+    if (o) Object.assign(o, unpackObject(packed), { ox: 0, oy: 0, oz: 0 });
+  }
+  cubes.forEach(addCubeMesh);
+  refreshNotes();
+  if (!placedOnce && m.you?.pose) {
+    placedOnce = true;
+    Object.assign(active, { x: m.you.pose.x, z: m.you.pose.z, y: 0, vy: 0, grounded: true });
+  }
+  lastPose = null;
+  refreshParticipants();
+  renderTimer();
+  if (!welcomed) {
+    welcomed = true;
+    toast(
+      remotes.size
+        ? `Вы в комнате. Здесь уже: ${[...remotes.values()].map((p) => p.profile.name).join(", ")}`
+        : "Вы в комнате одни. Пригласите коллег — кнопка «Пригласить» в меню «k»",
+      5000,
+    );
+  }
+  if (m.rtc) mediaClient.connect(m.rtc.url, m.rtc.token, m.id);
+}
+function onServer(m, at) {
+  switch (m.t) {
+    case "welcome":
+      onWelcome(m);
+      break;
+    case "join":
+      addRemote(m.id, m.profile, m.pose);
+      break;
+    case "leave":
+      removeRemote(m.id);
+      break;
+    case "pose":
+      remotes.get(m.id)?.buffer.push(m, m.s, clockNow());
+      break;
+    case "profile":
+      updateRemoteProfile(m.id, m.profile);
+      break;
+    case "act":
+      remotes.get(m.id)?.events.push(m);
+      break;
+    case "note":
+      upsertNote(m.note);
+      break;
+    case "note.move": {
+      const n = world.notes.find((n) => n.id === m.id);
+      if (!n || drag?.id === n.id) break;
+      n.x = m.x;
+      n.z = m.z;
+      noteMeshes.get(n.id)?.position.set(n.x, 0.025, n.z);
+      break;
+    }
+    case "note.del":
+      world.notes = world.notes.filter((n) => n.id !== m.id);
+      removeNoteMesh(m.id);
+      if (selected?.id === m.id) closeContext();
+      if (boardOpen()) board();
+      break;
+    case "cube":
+      if (!world.cubes.some((c) => c.id === m.cube.id)) world.cubes.push({ ...m.cube });
+      syncAliases();
+      ensureCubeMesh(findObject(world, m.cube.id));
+      break;
+    case "cube.del":
+      world.cubes = world.cubes.filter((c) => c.id !== m.id);
+      removeCubeMesh(m.id);
+      if (selected?.id === m.id) closeContext();
+      break;
+    case "objs":
+      applyObjects(m);
+      break;
+    case "struct":
+      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z);
+      break;
+    case "goal": {
+      world.score = playground.score = m.score;
+      const scorer = m.by === net.id ? active : remotes.get(m.by);
+      toast(
+        `Гол${scorer ? ` — ${scorer.profile.name}` : ""}! Забито: ${m.score} · мяч можно вернуть через меню ворот`,
+        3500,
+      );
+      emotionEffects.start(scorer || active, "firework", worldTime);
+      break;
+    }
+    case "timer":
+      world.timer = m.timer;
+      renderTimer();
+      break;
+    case "error":
+      toast(m.message, 6000);
+      break;
+  }
+  syncAliases();
+}
+// ——— Room UI: status chip, invite link, people ———
+function peopleNames() {
+  return players.map((p) => (p === active ? `${p.profile.name || "Вы"} (вы)` : p.profile.name));
+}
+function renderPresence() {
+  const chip = $("#netStatus");
+  if (!chip) return;
+  const s = net?.status || "offline";
+  const text = {
+    connecting: "Подключаемся…",
+    reconnecting: "Нет связи — переподключаемся…",
+    offline: "Офлайн · всё сохраняется в этом браузере",
+    full: "Комната заполнена — ждём место",
+    error: "Не удалось войти в комнату",
+  }[s];
+  const n = players.length;
+  chip.dataset.state = s;
+  chip.querySelector(".net-text").textContent =
+    text ||
+    `${n} ${n % 10 === 1 && n % 100 !== 11 ? "участник" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? "участника" : "участников"}` +
+      (net.rtt ? ` · ${Math.round(net.rtt)} мс` : "");
+  chip.title = peopleNames().join(", ");
+}
+async function copyLink() {
+  const link = inviteLink();
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Ссылка на комнату скопирована — отправьте её коллегам", 3000);
+  } catch {
+    roomModal();
+    $("#roomLink")?.select();
+  }
+}
+function roomModal() {
+  const online = net?.connected;
+  modal(
+    "Комната",
+    `<label class="field-label" for="roomLink">Ссылка-приглашение</label><div class="link-row"><input id="roomLink" readonly value="${esc(inviteLink())}"><button class="primary" data-context="copy">Скопировать</button></div><p class="modal-text">Все, кто откроет ссылку, попадут в эту комнату: увидят друг друга, стикеры и таймер, услышат голос.</p><label class="field-label">В комнате · ${players.length}</label><ul class="people">${players
+      .map(
+        (p) =>
+          `<li><span class="dot" style="background:${esc(p.profile.color || "#aaa")}"></span>${esc(p.profile.name || "Вы")}${p === active ? " <em>вы</em>" : ""}${p.speaking ? " 🔊" : ""}</li>`,
+      )
+      .join("")}</ul><div class="modal-actions"><button class="secondary" data-action="help">Управление</button><button class="secondary" data-action="newRoom">Новая комната</button><button class="primary" data-action="export">Скачать итоги</button></div><p class="modal-text">${online ? `Сервер api.sohimazdai.ru · задержка ${net.rtt ? Math.round(net.rtt) + " мс" : "измеряется"} · медиа ${mediaClient.ready ? "подключены" : "не подключены"}` : "Нет связи с сервером: изменения сохраняются только в этом браузере."}</p>`,
+  );
+  $("#roomLink").onfocus = (e) => e.target.select();
+}
+function askName(then) {
+  modal(
+    "Как вас зовут?",
+    `<form id="nameForm"><label class="field-label" for="nameInput">Имя для коллег</label><input id="nameInput" maxlength="32" required placeholder="Например, Аня" value="${esc(me.name || "")}"><p class="modal-text">Имя видно над аватаром и на экране. Внешность можно настроить позже — кнопка «Мой аватар».</p><div class="modal-actions"><button class="primary">Войти в комнату</button></div></form>`,
+  );
+  let done = false;
+  const go = () => {
+    if (done) return;
+    done = true;
+    then();
+  };
+  $("#nameForm").onsubmit = (e) => {
+    e.preventDefault();
+    const name = $("#nameInput").value.trim().slice(0, 32);
+    if (!name) return;
+    const profile = normalizeProfile({ ...active.profile, name });
+    rebuildAvatar(active, profile);
+    me = profile;
+    save();
+    go();
+    $("#modal").close();
+  };
+  // Closing the dialog without a name still enters the room, as a guest.
+  $("#modal").addEventListener("close", go, { once: true });
+  setTimeout(() => $("#nameInput")?.focus(), 60);
+}
+function startNetwork() {
+  mediaClient = new Media({
+    onVideo,
+    onSpeakers: (ids) => {
+      for (const p of players) {
+        const speaking = ids.has(p === active ? "self" : p.profile.id);
+        if (speaking !== !!p.speaking) {
+          p.speaking = speaking;
+          drawLabel(p);
+        }
+      }
+    },
+    onLocal: (state) => {
+      localMedia = state;
+      mediaButtons();
+    },
+    onStatus: () => mediaButtons(),
+    toast,
+  });
+  net = new Net({
+    url: API_URL,
+    room: roomId,
+    uid: clientUid,
+    profile: publicProfile,
+    WebSocketImpl: !OFFLINE && typeof WebSocket === "function" ? WebSocket : null,
+    onMessage: onServer,
+    clock: () => performance.now(),
+    timers: { setTimeout, clearTimeout, setInterval, clearInterval },
+    onStatus: (s, detail) => {
+      renderPresence();
+      if (s === "error" && detail) toast(detail, 6000);
+      if (s === "full") toast(detail || "Комната заполнена", 6000);
+    },
+  });
+  net.pose = currentPose;
+  // ?debug exposes internals for end-to-end checks and troubleshooting in the console.
+  if (/[?&]debug\b/.test(location.search))
+    window.kino = { players, world, remotes, net, mediaClient, op, notes: () => notes, active: () => active };
+  setInterval(renderPresence, 2000);
+  // Browsers only play sound after a gesture: the first click in the room unlocks it.
+  window.addEventListener("pointerdown", () => mediaClient.startAudio(), true);
+  if (!net.WebSocketImpl) {
+    renderPresence();
+    return;
+  }
+  if (!active.profile.name || active.profile.name === "Вы") askName(() => net.start());
+  else net.start();
 }
 function frame(now) {
   const dt = Math.min((now - clock) / 1000, 0.06);
@@ -1782,6 +2295,7 @@ function frame(now) {
     steps++;
   }
   visual(dt);
+  sendPose(now);
   drawRoom(dt);
   requestAnimationFrame(frame);
 }
@@ -1794,3 +2308,4 @@ $("#loading").classList.add("hidden");
 setTimeout(() => $("#loading").remove(), 600);
 toast("WASD / стрелки — движение · Space — прыжок · клик — снежок", 6500);
 status();
+startNetwork();

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Выкладка фронта kinō на https://sohimazdai.ru/cine/. Вызывается через sudo из deploy/deploy.sh.
+#   cine-deploy <rev>   — архив коммита (tar.gz с папкой dist/) на stdin
+#   cine-deploy --status | --rollback
+set -euo pipefail
+ROOT=/var/www/cine-releases; LINK=/var/www/cine
+case "${1:-}" in
+  --status) echo "Фронт: $(readlink $LINK || echo нет)"; ls -1t $ROOT 2>/dev/null | head -5; exit;;
+  --rollback)
+    cur=$(readlink $LINK || true)
+    prev=$(ls -1dt $ROOT/*/ | sed 's:/$::' | grep -vx "$cur" | head -1)
+    [ -n "$prev" ] || { echo "Некуда откатывать"; exit 1; }
+    ln -sfn "$prev" $LINK.new && mv -T $LINK.new $LINK; echo "Фронт откатан на $prev"; exit;;
+esac
+REV="${1:?нужен номер коммита}"
+[[ "$REV" =~ ^[0-9a-f]{4,40}$ ]] || { echo "Плохой коммит: $REV"; exit 1; }
+DIR=$ROOT/$(date +%Y%m%d-%H%M%S)-$REV; TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+tar -xzf - -C "$TMP"
+[ -f "$TMP/dist/index.html" ] || { echo "В архиве нет dist/index.html"; exit 1; }
+mkdir -p $ROOT && mv "$TMP/dist" "$DIR"
+echo "$REV" > "$DIR/RELEASE"
+chown -R root:root "$DIR"; chmod -R a+rX "$DIR"
+ln -sfn "$DIR" $LINK.new && mv -T $LINK.new $LINK
+ls -1dt $ROOT/*/ | tail -n +6 | xargs -r rm -rf
+echo "OK: https://sohimazdai.ru/cine/ ← $REV"

@@ -2233,7 +2233,7 @@ function startNetwork() {
   });
   net.pose = currentPose;
   // ?debug exposes internals for end-to-end checks and troubleshooting in the console.
-  if (new URLSearchParams(location.search).has("debug"))
+  if (/[?&]debug\b/.test(location.search))
     window.kino = { players, world, remotes, net, mediaClient, op, notes: () => notes, active: () => active };
   setInterval(renderPresence, 2000);
   // Browsers only play sound after a gesture: the first click in the room unlocks it.

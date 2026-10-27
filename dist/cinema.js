@@ -64,19 +64,7 @@ export class CinemaScreen {
       new T.MeshBasicMaterial({ color: "#171520", side: T.DoubleSide }),
     );
     this.group.add(this.panel);
-    this.tiles = players.map((player) => {
-      const tile = new T.Mesh(
-        new T.BufferGeometry(),
-        new T.MeshBasicMaterial({
-          map: portraits.get(player.profile.id).target.texture,
-          toneMapped: false,
-          side: T.DoubleSide,
-        }),
-      );
-      tile.userData = { kind: "tile", id: player.profile.id };
-      this.group.add(tile);
-      return tile;
-    });
+    this.tiles = players.map((player) => this.makeTile(player));
     this.featured = new T.Mesh(
       new T.BufferGeometry(),
       new T.MeshBasicMaterial({ toneMapped: false, side: T.DoubleSide }),
@@ -87,6 +75,40 @@ export class CinemaScreen {
     this.shareZoom = 1;
     this.sharePan = new T.Vector2(0.5, 0.5);
     this.layout();
+  }
+  makeTile(player) {
+    const tile = new T.Mesh(
+      new T.BufferGeometry(),
+      new T.MeshBasicMaterial({
+        map: this.portraits.get(player.profile.id).target.texture,
+        toneMapped: false,
+        side: T.DoubleSide,
+      }),
+    );
+    tile.userData = { kind: "tile", id: player.profile.id };
+    this.group.add(tile);
+    return tile;
+  }
+  // Participants come and go: keep tiles of those who stay, add and dispose the rest.
+  setPlayers(players) {
+    const ids = new Set(players.map((p) => p.profile.id));
+    for (const tile of this.tiles) {
+      if (ids.has(tile.userData.id)) continue;
+      this.group.remove(tile);
+      tile.geometry.dispose();
+      tile.material.dispose();
+      tile.userData.cropped?.dispose();
+    }
+    const kept = new Map(this.tiles.map((t) => [t.userData.id, t]));
+    this.players = players;
+    this.tiles = players.map((p) => {
+      const tile = kept.get(p.profile.id);
+      if (tile && ids.has(tile.userData.id)) return tile;
+      return this.makeTile(p);
+    });
+    this.count = players.length;
+    this.layout();
+    if (this.media) this.setMedia(this.media, true);
   }
   replaceGeometry(mesh, geometry) {
     mesh.geometry.dispose();
@@ -156,16 +178,17 @@ export class CinemaScreen {
     this.count = Math.max(1, Math.min(this.players.length, count));
     this.layout();
   }
-  setMedia({ cameras = new Map(), pinned = null, share = null } = {}) {
+  setMedia({ cameras = new Map(), pinned = null, share = null } = {}, force = false) {
     const modeChanged =
-      !!this.media?.share !== !!share || this.media?.pinned !== pinned;
+      force || !!this.media?.share !== !!share || this.media?.pinned !== pinned;
     this.media = { cameras, pinned, share };
     if (modeChanged) this.layout();
     this.tiles.forEach((tile, i) => {
       tile.visible = i < this.count && (!pinned || !!share);
       const original =
         cameras.get(tile.userData.id) ||
-        this.portraits.get(tile.userData.id).target.texture;
+        this.portraits.get(tile.userData.id)?.target.texture;
+      if (!original) return;
       if (tile.userData.source !== original) {
         tile.userData.cropped?.dispose();
         tile.userData.source = original;

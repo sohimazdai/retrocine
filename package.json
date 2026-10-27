@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check dist/app.js && node --check dist/avatars.js && node --test tests/*.test.mjs"
+    "check": "node --check dist/app.js && node --check dist/avatars.js && node --test tests/*.test.mjs && npm --prefix server test"
   },
   "dependencies": {
     "three": "0.180.0"

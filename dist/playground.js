@@ -249,7 +249,7 @@ export class Playground {
   }
   update(dt) {
     const b = this.ball;
-    this.ballMesh.position.set(b.x, b.y, b.z);
+    this.ballMesh.position.set(b.x + (b.ox || 0), b.y + (b.oy || 0), b.z + (b.oz || 0));
     const speed = Math.hypot(b.vx, b.vz);
     if (speed > 0.001)
       this.ballMesh.rotateOnWorldAxis(

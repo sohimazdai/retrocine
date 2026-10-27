@@ -7,7 +7,7 @@
       content="width=device-width,initial-scale=1,maximum-scale=1"
     />
     <meta name="theme-color" content="#1c1b27" />
-    <title>kinō — 3D-комната команды</title>
+    <title>kinō — 3D-комната для ретро</title>
     <link rel="stylesheet" href="style.css" />
     <script type="importmap">
       { "imports": { "three": "./vendor/three.module.min.js" } }
@@ -24,6 +24,9 @@
         <span class="loading-mark">k</span><span>Открываем пространство…</span>
       </div>
     </main>
+    <button id="netStatus" class="net-status" data-action="room" data-state="connecting">
+      <i class="net-dot"></i><span class="net-text">Подключаемся…</span>
+    </button>
     <div id="objectHint" class="object-hint" hidden></div>
     <div id="contextBar" class="context-island" hidden></div>
     <div
@@ -49,8 +52,11 @@
       ><button data-action="timerClose" title="Скрыть">×</button>
     </div>
     <nav class="island" aria-label="Инструменты комнаты">
-      <button class="logo-button" data-action="room" title="Комната и итоги">
+      <button class="logo-button" data-action="room" title="Комната, участники, итоги">
         k<span class="tip">Комната</span>
+      </button>
+      <button class="tool" data-action="invite" title="Скопировать ссылку-приглашение">
+        <span data-icon="invite"></span><span class="tip">Пригласить</span>
       </button>
       <div class="divider"></div>
       <button class="tool active" data-tool="snow" title="Снежок — левый клик">

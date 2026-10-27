@@ -318,8 +318,8 @@ function nameLabel(p) {
   const sprite = new T.Sprite(
     new T.SpriteMaterial({ map: texture, depthTest: false, transparent: true }),
   );
-  sprite.scale.set(2.5, 0.5, 1);
-  sprite.position.set(0, 2.62, 0);
+  sprite.scale.set(4.2, 0.84, 1);
+  sprite.position.set(0, 2.85, 0);
   sprite.renderOrder = 10;
   sprite.raycast = () => {};
   p.root.add(sprite);
@@ -442,16 +442,55 @@ function portraitTexture(p) {
   const pc = new T.PerspectiveCamera(31, 1, 0.1, 10);
   framePortrait(pc, a);
   const rt = new T.WebGLRenderTarget(384, 384, { depthBuffer: true });
+  const entry = { target: rt, scene: ps, camera: pc, avatar: a, caption: portraitCaption(p) };
   const current = renderer.getRenderTarget();
   renderer.setScissorTest(false);
   renderer.setRenderTarget(rt);
-  renderer.render(ps, pc);
+  renderPortrait(entry);
   renderer.setRenderTarget(current);
-  const old = portraits.get(p.profile.id);
-  old?.target.dispose();
-  if (old) disposeAvatar(old.avatar);
-  portraits.set(p.profile.id, { target: rt, scene: ps, camera: pc, avatar: a });
+  disposePortrait(portraits.get(p.profile.id));
+  portraits.set(p.profile.id, entry);
   return rt.texture;
+}
+// The participant's name is drawn over the bottom of their square on the wall.
+const captionCamera = new T.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+function portraitCaption(p) {
+  const cv = document.createElement("canvas");
+  cv.width = 384;
+  cv.height = 64;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#16141ea8";
+  c.fillRect(0, 0, 384, 64);
+  c.font = "600 30px system-ui, sans-serif";
+  c.fillStyle = "#ffffff";
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText((p.profile.name || "Вы") + (p.profile.id === "self" ? " · вы" : ""), 192, 34);
+  const texture = new T.CanvasTexture(cv);
+  texture.colorSpace = T.SRGBColorSpace;
+  const mesh = new T.Mesh(
+    new T.PlaneGeometry(2, 64 / 192),
+    new T.MeshBasicMaterial({ map: texture, transparent: true, depthTest: false, toneMapped: false }),
+  );
+  mesh.position.set(0, -1 + 32 / 192, 0.5);
+  const scene = new T.Scene();
+  scene.add(mesh);
+  return { scene, mesh, texture };
+}
+function renderPortrait(entry) {
+  renderer.render(entry.scene, entry.camera);
+  const autoClear = renderer.autoClear;
+  renderer.autoClear = false;
+  renderer.render(entry.caption.scene, captionCamera);
+  renderer.autoClear = autoClear;
+}
+function disposePortrait(entry) {
+  if (!entry) return;
+  entry.target.dispose();
+  disposeAvatar(entry.avatar);
+  entry.caption.texture.dispose();
+  entry.caption.mesh.geometry.dispose();
+  entry.caption.mesh.material.dispose();
 }
 players.forEach(portraitTexture);
 cinema = new CinemaScreen(players, portraits);
@@ -547,12 +586,8 @@ function removeRemote(id, batch = false) {
   pickables = pickables.filter((o) => o !== p.root);
   p.label?.material.map.dispose();
   disposeAvatar(p);
-  const portrait = portraits.get(id);
-  if (portrait) {
-    portrait.target.dispose();
-    disposeAvatar(portrait.avatar);
-    portraits.delete(id);
-  }
+  disposePortrait(portraits.get(id));
+  portraits.delete(id);
   for (const kind of ["camera", "screen"]) {
     liveVideo[kind].get(id)?.texture.dispose();
     liveVideo[kind].delete(id);
@@ -1830,7 +1865,7 @@ function drawRoom(dt) {
         0.12,
       );
       renderer.setRenderTarget(portrait.target);
-      renderer.render(portrait.scene, portrait.camera);
+      renderPortrait(portrait);
     }
     renderer.setRenderTarget(null);
   }

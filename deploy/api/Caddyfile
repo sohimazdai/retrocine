@@ -1,0 +1,20 @@
+api.sohimazdai.ru {
+	# Синхронизация комнат (WebSocket). Сжатие не включаем: оно добавляет задержку.
+	handle /ws {
+		reverse_proxy 127.0.0.1:8090
+	}
+	# LiveKit: сигналинг WebRTC
+	handle /rtc* {
+		reverse_proxy 127.0.0.1:7880
+	}
+	handle /_ssh/__SSH_WS_SECRET__ {
+		reverse_proxy 127.0.0.1:2222
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8090
+	}
+}
+
+http://185.209.162.2 {
+	redir https://api.sohimazdai.ru{uri}
+}

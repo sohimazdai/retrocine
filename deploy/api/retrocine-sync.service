@@ -1,0 +1,23 @@
+[Unit]
+Description=kinō sync server (комнаты, аватары, общее состояние)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=retrocine
+Group=retrocine
+WorkingDirectory=/opt/retrocine/current
+EnvironmentFile=/etc/retrocine/retrocine.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node server/src/index.js
+Restart=always
+RestartSec=1
+KillSignal=SIGTERM
+TimeoutStopSec=10
+LimitNOFILE=65536
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/retrocine
+[Install]
+WantedBy=multi-user.target

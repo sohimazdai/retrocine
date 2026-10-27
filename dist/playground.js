@@ -1,5 +1,13 @@
 import * as T from "three";
 import { box, ball, material } from "./avatars.js";
+import {
+  STRUCTURES,
+  clampStructure,
+  structureColliders,
+  ballDefaults,
+  ballResetPosition,
+  checkGoal,
+} from "./world.js";
 
 function cylinder(parent, radius, height, y, color) {
   const mesh = new T.Mesh(
@@ -29,50 +37,32 @@ export class Playground {
     this.structures = new Map();
     this.pickables = [];
     this.score = 0;
-    const add = (id, label, x, z, kind, colliders, waypoints = []) => {
+    const def = (id) => STRUCTURES.find((s) => s.id === id);
+    const add = (id) => {
+      const d = def(id);
       const root = new T.Group();
-      root.userData = { kind: "structure", id, label };
+      root.userData = { kind: "structure", id, label: d.label };
       const s = {
         id,
-        label,
-        kind,
+        label: d.label,
+        kind: d.kind,
         root,
-        x,
-        z,
-        localColliders: colliders,
-        waypoints,
+        x: d.x,
+        z: d.z,
+        localColliders: d.colliders,
+        waypoints: d.waypoints,
       };
       const pos = saved[id];
-      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) {
-        s.x = T.MathUtils.clamp(pos.x, -10.7, 10.7);
-        s.z = T.MathUtils.clamp(pos.z, -6.2, 7.3);
-      }
+      if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z))
+        Object.assign(s, clampStructure(pos.x, pos.z));
       root.position.set(s.x, 0, s.z);
       scene.add(root);
       this.structures.set(id, s);
       this.pickables.push(root);
       return s;
     };
-    const tiers = Array.from({ length: 4 }, (_, i) => ({
-      x: 0,
-      z: 0,
-      w: 4.4 - i * 1.05,
-      d: 4.4 - i * 1.05,
-      h: (i + 1) * 0.64,
-    }));
-    const pyramid = add(
-      "pyramid",
-      "Пирамида",
-      -6.5,
-      -3.7,
-      "pyramid",
-      tiers,
-      tiers.map((tier, i) => ({
-        x: 0,
-        z: i === 3 ? 0 : tier.d / 2 - 0.32,
-        h: tier.h,
-      })),
-    );
+    const pyramid = add("pyramid"),
+      tiers = pyramid.localColliders;
     tiers.forEach((tier, i) => {
       box(
         pyramid.root,
@@ -97,19 +87,9 @@ export class Playground {
         0.025,
       );
     });
-    for (const [id, x, z, h] of [
-      ["spool-a", -8.3, 3.7, 1.55],
-      ["spool-b", 6.2, 5.8, 1.9],
-    ]) {
-      const spool = add(
-        id,
-        "Кабельная катушка",
-        x,
-        z,
-        "spool",
-        [{ x: 0, z: 0, shape: "cylinder", radius: 1.25, w: 2.5, d: 2.5, h }],
-        [{ x: 0, z: 0, h }],
-      );
+    for (const id of ["spool-a", "spool-b"]) {
+      const spool = add(id),
+        h = def(id).h;
       cylinder(spool.root, 1.25, 0.17, 0.085, "#b18a60");
       cylinder(spool.root, 0.61, h - 0.25, h / 2, "#96714e");
       cylinder(spool.root, 1.25, 0.17, h - 0.085, "#c5a37a");
@@ -155,22 +135,8 @@ export class Playground {
         );
       }
     }
-    const goalColliders = [
-      { x: -2.1, z: 0, w: 0.15, d: 0.15, h: 2.55 },
-      { x: 2.1, z: 0, w: 0.15, d: 0.15, h: 2.55 },
-      { x: 0, z: 0, w: 4.35, d: 0.15, y: 2.4, h: 2.55 },
-      { x: 0, z: -1.45, w: 4.3, d: 0.06, h: 2.55 },
-      { x: -2.1, z: -0.75, w: 0.05, d: 1.4, h: 2.55 },
-      { x: 2.1, z: -0.75, w: 0.05, d: 1.4, h: 2.55 },
-    ];
-    this.goal = add(
-      "goal",
-      "Футбольные ворота",
-      8.1,
-      -4.8,
-      "goal",
-      goalColliders,
-    );
+    this.goal = add("goal");
+    const goalColliders = this.goal.localColliders;
     for (const x of [-2.1, 2.1]) {
       box(this.goal.root, 0.15, 2.55, 0.15, "#e9e5ed", x, 1.275, 0, 0.065);
       box(this.goal.root, 0.11, 0.1, 1.5, "#a399b2", x, 0.05, -0.72, 0.04);
@@ -213,20 +179,8 @@ export class Playground {
         0.005,
       );
 
-    this.ball = {
-      id: "football",
-      kind: "ball",
-      x: 7.5,
-      z: -0.5,
-      y: 0.42,
-      size: 0.84,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      spin: 0,
-      restitution: 0.64,
-      friction: 1.15,
-    };
+    this.ball = ballDefaults();
+    this.flags = { scored: false };
     this.ballMesh = new T.Group();
     this.ballMesh.userData = { kind: "ball", id: "football" };
     ball(this.ballMesh, "#f3eee6", 0, 0, 0, 0.42);
@@ -261,10 +215,13 @@ export class Playground {
     this.pickables.push(this.ballMesh);
     this.update(0);
   }
-  colliders() {
-    return [...this.structures.values()].flatMap((s) =>
-      s.localColliders.map((c) => ({ ...c, x: s.x + c.x, z: s.z + c.z })),
+  positions() {
+    return Object.fromEntries(
+      [...this.structures].map(([id, s]) => [id, { x: s.x, z: s.z }]),
     );
+  }
+  colliders() {
+    return structureColliders(this.positions());
   }
   path(id) {
     const s = this.structures.get(id);
@@ -279,33 +236,16 @@ export class Playground {
     s.root.position.set(x, 0, z);
   }
   resetBall() {
-    Object.assign(this.ball, {
-      x: this.goal.x,
-      z: this.goal.z + 4.3,
-      y: 0.42,
-      vx: 0,
-      vy: 0,
-      vz: 0,
-      spin: 0,
-    });
-    this.scored = false;
+    Object.assign(this.ball, ballResetPosition(this.goal));
+    this.flags.scored = false;
+  }
+  get scored() {
+    return this.flags.scored;
   }
   checkGoal(previous) {
-    const b = this.ball,
-      g = this.goal;
-    const line = g.z - 0.15;
-    if (!this.scored && previous.z >= line && b.z < line) {
-      const t = (previous.z - line) / (previous.z - b.z);
-      const x = previous.x + (b.x - previous.x) * t;
-      const y = previous.y + (b.y - previous.y) * t;
-      if (Math.abs(x - g.x) < 2.025 - b.size / 2 && y + b.size / 2 < 2.4) {
-        this.score++;
-        this.scored = true;
-        return true;
-      }
-    }
-    if (b.z > g.z + 1) this.scored = false;
-    return false;
+    if (!checkGoal(this.ball, previous, this.goal, this.flags)) return false;
+    this.score++;
+    return true;
   }
   update(dt) {
     const b = this.ball;
@@ -318,8 +258,6 @@ export class Playground {
       );
   }
   snapshot() {
-    return Object.fromEntries(
-      [...this.structures].map(([id, s]) => [id, { x: s.x, z: s.z }]),
-    );
+    return this.positions();
   }
 }

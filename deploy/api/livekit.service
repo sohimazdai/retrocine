@@ -1,0 +1,16 @@
+[Unit]
+Description=LiveKit SFU (голос, видео, показ экрана)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=livekit
+Group=livekit
+ExecStart=/usr/local/bin/livekit-server --config /etc/livekit.yaml
+Restart=always
+RestartSec=2
+LimitNOFILE=500000
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+[Install]
+WantedBy=multi-user.target

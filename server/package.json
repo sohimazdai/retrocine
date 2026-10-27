@@ -1,0 +1,17 @@
+{
+  "name": "kino-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Сервер синхронизации комнат kinō: аватары, события, общее состояние, токены LiveKit",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "8.22.0"
+  }
+}

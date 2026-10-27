@@ -17,16 +17,21 @@ DNS — Cloudflare, записи `sohimazdai.ru`, `www` → 45.159.189.71 и `ap
 
 ## Выкатить новую версию
 
+Одна команда из папки проекта:
+
 ```bash
-./deploy/deploy.sh                # origin/main: сервер и фронт
-./deploy/deploy.sh HEAD           # текущий коммит
+./deploy/deploy.sh                # текущий коммит: тесты → сервер → фронт → проверка версий
+./deploy/deploy.sh origin/main    # другой коммит или ветка
 ./deploy/deploy.sh --api | --web  # только сервер / только фронт
+./deploy/deploy.sh --no-check     # без тестов
 ./deploy/deploy.sh --status       # что работает
 ./deploy/deploy.sh --logs 200     # журнал сервера синхронизации
 ./deploy/deploy.sh --rollback     # вернуть предыдущие релизы
 ```
 
-Код уходит архивом коммита (`git archive`), незакоммиченные правки не попадают. Хосты — `CINE_API_HOST` (по умолчанию `vps@185.209.160.44`) и `CINE_WEB_HOST` (`vps@45.159.189.71`). Пользователю `vps` через sudo без пароля разрешены только `retrocine-deploy` и `cine-deploy`.
+Скрипт берёт архив коммита (`git archive`) — незакоммиченные правки не попадают, и предупреждает, если коммит ещё не на GitHub. Тесты (`npm run check`) прогоняются именно на этом коммите во временной папке; если они не прошли, ничего не выкатывается. В конце скрипт сверяет, что `https://api.sohimazdai.ru/health` и `https://sohimazdai.ru/cine/RELEASE` отвечают новой версией.
+
+Хосты — `CINE_API_HOST` (по умолчанию `vps@185.209.160.44`) и `CINE_WEB_HOST` (`vps@45.159.189.71`). Пользователю `vps` через sudo без пароля разрешены только `retrocine-deploy` и `cine-deploy`. SSH-соединение к каждому серверу открывается один раз на всю выкладку; чтобы пароль не спрашивался совсем, один раз выполните `ssh-copy-id vps@185.209.160.44` и `ssh-copy-id vps@45.159.189.71`.
 
 - **Сервер** (`retrocine-deploy`): распаковка в `/opt/retrocine/releases/<время>-<коммит>`, `npm ci --omit=dev`, переключение `/opt/retrocine/current`, перезапуск, проверка `/health` до 15 с, иначе откат. Хранятся 5 релизов. Журнал — `/var/log/retrocine-deploy.log`.
 - **Фронт** (`cine-deploy`): папка `dist/` в `/var/www/cine-releases/<время>-<коммит>`, атомарное переключение симлинка `/var/www/cine`. Planner не затрагивается.

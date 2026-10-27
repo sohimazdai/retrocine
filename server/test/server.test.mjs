@@ -374,3 +374,33 @@ test("grenades explode only when thrown, respect the cooldown and blast objects 
   b.close();
   await app.close();
 });
+
+test("a map switch resets the room for everyone; the river keeps flowing while people are in", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("map-room", { name: "Аня" });
+  await b.join("map-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "river" });
+  const reset = await b.wait((m) => m.t === "reset");
+  assert.equal(reset.state.map, "river");
+  assert.equal(reset.by, a.welcome.id);
+  assert(reset.objs.length >= 10, "stones of the river");
+  // The current moves the stones without anyone touching them.
+  const first = await b.next("objs", 3000);
+  await new Promise((r) => setTimeout(r, 600));
+  const later = await b.next("objs", 3000);
+  assert(first.s < later.s);
+  // A newcomer appears on one of the beaches, not in the water.
+  const c = client(port);
+  const wc = await c.join("map-room", { name: "Вера" });
+  assert(Math.abs(wc.you.pose.x) > 5 && Math.abs(wc.you.pose.x) < 7.2, `spawned at ${wc.you.pose.x}`);
+  assert.equal(wc.state.map, "river");
+  // Unknown maps are refused.
+  a.send({ t: "map.set", id: "nowhere" });
+  a.send({ t: "map.set", id: "saloon" });
+  const back = await c.wait((m) => m.t === "reset" && m.state.map === "saloon");
+  assert.equal(back.state.balls.filter((x) => x.kind === "mug").length, 5);
+  for (const x of [a, b, c]) x.close();
+  await app.close();
+});

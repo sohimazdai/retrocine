@@ -89,9 +89,10 @@ export function resolveHorizontal(body, box) {
 }
 // speedScale > 1 is a sprint (Shift). kx/kz is knockback from hits and explosions: it carries the
 // body on its own and fades, quickly on the ground and slowly in the air.
+export const STEP_UP = 0.35;
 export function stepBody(body, move, boxes, dt, speedScale = 1) {
-  const oldY = body.y,
-    oldX = body.x,
+  let oldY = body.y;
+  const oldX = body.x,
     oldZ = body.z;
   const len = Math.hypot(move.x, move.z) || 1;
   const kx = body.kx || 0,
@@ -112,6 +113,16 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
     body.kz = kz * fade;
     if (Math.hypot(body.kx, body.kz) < 0.05) body.kx = body.kz = 0;
   }
+  // Low ledges (a stair's last step, a flat stone) are stepped onto without jumping.
+  if (body.grounded)
+    for (const b of boxes) {
+      if (sloped(b) || (b.y || 0) > body.y + STEP_UP) continue;
+      const rise = b.h - body.y;
+      if (rise > 0.02 && rise <= STEP_UP && inside(body.x, body.z, b, RADIUS * 0.85)) {
+        body.y = b.h;
+        oldY = b.h;
+      }
+    }
   for (const b of boxes) resolveHorizontal(body, b);
   // Slopes: walk up gentle ones; a side higher than a step blocks like a wall.
   for (const b of boxes) {
@@ -155,17 +166,22 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
     body.y = surface;
     body.vy = 0;
     body.grounded = true;
-    // Trampolines throw you back up, higher if you were falling fast.
+    // Trampolines throw you back up, higher if you were falling fast (up to a limit).
     if (support?.bounce && vyBefore < -2) {
-      body.vy = Math.max(support.bounce, -vyBefore * 0.92) + (body.boost || 0);
+      body.vy = clamp(-vyBefore * 0.92, support.bounce, support.bounce * 1.3);
       body.grounded = false;
       body.bounced = (body.bounced || 0) + 1;
+    } else if (support?.soft && vyBefore < -4) {
+      // Inflatables and hay give a little: a smaller bounce that dies out.
+      body.vy = -vyBefore * support.soft;
+      body.grounded = false;
     }
     // Slides carry you down.
     if (support?.slide) {
-      const d = downhill(support, body.x, body.z);
-      body.kx = (body.kx || 0) + d.x * dt * 16 * Math.min(1.5, d.slope);
-      body.kz = (body.kz || 0) + d.z * dt * 16 * Math.min(1.5, d.slope);
+      const d = downhill(support, body.x, body.z),
+        a = (support.slide === true ? 16 : support.slide) * Math.min(1.5, d.slope) * dt;
+      body.kx = (body.kx || 0) + d.x * a;
+      body.kz = (body.kz || 0) + d.z * a;
     }
   }
   body.support = support;

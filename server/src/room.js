@@ -9,7 +9,9 @@ import {
   packObject,
   STATE_OPS,
   stepPushes,
+  stateMap,
 } from "../../dist/state.js";
+import { spawnPoint, zonesOf } from "../../dist/world.js";
 import { projectile, PROJECTILES } from "../../dist/projectiles.js";
 import { LIMITS, clamp } from "../../dist/physics.js";
 import { livekitToken } from "./livekit.js";
@@ -17,7 +19,7 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "emote", "jump"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -64,9 +66,12 @@ export function sanitizePose(p) {
   if (Number.isFinite(p.c) && p.c > 0) pose.c = Math.round(clamp(p.c, 0, 1) * 10) / 10;
   return pose;
 }
-function spawnPose() {
-  return { x: r3((Math.random() - 0.5) * 8), y: 0, z: r3(2 + Math.random() * 4), a: Math.PI, vy: 0, g: 1 };
+function spawnPose(state) {
+  const p = spawnPoint(stateMap(state), Math.random, state.structures);
+  return { x: r3(p.x), y: 0, z: r3(p.z), a: Math.PI, vy: 0, g: 1 };
 }
+// Maps with running water (river) keep simulating while anyone is in the room.
+const flowing = (state) => zonesOf(stateMap(state)).some((z) => z.flow);
 
 export class Room {
   constructor(id, saved, { livekit = null, store = null, log = () => {} } = {}) {
@@ -115,7 +120,7 @@ export class Room {
       ws,
       ip,
       profile: sanitizeProfile(hello.profile),
-      pose: sanitizePose(hello.pose) || spawnPose(),
+      pose: sanitizePose(hello.pose) || spawnPose(this.state),
       tokens: 240,
       poseTokens: 60,
       thrown: new Map(),
@@ -124,6 +129,7 @@ export class Room {
       dropped: 0,
     };
     this.peers.set(id, peer);
+    if (flowing(this.state)) this.startPhysics();
     const others = [...this.peers.values()].filter((p) => p !== peer);
     const rtc = this.livekit
       ? {
@@ -224,7 +230,7 @@ export class Room {
             }
           }
         }
-        if (msg.k === "kick" && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
+        if ((msg.k === "kick" || msg.k === "shoot") && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
         if (msg.k === "emote") {
           if (typeof msg.e !== "string") return;
           out.e = msg.e.slice(0, 16);
@@ -289,7 +295,7 @@ export class Room {
       this.acc -= PHYS_DT;
       steps++;
     }
-    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0;
+    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state));
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;

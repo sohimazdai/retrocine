@@ -1,2 +1,7 @@
 // Browser-side looks of every map: registers prop builders and scenery for the map scene.
 // Kept apart from the map data so the server never loads Three.js.
+import "./maze.look.js";
+import "./playground.look.js";
+import "./river.look.js";
+import "./paintball.look.js";
+import "./saloon.look.js";

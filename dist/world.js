@@ -19,6 +19,7 @@ export const BALLS = {
   basketball: { size: 0.74, restitution: 0.8, friction: 0.9, label: "Баскетбольный мяч" },
   playball: { size: 0.6, restitution: 0.78, friction: 1, label: "Мяч" },
   stone: { size: 0.5, restitution: 0.15, friction: 5, label: "Камень" },
+  boulder: { size: 0.95, restitution: 0.08, friction: 6, label: "Валун" },
   pebble: { size: 0.3, restitution: 0.2, friction: 4.5, label: "Камешек" },
   barrel: { size: 0.8, restitution: 0.2, friction: 3.2, label: "Бочка" },
   mug: { size: 0.28, restitution: 0.1, friction: 0.5, label: "Кружка" },
@@ -68,10 +69,17 @@ export function mapProps(map) {
 }
 export const propInfo = (map, id) => mapProps(map).find((p) => p.id === id);
 // A lifted prop floats at pos.y: avatars can walk under it or stand on top of it.
-const lifted = (c, y) => (y ? { ...c, y: (c.y || 0) + y, h: c.h + y } : c);
+const lifted = (c, y) => (y ? { ...c, y: (c.y || 0) + y, h: c.h + y, h0: c.h0 != null ? c.h0 + y : c.h0, h1: c.h1 != null ? c.h1 + y : c.h1 } : c);
+// A seesaw plank is a ramp whose ends follow its tilt: +1 — the +x end up, −1 — the −x end up.
+export function seesawCollider(c, tilt = 1) {
+  const mid = (c.h0 + c.h1) / 2,
+    swing = Math.abs(c.h1 - c.h0) / 2,
+    t = clamp(tilt, -1, 1);
+  return { ...c, h0: mid - t * swing, h1: mid + t * swing, h: mid + swing };
+}
 export function propColliders(info, pos) {
   const p = pos || info;
-  return info.local.map((c) => lifted({ ...c, x: p.x + c.x, z: p.z + c.z, prop: info.id }, p.y));
+  return info.local.map((c) => lifted({ ...(c.seesaw ? seesawCollider(c, p.tilt ?? 1) : c), x: p.x + c.x, z: p.z + c.z, prop: info.id }, p.y));
 }
 export function obstacles(map, positions) {
   return [...(map.statics || []), ...mapProps(map).flatMap((p) => propColliders(p, positions?.[p.id]))];
@@ -193,4 +201,19 @@ export function checkHoop(ball, previous, hoop, flags) {
 }
 export const zonesOf = (map) => map.zones || [];
 export const inZone = (zone, x, z) => x >= zone.x0 && x <= zone.x1 && z >= zone.z0 && z <= zone.z1;
+// Water an avatar stands in (river): slows you down and carries you with the flow.
+export const waterAt = (map, x, z) => zonesOf(map).find((zone) => zone.kind === "water" && inZone(zone, x, z)) || null;
+// Where newcomers appear: a random free spot in one of the map's spawn areas.
+export function spawnPoint(map, random = Math.random, positions) {
+  const areas = [map.spawn || { x0: -4, x1: 4, z0: 2, z1: 6 }].flat();
+  const boxes = obstacles(map, positions || defaultPositions(map)).filter((b) => !b.y || b.y < 1.6);
+  for (let i = 0; i < 24; i++) {
+    const a = areas[Math.floor(random() * areas.length)];
+    const x = a.x0 + (a.x1 - a.x0) * random(),
+      z = a.z0 + (a.z1 - a.z0) * random();
+    if (!boxes.some((b) => inside(x, z, b, 0.32))) return { x, z };
+  }
+  const a = areas[0];
+  return { x: (a.x0 + a.x1) / 2, z: (a.z0 + a.z1) / 2 };
+}
 export { mapDef };

@@ -945,3 +945,54 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
   assert.equal(a.run("hitboxes.group.visible"), false);
   assert.equal(a.w.localStorage.getItem("kino-hitboxes-v1"), "false");
 });
+
+test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "cinema"]) {
+    a.run(`op({ t: "map.set", id: "${id}" })`);
+    a.tick(0.3);
+    assert.equal(a.run("mapScene.map.id"), id);
+    assert.equal(a.run("world.map"), id);
+    assert(a.run("mapScene.colliders().length") > 0);
+    assert.equal(a.run("mapScene.colliders().filter((b) => !b.y && b.h > 0.3 && inside(active.x, active.z, b)).length"), 0, `${id}: avatar inside something`);
+    assert.equal(a.run("mapScene.props.size"), a.run("mapProps(mapScene.map).length"));
+    // Every prop has a real mesh and can be picked.
+    assert(a.run("[...mapScene.props.values()].every((s) => { let n = 0; s.root.traverse((o) => o.isMesh && n++); return n > 0 && pickables.includes(s.root); })"));
+  }
+});
+
+test("playground: E next to the basketball shoots it into the ring; the seesaw tips under you", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "playground" })');
+  a.tick(0.2);
+  a.run("Math.random = () => 0.5");
+  a.run("const h = hoopsOf(mapScene.map, world.structures)[0]; const b = world.balls.find((b) => b.kind === 'basketball'); Object.assign(b, { x: h.x, z: h.z + 4.2, y: b.size / 2, vx: 0, vy: 0, vz: 0 }); Object.assign(active, { x: h.x, z: h.z + 5.0, y: 0, vy: 0, grounded: true })");
+  a.run("kickNearest()");
+  a.tick(2.5);
+  assert.equal(a.run("world.scores.hoop"), 2);
+  // Sit on the raised end: it comes down.
+  assert.equal(a.run("mapScene.props.get('seesaw').tilt ?? 1"), 1);
+  a.run("const s = mapScene.props.get('seesaw'); Object.assign(active, { x: s.x + 1.9, z: s.z, y: 1.1, vy: 0, grounded: false })");
+  a.tick(1.2);
+  assert(a.run("mapScene.props.get('seesaw').tilt") < -0.9);
+  assert(a.run("active.y") < 0.4);
+});
+
+test("river: the current carries you and slows you down", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "river" })');
+  a.tick(0.2);
+  a.run("Object.assign(active, { x: -3.9, z: -4, y: 0, vy: 0, grounded: true })");
+  a.tick(1);
+  const z = a.run("active.z");
+  assert(z > -3.3 && z < -2.9, `drifted to ${z}`);
+  a.run("Object.assign(active, { x: -3.9, z: -4 }); keys.add('right')");
+  a.tick(0.5);
+  const wet = a.run("active.x") + 3.9;
+  a.run("keys.clear(); Object.assign(active, { x: -6.6, z: -4 }); keys.add('down')");
+  a.tick(0.5);
+  const dry = a.run("active.z") + 4;
+  a.run("keys.clear()");
+  assert(wet < dry * 0.75, `in water ${wet} vs on the beach ${dry}`);
+});

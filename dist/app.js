@@ -17,6 +17,7 @@ import {
   inside,
   LIMITS,
   SPRINT,
+  GRAVITY,
 } from "./physics.js";
 import { animateRig, startAction } from "./animation.js";
 import { EmotionEffects, EMOTIONS } from "./emotions.js";
@@ -33,11 +34,12 @@ import { HitboxView } from "./hitboxes.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { mapDef, mapProps, clampProp, BALLS } from "./world.js";
+import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, hoopsOf } from "./world.js";
 import {
   PROJECTILES,
   projectile,
   launchVelocity,
+  arcVelocity,
   CHARGE_MAX,
   CHARGE_TIME,
   PROJECTILE_GRAVITY,
@@ -55,6 +57,7 @@ import {
   stateObstacles,
   dynamicObjects,
   freeSpot,
+  THROW_SPEED,
 } from "./state.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
 import { Media } from "./media.js";
@@ -345,7 +348,7 @@ function nameLabel(p) {
   drawLabel(p);
 }
 // players[0] is always you; everyone else is a remote participant driven by the network.
-const players = [makePlayer({ ...me, id: "self" }, { x: -2.8, z: 1.3 })];
+const players = [makePlayer({ ...me, id: "self" }, world.map && world.map !== DEFAULT_MAP ? spawnPoint(mapDef(world.map), Math.random, world.structures) : { x: -2.8, z: 1.3 })];
 nameLabel(players[0]);
 const remotes = new Map();
 players.forEach((p) => {
@@ -736,7 +739,7 @@ function highlight() {
     const b = findObject(world, obj.id);
     label = BALLS[b?.kind]?.label || "Мяч";
     buttons =
-      '<button data-context="kick">Пнуть · E</button><button data-context="move">Переместить</button><button data-context="resetBall">На исходную</button>';
+      `<button data-context="kick">${b?.kind === "basketball" ? "Бросить в кольцо" : "Пнуть"} · E</button><button data-context="move">Переместить</button><button data-context="resetBall">На исходную</button>`;
   }
   if (obj.kind === "structure") {
     const structure = mapScene.props.get(obj.id);
@@ -998,19 +1001,18 @@ function doJump() {
     status();
   }
 }
+// Within reach of your feet or hands: lets you knock a mug off the bar, too.
+const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y - p.y < 1.45 && c.y - p.y > -0.9;
 function kickNearest() {
   const near = dynamicObjects(world)
-    .filter(
-      (c) =>
-        Math.hypot(c.x - active.x, c.z - active.z) < 1.6 &&
-        Math.abs(c.y - active.y) < 1.1,
-    )
+    .filter((c) => reachable(c, active))
     .sort(
       (a, b) =>
         Math.hypot(a.x - active.x, a.z - active.z) -
         Math.hypot(b.x - active.x, b.z - active.z),
     )[0];
-  if (near && startAction(active, "kick", worldTime, { cube: near }))
+  if (near?.kind === "basketball") shoot(near);
+  else if (near && startAction(active, "kick", worldTime, { cube: near }))
     net.send({ t: "act", k: "kick", target: near.id });
   else toast("Подойдите к мячу или маленькому кубику и нажмите E", 1800);
 }
@@ -1790,8 +1792,36 @@ function movement() {
     z,
   };
 }
+// Seesaws tip toward whoever sits on them; the one on the rising end gets tossed up.
+function updateSeesaws(dt) {
+  for (const s of mapScene.props.values()) {
+    const c = s.info.local.find((c) => c.seesaw);
+    if (!c) continue;
+    const cx = s.x + c.x,
+      cz = s.z + c.z;
+    let torque = 0,
+      mine = 0;
+    for (const p of players) {
+      const lx = p.x - cx;
+      if (Math.abs(lx) > c.w / 2 || Math.abs(p.z - cz) > c.d / 2 + 0.15 || p.y < 0.06) continue;
+      torque += lx;
+      if (p === active) mine = lx;
+    }
+    const before = s.tilt ?? 1,
+      target = torque > 0.2 ? -1 : torque < -0.2 ? 1 : before,
+      next = before + clamp(target - before, -dt * 3.4, dt * 3.4);
+    if (next === before) continue;
+    mapScene.setTilt(s.id, next);
+    // At the end of the swing the rising end throws its rider.
+    if (Math.abs(next) === 1 && mine && Math.sign(mine) === Math.sign(next) && active.grounded) {
+      active.vy = 5 + (6 * Math.abs(mine)) / (c.w / 2);
+      active.grounded = false;
+    }
+  }
+}
 function physics(dt) {
   worldTime += dt;
+  updateSeesaws(dt);
   const obstacles = mapScene.colliders();
   const loose = dynamicObjects(world);
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
@@ -1804,7 +1834,8 @@ function physics(dt) {
       pending = null;
     } else if (pending.type === "kick") {
       if (dist < 1.25) {
-        startAction(active, "kick", worldTime, { cube: t });
+        if (t.kind === "basketball") shoot(t);
+        else startAction(active, "kick", worldTime, { cube: t });
         pending = null;
       } else move = { x: dx / dist, z: dz / dist };
     } else if (pending.type === "climb") {
@@ -1827,7 +1858,14 @@ function physics(dt) {
       oldX = p.x,
       oldZ = p.z;
     if (!p.remote) {
-      stepBody(p, move, obstacles, dt, sprinting && (move.x || move.z) ? SPRINT : 1);
+      // Rivers slow you down and carry you downstream.
+      const water = p.y < 0.35 ? waterAt(mapScene.map, p.x, p.z) : null;
+      if (water) {
+        p.x += (water.flow?.x || 0) * (water.drift ?? 0.5) * dt;
+        p.z += (water.flow?.z || 0) * (water.drift ?? 0.5) * dt;
+        if ((move.x || move.z) && Math.random() < dt * 9) effects.puff(new T.Vector3(p.x, 0.15, p.z), "#d9f0ff", 3, 1.6, 0.03);
+      }
+      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1));
       p.velocityX = (p.x - oldX) / dt;
       p.velocityZ = (p.z - oldZ) / dt;
       if (!wasGrounded && p.grounded) p.land = 0.2;
@@ -1836,15 +1874,12 @@ function physics(dt) {
       const age = worldTime - p.action.started;
       if (!p.action.released && age >= p.action.release) {
         p.action.released = true;
-        if (p.action.type === "throw") releaseSnow(p, p.action.payload);
+        if (p.action.type === "throw" && p.action.payload.ball) {
+          if (p === active) releaseShot(p, p.action.payload.ball);
+        } else if (p.action.type === "throw") releaseSnow(p, p.action.payload);
         if (p.action.type === "kick" && p === active) {
           const c = p.action.payload.cube;
-          if (
-            loose.includes(c) &&
-            Math.hypot(c.x - p.x, c.z - p.z) < 1.9 &&
-            Math.abs(c.y - p.y) < 1.1
-          )
-            kickObject(c, p, 8);
+          if (loose.includes(c) && reachable(c, p, 1.9)) kickObject(c, p, 8);
         }
       }
       if (age >= p.action.duration) p.action = null;
@@ -2113,6 +2148,39 @@ function op(msg) {
   syncAliases();
   save();
 }
+// Basketball: pick the ball up and shoot it at the nearest ring in reach, or pass it where you point.
+function shoot(c) {
+  if (!startAction(active, "throw", worldTime, { ball: c })) return;
+  active.angle = Math.atan2(c.x - active.x, c.z - active.z);
+  net.send({ t: "act", k: "shoot", target: c.id });
+}
+function shotTarget(from) {
+  const hoop = hoopsOf(mapScene.map, world.structures)
+    .map((h) => ({ ...h, d: Math.hypot(h.x - from.x, h.z - from.z) }))
+    .filter((h) => h.d < 12.5)
+    .sort((a, b) => a.d - b.d)[0];
+  if (hoop) return { to: { x: hoop.x, y: hoop.y + 0.12, z: hoop.z }, angle: 54, hoop };
+  const aim = pointerWorld.clone(),
+    d = Math.hypot(aim.x - from.x, aim.z - from.z);
+  if (d > 12) aim.set(from.x + ((aim.x - from.x) * 12) / d, 0, from.z + ((aim.z - from.z) * 12) / d);
+  return { to: { x: aim.x, y: 0.4, z: aim.z }, angle: 38 };
+}
+function releaseShot(p, c) {
+  if (!dynamicObjects(world).includes(c) || Math.hypot(c.x - p.x, c.z - p.z) > 2.3) return;
+  const fx = Math.sin(p.angle) * 0.45,
+    fz = Math.cos(p.angle) * 0.45;
+  const from = { x: p.x + fx, y: p.y + 1.85, z: p.z + fz },
+    { to, angle, hoop } = shotTarget(from);
+  // Longer shots are less sure.
+  const d = Math.hypot(to.x - from.x, to.z - from.z),
+    miss = (Math.random() - 0.5) * (0.012 + d * 0.0045);
+  const v = arcVelocity(from, to, angle, GRAVITY);
+  const k = Math.min(1, THROW_SPEED / (Math.hypot(v.x, v.y, v.z) || 1)) * (1 + miss);
+  Object.assign(c, { x: from.x, y: from.y, z: from.z, vx: v.x * k, vy: v.y * k, vz: v.z * k });
+  if (!net?.connected) (world.lastTouch ||= {})[c.id] = "self";
+  net?.send({ t: "obj.throw", id: c.id, x: r3(from.x), y: r3(from.y), z: r3(from.z), vx: r3(c.vx), vy: r3(c.vy), vz: r3(c.vz) });
+  if (hoop) toast(d > 8 ? "Дальний бросок…" : "Бросок!", 900);
+}
 // Kicks, pushes and snowball hits: predicted locally at once, confirmed by the server.
 function kickObject(c, from, power) {
   kickCube(c, from, power);
@@ -2201,6 +2269,7 @@ function remoteEvent(p, ev) {
     startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to), w: ev.w || "snow", pw: ev.pw || 1, pid: ev.pid });
   if (ev.k === "kick")
     startAction(p, "kick", worldTime, { cube: findObject(world, ev.target) || null });
+  if (ev.k === "shoot") startAction(p, "throw", worldTime, { ball: findObject(world, ev.target) || {} });
   if (ev.k === "emote") emotionEffects.start(p, ev.e, worldTime);
 }
 let lastPoseSent = -Infinity,
@@ -2440,6 +2509,9 @@ function onServer(m, at) {
     }
     case "reset": {
       loadState(createState(m.state, uid), m.objs);
+      // Everyone starts the new map at its entrance.
+      Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0 });
+      pending = null;
       const who = m.by === net.id || m.by === "self" ? "Вы" : remotes.get(m.by)?.profile.name || m.name || "Кто-то";
       toast(`${who} — карта «${mapDef(world.map).title}»`, 3500);
       break;
@@ -2618,7 +2690,9 @@ function startNetwork() {
       if (s === "full") toast(detail || "Комната заполнена", 6000);
     },
   });
-  net.pose = currentPose;
+  // The first time in, the server picks where you appear (the map's entrance); after a reconnect
+  // you carry on from where you were.
+  net.pose = () => (placedOnce ? currentPose() : undefined);
   // ?debug exposes internals for end-to-end checks and troubleshooting in the console.
   if (/[?&]debug\b/.test(location.search))
     window.kino = { players, world, remotes, net, mediaClient, op, notes: () => notes, active: () => active };

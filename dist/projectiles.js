@@ -37,3 +37,20 @@ export function launchVelocity(from, to, speed, gravity = PROJECTILE_GRAVITY) {
   const s = speed * Math.SQRT1_2;
   return { x: ux * s, y: s, z: uz * s, reach: false, time: (2 * s) / gravity };
 }
+// A lobbed throw at a fixed launch angle (basketball shots fall into the ring from above). If the
+// target is too high for that angle, the angle steepens.
+export function arcVelocity(from, to, degrees, gravity) {
+  const dx = to.x - from.x,
+    dz = to.z - from.z,
+    dy = to.y - from.y,
+    d = Math.hypot(dx, dz) || 1e-6;
+  for (let a = degrees; a < 85; a += 2) {
+    const th = (a * Math.PI) / 180,
+      drop = d * Math.tan(th) - dy;
+    if (drop <= 0.05) continue;
+    const v = Math.sqrt((gravity * d * d) / (2 * Math.cos(th) ** 2 * drop)),
+      vh = v * Math.cos(th);
+    return { x: (dx / d) * vh, y: v * Math.sin(th), z: (dz / d) * vh, speed: v };
+  }
+  return { x: 0, y: Math.sqrt(2 * gravity * Math.max(0.5, dy)), z: 0, speed: 0 };
+}

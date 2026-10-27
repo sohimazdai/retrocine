@@ -106,6 +106,7 @@ export function serializeState(s) {
   };
 }
 export const stateMap = (s) => mapDef(s.map);
+export const THROW_SPEED = 22;
 // Colliders of the current map, cached until a prop moves (s.v is bumped on every prop change).
 export function stateObstacles(s) {
   if (s._obs && s._obsV === s.v && s._obsMap === s.map) return s._obs;
@@ -283,13 +284,14 @@ export function applyOp(s, op, ctx) {
       break;
     }
     case "obj.throw": {
-      // Shooting a ball (basketball) toward a target: a full launch velocity, limited in speed.
+      // Throwing a ball from your hands (basketball shots, passes): it leaves from (x, y, z) — next to
+      // where it lay — with a launch velocity, limited in speed.
       const o = findObject(s, op.id);
       if (!o || ![op.x, op.z, op.vx, op.vy, op.vz].every(finite)) return null;
       if (Math.hypot(o.x - op.x, o.z - op.z) > 2.5) return null;
       const speed = Math.hypot(op.vx, op.vy, op.vz),
-        k = speed > 16 ? 16 / speed : 1;
-      Object.assign(o, { vx: op.vx * k, vy: op.vy * k, vz: op.vz * k, dragBy: null });
+        k = speed > THROW_SPEED ? THROW_SPEED / speed : 1;
+      Object.assign(o, { x: op.x, z: op.z, vx: op.vx * k, vy: op.vy * k, vz: op.vz * k, dragBy: null });
       if (finite(op.y)) o.y = Math.max(o.y, clamp(op.y, 0, 4));
       if (s.balls.includes(o)) (s.lastTouch ||= {})[o.id] = ctx.peer;
       physics = true;

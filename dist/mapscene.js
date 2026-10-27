@@ -92,6 +92,20 @@ function floorTexture(kind) {
           c.fillRect(rnd() * 256, rnd() * 256, 2 + rnd() * 2, 2);
         }
       },
+      turf() {
+        c.fillStyle = "#6b8a45";
+        c.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 26; i++) {
+          c.fillStyle = ["#8a7a52", "#7d6e49", "#93835a"][i % 3] + "88";
+          c.beginPath();
+          c.ellipse(rnd() * 256, rnd() * 256, 8 + rnd() * 26, 5 + rnd() * 16, rnd() * 3, 0, Math.PI * 2);
+          c.fill();
+        }
+        for (let i = 0; i < 2000; i++) {
+          c.fillStyle = ["#7a9a50", "#5d7d3c", "#86a85a", "#6b8a45"][i % 4];
+          c.fillRect(rnd() * 256, rnd() * 256, 1.5, 3 + rnd() * 3);
+        }
+      },
       gravel() {
         c.fillStyle = "#77736c";
         c.fillRect(0, 0, 256, 256);
@@ -128,7 +142,7 @@ export class MapScene {
   applyTheme(theme) {
     const t = { ...DEFAULT_THEME, ...theme };
     const [top, side] = this.floor.material;
-    top.color.set(t.texture ? "#ffffff" : t.floor);
+    top.color.set(t.texture ? t.tint || "#ffffff" : t.floor);
     top.map = floorTexture(t.texture);
     top.needsUpdate = true;
     side.color.set(t.side);
@@ -161,7 +175,7 @@ export class MapScene {
     for (const info of mapProps(map)) {
       const root = buildProp(info);
       root.rotation.y = info.rot || 0;
-      root.userData = { kind: "structure", id: info.id, label: info.label };
+      root.userData = { ...root.userData, kind: "structure", id: info.id, label: info.label };
       const pos = positions?.[info.id] || info;
       root.position.set(pos.x, pos.y || 0, pos.z);
       this.root.add(root);
@@ -211,8 +225,22 @@ export class MapScene {
     s.root.position.set(x, y, z);
     this.version++;
   }
+  // Seesaw tilt (−1…1): changes the plank's slope in the colliders and its angle on screen.
+  setTilt(id, tilt) {
+    const s = this.props.get(id);
+    if (!s) return;
+    s.tilt = tilt;
+    this.version++;
+  }
   positions() {
-    return Object.fromEntries([...this.props].map(([id, s]) => [id, s.y ? { x: s.x, z: s.z, y: s.y } : { x: s.x, z: s.z }]));
+    return Object.fromEntries(
+      [...this.props].map(([id, s]) => {
+        const p = { x: s.x, z: s.z };
+        if (s.y) p.y = s.y;
+        if (s.tilt != null) p.tilt = s.tilt;
+        return [id, p];
+      }),
+    );
   }
   // All colliders: scenery and props at their current places. Cached until something moves.
   colliders() {
@@ -236,6 +264,8 @@ export class MapScene {
       if (speed > 0.001) mesh.rotateOnWorldAxis(new T.Vector3(ball.vz, 0, -ball.vx).normalize(), (speed * dt) / (ball.size / 2));
     }
     this.decor?.update?.(dt, t);
+    // Props that move on their own (fountain water, seesaw plank) update their meshes here.
+    for (const s of this.props.values()) s.root.userData.update?.(dt, t, s);
   }
   clear() {
     for (const s of this.props.values()) disposeOwned(s.root);

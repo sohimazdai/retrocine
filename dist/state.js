@@ -20,7 +20,11 @@ import {
   obstacles,
   supportHeight,
   BIG_DEFAULT,
+  PROPS,
+  LIFT_HEIGHT,
+  PUSH_SPEED,
 } from "./world.js";
+import { projectile } from "./projectiles.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
@@ -239,7 +243,7 @@ export function applyOp(s, op, ctx) {
       break;
     }
     case "struct.move": {
-      if (!finite(op.x) || !finite(op.z)) return null;
+      if (!finite(op.x) || !finite(op.z) || s.lifts?.[op.id]) return null;
       if (op.id === "big") {
         s.big = clampBig(op.x, op.z);
         others({ t: "struct", id: "big", x: s.big.x, z: s.big.z });
@@ -254,6 +258,19 @@ export function applyOp(s, op, ctx) {
       const goal = { ...STRUCTURES.find((x) => x.id === "goal"), ...s.structures.goal };
       Object.assign(s.ball, ballResetPosition(goal), { dragBy: null });
       s.flags.scored = false;
+      physics = true;
+      break;
+    }
+    case "boom": {
+      const kind = projectile(op.kind);
+      if (!kind.explosion || op.kind !== kind.id || ![op.x, op.y, op.z].every(finite)) return null;
+      const x = clamp(op.x, -16, 16),
+        y = clamp(op.y, -1, 30),
+        z = clamp(op.z, -14, 12);
+      const { radius, power } = kind.explosion;
+      const props = applyBlast(s, x, y, z, radius, power);
+      all({ t: "boom", by: ctx.peer, kind: kind.id, pid: typeof op.pid === "string" ? op.pid.slice(0, 24) : null, x, y, z, r: radius, power });
+      for (const p of props) all({ t: "struct", ...p });
       physics = true;
       break;
     }
@@ -298,4 +315,139 @@ export const STATE_OPS = new Set([
   "timer.start",
   "timer.toggle",
   "timer.hide",
+  "boom",
 ]);
+
+// ——— Pushing and lifting props (Shift) ———
+// pushers: [{ id, x, z, mx, mz }] — avatars holding Shift, their position and input direction.
+// A prop moves when the pushes on it add up to its weight (opposite sides cancel, adjacent sides
+// add up). Avatars on opposite sides together lift it, if there are as many as its lift value;
+// the lifted prop follows their midpoint until they let go. Returns the props that moved.
+export function propPosition(s, id) {
+  return id === "big" ? s.big : s.structures[id];
+}
+function setPropPosition(s, id, p) {
+  if (id === "big") Object.assign(s.big, p);
+  else s.structures[id] = { ...s.structures[id], ...p };
+}
+function propBox(prop, pos, pad = 0) {
+  return { x0: pos.x + prop.cx - prop.hw - pad, x1: pos.x + prop.cx + prop.hw + pad, z0: pos.z + prop.cz - prop.hd - pad, z1: pos.z + prop.cz + prop.hd + pad };
+}
+function overlapsOthers(s, prop, pos) {
+  if (pos.y) return false;
+  const a = propBox(prop, pos, -0.05);
+  return PROPS.some((other) => {
+    if (other.id === prop.id) return false;
+    const op = propPosition(s, other.id);
+    if (op.y) return false;
+    const b = propBox(other, op);
+    return a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0;
+  });
+}
+function clampProp(id, x, z) {
+  return id === "big" ? clampBig(x, z) : clampStructure(x, z);
+}
+function gapTo(prop, pos, x, z) {
+  const dx = x - (pos.x + prop.cx),
+    dz = z - (pos.z + prop.cz);
+  if (prop.round) return { gap: Math.hypot(dx, dz) - prop.r, dx, dz };
+  return { gap: Math.hypot(Math.max(0, Math.abs(dx) - prop.hw), Math.max(0, Math.abs(dz) - prop.hd)), dx, dz };
+}
+export function stepPushes(s, pushers, dt) {
+  const moved = [];
+  s.lifts ||= {};
+  for (const prop of PROPS) {
+    const pos = propPosition(s, prop.id);
+    const lift = s.lifts[prop.id];
+    if (lift) {
+      const holders = lift.by
+        .map((id) => pushers.find((p) => p.id === id))
+        .filter((h) => h && gapTo(prop, pos, h.x, h.z).gap < 1.4);
+      const sides = new Set(holders.map((h) => lift.sides[h.id]));
+      const opposite = (sides.has("+x") && sides.has("-x")) || (sides.has("+z") && sides.has("-z"));
+      if (holders.length < prop.lift || !opposite) {
+        delete s.lifts[prop.id];
+        const drop = { y: 0 };
+        if (overlapsOthers(s, prop, { ...pos, y: 0 })) Object.assign(drop, { x: lift.from.x, z: lift.from.z });
+        setPropPosition(s, prop.id, drop);
+        moved.push({ id: prop.id, ...propPosition(s, prop.id), by: [] });
+        continue;
+      }
+      const mx = holders.reduce((a, h) => a + h.x, 0) / holders.length,
+        mz = holders.reduce((a, h) => a + h.z, 0) / holders.length;
+      const next = clampProp(prop.id, mx + lift.offset.x, mz + lift.offset.z);
+      setPropPosition(s, prop.id, { ...next, y: LIFT_HEIGHT });
+      moved.push({ id: prop.id, ...propPosition(s, prop.id), by: lift.by });
+      continue;
+    }
+    const sides = { "+x": [], "-x": [], "+z": [], "-z": [] };
+    for (const p of pushers) {
+      const { gap, dx, dz } = gapTo(prop, pos, p.x, p.z);
+      if (gap > 0.55 || p.y > (pos.y || 0) + prop.h - 0.1) continue;
+      const side = Math.abs(dx) / prop.hw > Math.abs(dz) / prop.hd ? (dx > 0 ? "+x" : "-x") : dz > 0 ? "+z" : "-z";
+      const nx = side === "+x" ? -1 : side === "-x" ? 1 : 0,
+        nz = side === "+z" ? -1 : side === "-z" ? 1 : 0;
+      const pressing = p.mx * nx + p.mz * nz > 0.45;
+      sides[side].push({ ...p, pressing });
+    }
+    const all = Object.values(sides).flat();
+    const lifters = all.filter((p) => p.lifting);
+    const opposite = (sides["+x"].length && sides["-x"].length) || (sides["+z"].length && sides["-z"].length);
+    if (opposite && all.length >= prop.lift && all.length >= 2) {
+      const mx = all.reduce((a, h) => a + h.x, 0) / all.length,
+        mz = all.reduce((a, h) => a + h.z, 0) / all.length;
+      s.lifts[prop.id] = {
+        by: all.map((p) => p.id),
+        sides: Object.fromEntries(Object.entries(sides).flatMap(([side, list]) => list.map((p) => [p.id, side]))),
+        offset: { x: pos.x - mx, z: pos.z - mz },
+        from: { x: pos.x, z: pos.z },
+      };
+      setPropPosition(s, prop.id, { y: LIFT_HEIGHT });
+      moved.push({ id: prop.id, ...propPosition(s, prop.id), by: s.lifts[prop.id].by });
+      continue;
+    }
+    void lifters;
+    const fx = sides["-x"].filter((p) => p.pressing).length - sides["+x"].filter((p) => p.pressing).length,
+      fz = sides["-z"].filter((p) => p.pressing).length - sides["+z"].filter((p) => p.pressing).length,
+      force = Math.hypot(fx, fz);
+    if (!force || force < prop.weight) continue;
+    const speed = PUSH_SPEED * Math.min(1.35, force / prop.weight) / Math.sqrt(prop.weight);
+    const next = clampProp(prop.id, pos.x + (fx / force) * speed * dt, pos.z + (fz / force) * speed * dt);
+    if (overlapsOthers(s, prop, next)) continue;
+    setPropPosition(s, prop.id, next);
+    moved.push({ id: prop.id, ...propPosition(s, prop.id) });
+  }
+  return moved;
+}
+
+// ——— Explosions ———
+// Pushes every loose object away from the blast and nudges props according to their weight.
+export function applyBlast(s, x, y, z, radius, power) {
+  const moved = [];
+  for (const o of dynamicObjects(s)) {
+    const dx = o.x - x,
+      dz = o.z - z,
+      d = Math.hypot(dx, dz, o.y - y);
+    if (d > radius) continue;
+    const k = power * (1 - d / radius),
+      len = Math.hypot(dx, dz) || 1;
+    o.vx += (dx / len) * k;
+    o.vz += (dz / len) * k;
+    o.vy = Math.max(o.vy, k * 0.7);
+    o.spin = (o.spin || 0) + k;
+    o.dragBy = null;
+  }
+  for (const prop of PROPS) {
+    const pos = propPosition(s, prop.id);
+    if (pos.y || s.lifts?.[prop.id]) continue;
+    const { gap, dx, dz } = gapTo(prop, pos, x, z);
+    if (gap > radius) continue;
+    const len = Math.hypot(dx, dz) || 1,
+      shift = (power * (1 - Math.max(0, gap) / radius) * 0.05) / prop.weight;
+    const next = clampProp(prop.id, pos.x - (dx / len) * shift, pos.z - (dz / len) * shift);
+    if (overlapsOthers(s, prop, next)) continue;
+    setPropPosition(s, prop.id, next);
+    moved.push({ id: prop.id, ...propPosition(s, prop.id) });
+  }
+  return moved;
+}

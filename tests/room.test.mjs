@@ -7,10 +7,11 @@ import {
   normalizeProfile,
   disposeAvatar,
 } from "../dist/avatars.js";
-import { ROOM, screenPoint, floorBack } from "../dist/layout.js";
+import { ROOM, screenPoint, floorBack, setWallShape } from "../dist/layout.js";
 import {
-  ROOM_TARGET,
-  roomDistance,
+  fitRoomCamera,
+  fitWall,
+  ELEVATION,
   framePortrait,
   createFloor,
 } from "../dist/room.js";
@@ -19,40 +20,47 @@ import { stepBody, stepCube } from "../dist/physics.js";
 import { Playground } from "../dist/playground.js";
 
 function roomCamera(aspect, degrees) {
-  const camera = new T.PerspectiveCamera(43, aspect, 0.1, 180);
-  const d = roomDistance(aspect),
-    el = T.MathUtils.degToRad(degrees);
-  camera.position
-    .copy(ROOM_TARGET)
-    .add(new T.Vector3(0, Math.sin(el) * d, Math.cos(el) * d));
-  camera.lookAt(ROOM_TARGET);
-  camera.updateMatrixWorld();
+  const camera = fitRoomCamera(new T.PerspectiveCamera(43, aspect, 0.1, 400), degrees);
+  const wall = fitWall(camera);
+  setWallShape(wall.height, wall.edges);
   return camera;
 }
+const ndc = (camera, p) => new T.Vector3(p.x, p.y, p.z).project(camera);
 
-test("one fixed room distance keeps floor and spherical wall visible throughout 30–80 degrees", () => {
-  for (const aspect of [16 / 9, 1363 / 936, 390 / 844]) {
-    for (const angle of [30, 40, 60, 70, 80]) {
+test("near floor corners sit in the bottom corners of the viewport at every angle from 15 to 45 degrees", () => {
+  assert.deepEqual([ELEVATION.min, ELEVATION.initial, ELEVATION.max], [15, 30, 45]);
+  for (const aspect of [16 / 9, 1363 / 936, 2000 / 980, 4 / 3])
+    for (const angle of [15, 22, 30, 38, 45]) {
       const camera = roomCamera(aspect, angle);
-      const points = [];
-      for (const x of [-ROOM.halfWidth, 0, ROOM.halfWidth])
-        points.push(
-          new T.Vector3(x, 0, ROOM.front),
-          new T.Vector3(x, 0, floorBack(x)),
-        );
-      for (const x of [-10.5, 0, 10.5]) {
-        const p = screenPoint(x, ROOM.wallHeight);
-        points.push(new T.Vector3(p.x, p.y, p.z));
+      for (const side of [-1, 1]) {
+        const p = ndc(camera, { x: side * ROOM.halfWidth, y: 0, z: ROOM.front });
+        assert(Math.abs(p.x - side) < 1e-9 && Math.abs(p.y + 1) < 1e-9, `${aspect} ${angle}: ${p.toArray()}`);
       }
-      for (const p of points) {
-        p.project(camera);
-        assert(
-          Math.abs(p.x) <= 0.945 && Math.abs(p.y) <= 0.945,
-          `${aspect}, ${angle}: ${p.toArray()}`,
-        );
-      }
+      // The camera looks down at exactly that angle to the floor.
+      const dir = camera.getWorldDirection(new T.Vector3());
+      assert(Math.abs(Math.asin(-dir.y) - T.MathUtils.degToRad(angle)) < 1e-9);
+      // The whole floor is in view and widens toward the viewer.
+      const far = ndc(camera, { x: ROOM.halfWidth, y: 0, z: floorBack(ROOM.halfWidth) });
+      assert(far.x > 0.4 && far.x < 1 && far.y > -1 && far.y < 0.9, `${aspect} ${angle}: far ${far.toArray()}`);
     }
-  }
+});
+
+test("wall spans the far edge of the floor, rises to the top of the viewport and its sides look vertical", () => {
+  for (const aspect of [16 / 9, 1363 / 936, 2000 / 980])
+    for (const angle of [15, 30, 45]) {
+      const camera = roomCamera(aspect, angle);
+      const bottom = ndc(camera, screenPoint(ROOM.wallWidth / 2, 0)),
+        farCorner = ndc(camera, { x: ROOM.halfWidth, y: 0, z: floorBack(ROOM.halfWidth) });
+      assert(bottom.distanceTo(farCorner) < 1e-9, "bottom corners are the far floor corners");
+      for (const y of [0.25, 0.5, 0.75, 1].map((k) => k * ROOM.wallHeight)) {
+        const edge = ndc(camera, screenPoint(ROOM.wallWidth / 2, y));
+        assert(Math.abs(edge.x - bottom.x) < 0.01, `${aspect} ${angle}: edge at ${y} → ${edge.x} vs ${bottom.x}`);
+      }
+      let top = -Infinity;
+      for (let x = -ROOM.wallWidth / 2; x <= ROOM.wallWidth / 2; x += 0.7)
+        top = Math.max(top, ndc(camera, screenPoint(x, ROOM.wallHeight)).y);
+      assert(top > 0.85 && top <= 0.95, `${aspect} ${angle}: top ${top}, height ${ROOM.wallHeight}`);
+    }
 });
 
 test("the floor has a walkable top, bounded edges and no front, side or roof walls", () => {
@@ -92,56 +100,31 @@ test("all hats and animated hair are centered and fully framed in avatar squares
   assert.equal(migrated.mask, "none");
 });
 
-test("side participants stay equal squares and never overlap at every room angle and count", () => {
-  const players = Array.from({ length: 6 }, (_, i) => ({
-    profile: { id: String(i) },
-  }));
-  const portraits = new Map(
-    players.map((p) => [
-      p.profile.id,
-      { target: { texture: new T.Texture() } },
-    ]),
-  );
-  const cinema = new CinemaScreen(players, portraits);
-  cinema.setMedia({
-    share: new T.Texture({ videoWidth: 1920, videoHeight: 1080 }),
-  });
-  for (let count = 1; count <= 6; count++) {
-    cinema.setCount(count);
-    for (const angle of [30, 60, 80]) {
-      const camera = roomCamera(16 / 9, angle);
-      cinema.updateCamera(camera);
-      cinema.group.updateMatrixWorld(true);
-      const rects = cinema.tiles
-        .filter((t) => t.visible)
-        .map((tile) => {
-          const positions = tile.geometry.attributes.position;
-          const points = Array.from({ length: positions.count }, (_, i) =>
-            new T.Vector3()
-              .fromBufferAttribute(positions, i)
-              .applyMatrix4(tile.matrixWorld)
-              .project(camera),
-          );
-          return {
-            x0: (Math.min(...points.map((p) => p.x)) * 16) / 9,
-            x1: (Math.max(...points.map((p) => p.x)) * 16) / 9,
-            y0: Math.min(...points.map((p) => p.y)),
-            y1: Math.max(...points.map((p) => p.y)),
-          };
-        });
-      const width = rects[0].x1 - rects[0].x0;
+test("while sharing, participants are equal squares on the wall beside the picture and never overlap", () => {
+  const players = Array.from({ length: 16 }, (_, i) => ({ profile: { id: String(i) } }));
+  const portraits = new Map(players.map((p) => [p.profile.id, { target: { texture: new T.Texture() } }]));
+  const cinema = new CinemaScreen(players.slice(0, 1), portraits);
+  for (const angle of [15, 30, 45]) {
+    roomCamera(16 / 9, angle);
+    cinema.reshape();
+    for (const count of [1, 2, 3, 6, 9, 16]) {
+      cinema.setPlayers(players.slice(0, count));
+      cinema.setMedia({ share: new T.Texture({ videoWidth: 1920, videoHeight: 1080 }) });
+      const share = cinema.featuredRect(16 / 9);
+      const rects = cinema.tiles.filter((t) => t.visible).map((t) => t.geometry.userData.rect);
+      assert.equal(rects.length, count);
       for (const r of rects) {
-        assert(Math.abs(r.x1 - r.x0 - (r.y1 - r.y0)) < 1e-6);
-        assert(Math.abs(r.x1 - r.x0 - width) < 1e-6);
+        assert(Math.abs(r.width - r.height) < 1e-9, "square");
+        assert(Math.abs(r.width - rects[0].width) < 1e-9, "equal");
+        assert(r.x + r.width <= share.x + 1e-9 || r.x >= share.x + share.width - 1e-9, "beside the shared picture");
+        assert(r.x >= -ROOM.wallWidth / 2 && r.x + r.width <= ROOM.wallWidth / 2, "on the wall");
+        assert(r.y >= 0 && r.y + r.height <= ROOM.wallHeight, "on the wall");
       }
       for (let i = 0; i < rects.length; i++)
         for (let j = i + 1; j < rects.length; j++) {
           const a = rects[i],
             b = rects[j];
-          assert(
-            a.x1 < b.x0 || b.x1 < a.x0 || a.y1 < b.y0 || b.y1 < a.y0,
-            `${count}, ${angle}`,
-          );
+          assert(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, `${count}`);
         }
     }
   }

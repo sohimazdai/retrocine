@@ -3,6 +3,7 @@ import { ROOM, floorBack } from "./layout.js";
 export const GRAVITY = 36,
   JUMP_SPEED = 12.8,
   SPEED = 5.1,
+  SPRINT = 1.7,
   RADIUS = 0.28;
 export const LIMITS = { x: ROOM.halfWidth - 0.35, z: ROOM.front - 0.35 };
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -66,19 +67,29 @@ export function resolveHorizontal(body, box) {
     body[choices[0].axis] = choices[0].to;
   }
 }
-export function stepBody(body, move, boxes, dt) {
+// speedScale > 1 is a sprint (Shift). kx/kz is knockback from hits and explosions: it carries the
+// body on its own and fades, quickly on the ground and slowly in the air.
+export function stepBody(body, move, boxes, dt, speedScale = 1) {
   const oldY = body.y;
   const len = Math.hypot(move.x, move.z) || 1;
+  const kx = body.kx || 0,
+    kz = body.kz || 0;
   body.x = clamp(
-    body.x + (move.x / Math.max(1, len)) * SPEED * dt,
+    body.x + (move.x / Math.max(1, len)) * SPEED * speedScale * dt + kx * dt,
     -LIMITS.x,
     LIMITS.x,
   );
   body.z = clamp(
-    body.z + (move.z / Math.max(1, len)) * SPEED * dt,
+    body.z + (move.z / Math.max(1, len)) * SPEED * speedScale * dt + kz * dt,
     floorBack(body.x) + RADIUS,
     LIMITS.z,
   );
+  if (kx || kz) {
+    const fade = Math.exp(-(body.grounded ? 6 : 1.1) * dt);
+    body.kx = kx * fade;
+    body.kz = kz * fade;
+    if (Math.hypot(body.kx, body.kz) < 0.05) body.kx = body.kz = 0;
+  }
   for (const b of boxes) resolveHorizontal(body, b);
   body.vy -= (body.vy < 0 ? GRAVITY * 1.32 : GRAVITY) * dt;
   body.y += body.vy * dt;

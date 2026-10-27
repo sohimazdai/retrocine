@@ -143,6 +143,36 @@ export function animateRig(rig, state, dt) {
       rig.arms[1].rotation.z = 0.6 * end;
     }
   }
+  // Holding the right button winds the throwing arm back; Shift against a prop leans in with both
+  // arms forward; lifting together raises both arms overhead.
+  if (state.charge > 0 && !action) {
+    const c = ease(state.charge);
+    rig.torso.rotation.y -= 0.6 * c;
+    rig.arms[1].rotation.x = 1.0 * c;
+    rig.arms[1].rotation.z = -0.35 * c;
+    rig.elbows[1].rotation.x = -1.9 * c;
+    rig.arms[0].rotation.x = -0.55 * c;
+    rig.head.rotation.y += 0.3 * c;
+  }
+  if (state.pushing) {
+    const p = state.pushing === 2 ? 0 : 1;
+    if (p) {
+      rig.torso.rotation.x += 0.32;
+      rig.model.rotation.x += 0.14;
+      rig.arms.forEach((arm) => {
+        arm.rotation.x = -1.45;
+        arm.rotation.z *= 0.2;
+      });
+      rig.elbows.forEach((elbow) => (elbow.rotation.x = -0.4));
+    } else {
+      rig.arms.forEach((arm, i) => {
+        arm.rotation.x = -2.85;
+        arm.rotation.z = (i ? -1 : 1) * 0.18;
+      });
+      rig.elbows.forEach((elbow) => (elbow.rotation.x = -0.35));
+      rig.torso.rotation.x -= 0.05;
+    }
+  }
   const blinkTime = (t + (state.seed || 0)) % 4.6;
   const blink =
     blinkTime > 4.43 ? Math.max(0.07, Math.abs(blinkTime - 4.515) / 0.085) : 1;

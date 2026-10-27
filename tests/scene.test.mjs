@@ -18,6 +18,9 @@ import * as stateModule from "../dist/state.js";
 import * as netModule from "../dist/net.js";
 import * as mediaModule from "../dist/media.js";
 import * as configModule from "../dist/config.js";
+import * as mapsModule from "../dist/maps.js";
+import * as projectilesModule from "../dist/projectiles.js";
+import * as effectsModule from "../dist/effects.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
   new URL("../dist/index.html", import.meta.url),
@@ -196,6 +199,9 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...netModule,
     ...mediaModule,
     ...configModule,
+    ...mapsModule,
+    ...projectilesModule,
+    ...effectsModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -369,6 +375,7 @@ test("screen picking uses actual 3D triangle intersections", () => {
     "(()=>{const r=screenTiles[1].geometry.userData.rect;const p=screenPoint(r.x+r.width/2,r.y+r.height/2,.035);const v=new T.Vector3(p.x,p.y,p.z).project(camera);return {x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2}})()",
   );
   a.pointer("pointerdown", coords.x, coords.y, 2);
+  a.pointer("pointerup", coords.x, coords.y, 2);
   assert.equal(a.run("selected.kind"), "tile");
   assert.equal(a.run("selected.id"), "anya");
   a.run("contextAction('pin')");
@@ -406,6 +413,7 @@ test("sticker editor goes through the server and its answer creates a real 3D pa
 
 test("interaction mode drags a volumetric note and persists its position", () => {
   const a = boot();
+  a.run("notes[0].x=1;notes[0].z=6;refreshNotes()");
   a.tick(0.1);
   a.run("setTool('interact')");
   const p = a.run(
@@ -464,7 +472,8 @@ test("sharing moves all participants to the sides, preserving cameras, and resto
   );
   assert.equal(a.run("screenTiles.filter(t=>t.visible).length"), 6);
   assert(
-    a.run("screenTiles.every(t=>Math.abs(t.position.x)>ROOM.wallWidth/2)"),
+    a.run("(()=>{const s=cinema.featuredRect(16/9);return screenTiles.every(t=>{const r=t.geometry.userData.rect;return r.x+r.width<=s.x+1e-9||r.x>=s.x+s.width-1e-9})})()"),
+    "participants move beside the shared picture",
   );
   assert(a.run("screenTiles.filter(t=>t.userData.side==='left').length===3"));
   assert(a.run("featured.visible"));
@@ -561,26 +570,23 @@ test("RPG preset and subsequent customization save without changing participant 
   a.tick(0.1);
 });
 
-test("angle moves one camera on a fixed radius; room wheel cannot zoom", () => {
+test("angle changes from 15 to 45 degrees keep the floor corners in place; room wheel cannot zoom", () => {
   const a = boot();
-  const distance = a.run("camera.position.distanceTo(ROOM_TARGET)");
-  for (const angle of [30, 60, 80]) {
+  assert.equal(a.run("camElevation"), 30);
+  for (const angle of [15, 30, 45]) {
     a.run(`camElevation=${angle};updateCamera()`);
-    assert(
-      Math.abs(a.run("camera.position.distanceTo(ROOM_TARGET)") - distance) <
-        1e-9,
-    );
+    const corner = a.run(`new T.Vector3(ROOM.halfWidth,0,ROOM.front).project(camera)`);
+    assert(Math.abs(corner.x - 1) < 1e-9 && Math.abs(corner.y + 1) < 1e-9);
     assert.equal(a.run("camera.aspect"), 1363 / 936);
   }
   const position = a.run("camera.position.clone()");
   a.w.document
     .querySelector("#world")
-    .dispatchEvent(
-      new a.w.WheelEvent("wheel", { deltaY: -500, clientX: 600, clientY: 600 }),
-    );
+    .dispatchEvent(new a.w.WheelEvent("wheel", { deltaY: -500, clientX: 600, clientY: 600 }));
   assert(a.run("camera.position").equals(position));
   a.run("actions.view()");
-  assert.equal(a.w.document.querySelector("#elevation").max, "80");
+  assert.equal(a.w.document.querySelector("#elevation").min, "15");
+  assert.equal(a.w.document.querySelector("#elevation").max, "45");
   assert.equal(a.w.document.querySelector("#zoom"), null);
 });
 
@@ -764,4 +770,132 @@ test("room link, presence chip and media fallbacks", () => {
   assert.equal(a.run("cinema.media.share === liveVideo.screen.get('dima').texture"), true);
   a.server.emit({ t: "leave", id: "dima" });
   assert.equal(a.run("featured.visible"), false, "share disappears with its owner");
+});
+
+// ——— Throwing and Shift ———
+test("weapons: 1–7 select, heavier things fly shorter, holding the right button throws harder", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  const flight = (weapon, pw = 1) => {
+    a.run(`setWeapon('${weapon}');projectiles.length=0;cooldownUntil['${weapon}']=0;active.action=null;Object.assign(active,{x:0,z:8,y:0,angle:Math.PI})`);
+    a.run(`startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,-40),w:'${weapon}',pw:${pw},pid:'t'})`);
+    let maxDist = 0;
+    for (let i = 0; i < 400 && (i < 30 || a.run("projectiles.length")); i++) {
+      a.tick(1 / 120);
+      if (a.run("projectiles.length")) maxDist = Math.max(maxDist, 8 - a.run("projectiles[0].mesh.position.z"));
+    }
+    return maxDist;
+  };
+  const brick = flight("brick"),
+    rock = flight("rock"),
+    snow = flight("snow"),
+    brickHard = flight("brick", 1.6);
+  assert(brick < rock && rock < snow, `brick ${brick} < rock ${rock} < snow ${snow}`);
+  assert(brickHard > brick * 1.8, `charged brick ${brickHard} vs ${brick}`);
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit6", key: "6", bubbles: true }));
+  assert.equal(a.run("weapon"), "grenade");
+  assert.equal(a.w.document.querySelector('[data-tool="snow"] .weapon-emoji').textContent, "💣");
+});
+
+test("cooldowns: grenade every 10 s, fireball every 5 s, brick every second", () => {
+  const a = boot();
+  a.tick(0.1);
+  for (const [w, cd] of [["grenade", 10], ["fireball", 5], ["brick", 1]]) {
+    a.run(`setWeapon('${w}');active.action=null`);
+    a.run("throwSnow(null)");
+    a.tick(0.5);
+    a.run("active.action=null;throwSnow(null)");
+    const sent = a.server.of("act").filter((m) => m.w === w);
+    assert.equal(sent.length, 1, `${w}: second throw within ${cd} s refused`);
+    a.tick(cd);
+    a.run("active.action=null;throwSnow(null)");
+    assert.equal(a.server.of("act").filter((m) => m.w === w).length, 2, `${w}: allowed again after ${cd} s`);
+  }
+});
+
+test("a grenade explodes after its fuse: objects and your avatar are thrown, everyone sees the blast", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  a.run("Object.assign(active,{x:2,z:6,y:0,vy:0,kx:0,kz:0});cubes[0].x=0.5;cubes[0].z=4;cubes[0].y=0.325;cubes[0].vx=cubes[0].vz=0");
+  a.run("setWeapon('grenade');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,4),w:'grenade',pw:1,pid:'g'})");
+  a.tick(1);
+  assert.equal(a.run("projectiles.length"), 1, "grenade lies on the floor until the fuse burns");
+  a.tick(2.4);
+  assert.equal(a.run("projectiles.length"), 0);
+  assert(a.run("Math.hypot(cubes[0].vx,cubes[0].vz)") > 1 || a.run("Math.hypot(cubes[0].x-0.5,cubes[0].z-4)") > 0.5, "cube is blown away");
+  assert(a.run("effects.items.length") > 10, "fire, smoke, sparks and a scorch mark");
+  assert(a.run("Math.hypot(active.x-2,active.z-6)") > 0.3 || a.run("active.y") > 0.2, "your avatar is thrown");
+});
+
+test("a fireball explodes on contact; online the blast comes back from the server for everyone", () => {
+  const a = boot();
+  a.tick(0.1);
+  a.run("Object.assign(active,{x:0,z:7,y:0});setWeapon('fireball');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,2),w:'fireball',pw:1,pid:'f1'})");
+  a.tick(1.2);
+  const boom = a.server.of("boom")[0];
+  assert(boom && boom.kind === "fireball" && boom.pid === "f1", "the thrower reports the explosion");
+  assert(boom.z < 6 && boom.z > -1, `where it hit: ${boom.z}`);
+  // A remote grenade: its blast arrives as a server message and throws your avatar.
+  a.run("Object.assign(active,{x:3,z:3,y:0,vy:0,kx:0,kz:0,grounded:true})");
+  a.server.emit({ t: "boom", by: "max", kind: "grenade", pid: "x", x: 2, y: 0.2, z: 3, r: 4.6, power: 15 });
+  assert(a.run("active.kx") > 3, "pushed away from the blast");
+  assert(a.run("active.vy") > 3, "and up");
+});
+
+test("tomatoes leave splats; tennis balls bounce", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  a.run("Object.assign(active,{x:0,z:8,y:0});setWeapon('tomato');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,4),w:'tomato',pw:1,pid:'t'})");
+  a.tick(1.2);
+  assert(a.run("effects.splats.length") >= 1);
+  a.run("setWeapon('tennis');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,3),w:'tennis',pw:1,pid:'b'})");
+  a.tick(1.2);
+  assert(a.run("projectiles.length===0 || projectiles[0].bounces>=1"), "the ball bounced");
+});
+
+test("Shift: faster running and pushing a light prop; the pose tells the server", () => {
+  const a = boot();
+  a.tick(0.2);
+  const run = (shift) => {
+    a.run("Object.assign(active,{x:-2,z:8.5,y:0});keys.clear()");
+    if (shift) a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+    a.run("keys.add('right')");
+    a.tick(0.5);
+    a.run("keys.delete('right')");
+    a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+    return a.run("active.x") + 2;
+  };
+  const walk = run(false),
+    sprint = run(true);
+  assert(sprint > walk * 1.5, `sprint ${sprint} vs walk ${walk}`);
+  // Pushing a spool from the left: the pose carries Shift and the input direction.
+  a.run("const s=playground.structures.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0})");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+  a.run("keys.add('right')");
+  a.tick(0.3);
+  const pose = a.server.of("pose").at(-1);
+  assert.equal(pose.sh, 1);
+  assert.deepEqual(pose.m, [1, 0]);
+  assert.equal(pose.ps, 1, "pushing pose");
+  // The server moves the spool and everyone receives it.
+  a.server.emit({ t: "struct", id: "spool-b", x: 6.6, z: 5.8, y: 0 });
+  assert.equal(a.run("playground.structures.get('spool-b').x"), 6.6);
+  a.server.emit({ t: "struct", id: "spool-b", x: 6.6, z: 5.8, y: 1.75, by: ["me", "max"] });
+  assert.equal(a.run("playground.structures.get('spool-b').root.position.y"), 1.75);
+  a.tick(0.05);
+  assert.equal(a.run("pushState"), 2, "lifting pose while you hold it");
+});
+
+test("offline, one avatar pushes a spool but not the pyramid", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+  a.run("const s=playground.structures.get('spool-b');Object.assign(active,{x:s.x-1.6,z:s.z,y:0});keys.add('right')");
+  const x0 = a.run("playground.structures.get('spool-b').x");
+  a.tick(1);
+  assert(a.run("playground.structures.get('spool-b').x") > x0 + 0.5);
+  a.run("keys.clear();const p=playground.structures.get('pyramid');Object.assign(active,{x:p.x-2.6,z:p.z,y:0});keys.add('right')");
+  const px = a.run("playground.structures.get('pyramid').x");
+  a.tick(1);
+  assert.equal(a.run("playground.structures.get('pyramid').x"), px);
 });

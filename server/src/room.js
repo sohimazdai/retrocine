@@ -8,7 +8,9 @@ import {
   dynamicObjects,
   packObject,
   STATE_OPS,
+  stepPushes,
 } from "../../dist/state.js";
+import { projectile, PROJECTILES } from "../../dist/projectiles.js";
 import { LIMITS, clamp } from "../../dist/physics.js";
 import { livekitToken } from "./livekit.js";
 
@@ -46,7 +48,7 @@ export function sanitizePose(p) {
     z = f(p.z, -14, LIMITS.z),
     y = f(p.y, 0, 12);
   if (x === null || z === null || y === null) return null;
-  return {
+  const pose = {
     x: r3(x),
     y: r3(y),
     z: r3(z),
@@ -54,6 +56,13 @@ export function sanitizePose(p) {
     vy: r3(f(p.vy, -80, 80) ?? 0),
     g: p.g ? 1 : 0,
   };
+  // Shift: sh = held, m = input direction (to push props), ps = pushing/lifting pose, c = throw charge.
+  if (p.sh) pose.sh = 1;
+  if (Array.isArray(p.m) && p.m.length === 2 && p.m.every(Number.isFinite))
+    pose.m = p.m.map((v) => Math.round(clamp(v, -1, 1) * 100) / 100);
+  if (p.ps === 1 || p.ps === 2) pose.ps = p.ps;
+  if (Number.isFinite(p.c) && p.c > 0) pose.c = Math.round(clamp(p.c, 0, 1) * 10) / 10;
+  return pose;
 }
 function spawnPose() {
   return { x: r3((Math.random() - 0.5) * 8), y: 0, z: r3(2 + Math.random() * 4), a: Math.PI, vy: 0, g: 1 };
@@ -72,6 +81,7 @@ export class Room {
     this.physTimer = null;
     this.timerTimeout = null;
     this.sent = new Map();
+    this.pendingProps = new Map();
   }
   get size() {
     return this.peers.size;
@@ -108,6 +118,8 @@ export class Room {
       pose: sanitizePose(hello.pose) || spawnPose(),
       tokens: 240,
       poseTokens: 60,
+      thrown: new Map(),
+      lastThrow: {},
       last: now(),
       dropped: 0,
     };
@@ -183,6 +195,7 @@ export class Room {
         if (!pose) return;
         peer.pose = pose;
         this.broadcast({ t: "pose", id: peer.id, s: now(), ...pose }, peer, true);
+        if (pose.sh) this.startPhysics();
         return;
       }
       case "profile": {
@@ -195,7 +208,21 @@ export class Room {
         const out = { t: "act", id: peer.id, s: now(), k: msg.k };
         if (msg.k === "throw") {
           if (!Array.isArray(msg.to) || msg.to.length !== 3 || !msg.to.every(Number.isFinite)) return;
+          const kind = projectile(msg.w);
+          // Cooldowns per projectile (bricks 1 s, fireballs 5 s, grenades 10 s), with a little slack.
+          const t = now();
+          if (t - (peer.lastThrow[kind.id] || 0) < kind.cooldown * 1000 - 150) return;
+          peer.lastThrow[kind.id] = t;
           out.to = msg.to.map((v) => r3(clamp(v, -40, 40)));
+          out.w = kind.id;
+          out.pw = Number.isFinite(msg.pw) ? Math.round(clamp(msg.pw, 1, 1.6) * 100) / 100 : 1;
+          if (typeof msg.pid === "string") {
+            out.pid = msg.pid.slice(0, 24);
+            if (kind.explosion) {
+              peer.thrown.set(out.pid, { kind: kind.id, at: t });
+              for (const [pid, v] of peer.thrown) if (t - v.at > 15000) peer.thrown.delete(pid);
+            }
+          }
         }
         if (msg.k === "kick" && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
         if (msg.k === "emote") {
@@ -207,6 +234,12 @@ export class Room {
       }
     }
     if (!STATE_OPS.has(msg.t)) return;
+    // An explosion must come from a grenade or fireball this participant actually threw.
+    if (msg.t === "boom") {
+      const thrown = peer.thrown.get(msg.pid);
+      if (!thrown || thrown.kind !== msg.kind) return;
+      peer.thrown.delete(msg.pid);
+    }
     const result = applyOp(this.state, msg, {
       uid: peer.voter,
       peer: peer.id,
@@ -242,6 +275,11 @@ export class Room {
       objects = dynamicObjects(this.state);
     for (const o of objects) if (o.dragBy && nowMs - o.dragAt > 1000) o.dragBy = null;
     const dragged = (o) => !!o.dragBy;
+    const pushers = [...this.peers.values()]
+      .filter((p) => p.pose.sh)
+      .map((p) => ({ id: p.id, x: p.pose.x, y: p.pose.y, z: p.pose.z, mx: p.pose.m?.[0] || 0, mz: p.pose.m?.[1] || 0 }));
+    if (pushers.length || Object.keys(this.state.lifts || {}).length)
+      for (const m of stepPushes(this.state, pushers, elapsed)) this.pendingProps.set(m.id, m);
     let steps = 0;
     while (this.acc >= PHYS_DT && steps < 12) {
       if (stepWorld(this.state, PHYS_DT, dragged))
@@ -249,7 +287,7 @@ export class Room {
       this.acc -= PHYS_DT;
       steps++;
     }
-    let awake = false;
+    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0;
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;
@@ -271,6 +309,9 @@ export class Room {
     }
   }
   broadcastObjects(final) {
+    for (const m of this.pendingProps.values()) this.broadcast({ t: "struct", ...m }, null, !final);
+    if (this.pendingProps.size) this.markDirty();
+    this.pendingProps.clear();
     const changed = [];
     for (const o of dynamicObjects(this.state)) {
       const packed = packObject(o),

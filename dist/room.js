@@ -1,37 +1,71 @@
 import * as T from "three";
-import { ROOM, floorBack, screenPoint } from "./layout.js";
+import { ROOM, floorBack, wallZ } from "./layout.js";
 
-export const ROOM_TARGET = new T.Vector3(0, 1.4, -1);
+export const ELEVATION = { min: 15, max: 45, initial: 30 };
 
-// Fit once on resize, for the complete 30–80° range. Changing the angle never
-// changes the lens or distance, and floor/wall always use the same camera.
-export function roomDistance(aspect, fov = 43) {
-  const tan = Math.tan(T.MathUtils.degToRad(fov / 2));
-  const points = [];
-  for (const x of [-ROOM.halfWidth, 0, ROOM.halfWidth]) {
-    points.push(new T.Vector3(x, 0, ROOM.front));
-    points.push(new T.Vector3(x, 0, floorBack(x)));
-  }
-  for (const x of [-10.5, 0, 10.5]) {
-    const p = screenPoint(x, ROOM.wallHeight);
-    points.push(new T.Vector3(p.x, p.y, p.z));
-  }
-  let distance = 0;
-  for (let degrees = 30; degrees <= 80; degrees += 2) {
-    const el = T.MathUtils.degToRad(degrees);
-    for (const p of points) {
-      const dy = p.y - ROOM_TARGET.y,
-        dz = p.z - ROOM_TARGET.z;
-      const depth = dy * Math.sin(el) + dz * Math.cos(el);
-      const vertical = dy * Math.cos(el) - dz * Math.sin(el);
-      distance = Math.max(
-        distance,
-        depth + Math.abs(p.x) / (tan * aspect * 0.94),
-        depth + Math.abs(vertical) / (tan * (vertical < 0 ? 0.82 : 0.94)),
-      );
+// The camera looks down at the given angle to the floor and is placed so the near corners of the
+// floor sit exactly in the bottom corners of the viewport. On portrait screens the floor is framed
+// as for a square one, so it stays large and its near corners run past the sides.
+export function fitRoomCamera(camera, degrees) {
+  const aspect = Math.max(1, camera.aspect),
+    tilt = T.MathUtils.degToRad(degrees),
+    tan = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
+  const depth = ROOM.halfWidth / (tan * aspect),
+    rise = ROOM.halfWidth / aspect;
+  camera.position.set(
+    0,
+    depth * Math.sin(tilt) + rise * Math.cos(tilt),
+    ROOM.front + depth * Math.cos(tilt) - rise * Math.sin(tilt),
+  );
+  camera.rotation.set(-tilt, 0, 0);
+  camera.far = 400;
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld(true);
+  return camera;
+}
+
+// The wall's bottom corners are the far corners of the floor. Its height is chosen so the top is
+// near the top of the viewport, and its half-width narrows with height so the side edges look
+// vertical on screen (a vertical edge in the room would lean outward in this perspective).
+export function fitWall(camera, { top = 0.94, min = 4, max = 24, steps = 16 } = {}) {
+  const v = new T.Vector3(),
+    ndc = (x, y, z) => v.set(x, y, z).project(camera);
+  const W = ROOM.halfWidth,
+    targetX = ndc(W, 0, wallZ(W)).x;
+  const edgeAt = (y) => {
+    let w = W;
+    for (let i = 0; i < 12; i++) {
+      const p = ndc(w, y, wallZ(w));
+      if (!(p.x > 0) || p.z >= 1) break;
+      w = Math.max(W * 0.3, Math.min(W, (w * targetX) / p.x));
     }
+    return w;
+  };
+  const highest = (h) => {
+    const w = edgeAt(h);
+    let y = -Infinity;
+    for (const x of [0, w * 0.5, w]) {
+      const p = ndc(x, h, wallZ(x));
+      y = Math.max(y, p.z >= 1 ? Infinity : p.y);
+    }
+    return y;
+  };
+  let lo = min,
+    hi = max;
+  if (highest(max) <= top) lo = max;
+  else
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      if (highest(mid) <= top) lo = mid;
+      else hi = mid;
+    }
+  const height = lo,
+    edges = [];
+  for (let i = 0; i <= steps; i++) {
+    const y = (height * i) / steps;
+    edges.push([y, edgeAt(y)]);
   }
-  return distance;
+  return { height, edges };
 }
 
 export function createFloor(scene) {
@@ -56,14 +90,12 @@ export function createFloor(scene) {
   floor.userData.kind = "floor";
   scene.add(floor);
   const lines = [];
-  for (let x = -14; x <= 14; x += 1.4)
+  for (let x = -14; x <= 14.01; x += 1.4)
     lines.push(x, 0.008, floorBack(x), x, 0.008, ROOM.front);
-  for (let z = -11.2; z <= 9.9; z += 1.4) {
+  for (let z = ROOM.back + 0.8; z <= ROOM.front - 0.4; z += 1.4) {
     let halfWidth = ROOM.halfWidth;
     if (z < floorBack(ROOM.halfWidth))
-      halfWidth = Math.sqrt(
-        Math.max(0, ROOM.radius ** 2 - ROOM.eyeY ** 2 - (ROOM.eyeZ - z) ** 2),
-      );
+      halfWidth = Math.sqrt(Math.max(0, ROOM.radius ** 2 - (ROOM.eyeZ - z) ** 2));
     lines.push(-halfWidth, 0.008, z, halfWidth, 0.008, z);
   }
   const grid = new T.BufferGeometry();

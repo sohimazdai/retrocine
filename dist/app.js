@@ -16,20 +16,31 @@ import {
   clamp,
   inside,
   LIMITS,
+  SPRINT,
 } from "./physics.js";
 import { animateRig, startAction } from "./animation.js";
 import { EmotionEffects, EMOTIONS } from "./emotions.js";
-import { ROOM, floorBack, fitNoteText } from "./layout.js";
+import { ROOM, floorBack, fitNoteText, setWallShape } from "./layout.js";
 import {
   createFloor,
-  roomDistance,
-  ROOM_TARGET,
+  fitRoomCamera,
+  fitWall,
+  ELEVATION,
   framePortrait,
 } from "./room.js";
 import { Playground } from "./playground.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { BIG, obstacles } from "./world.js";
+import { BIG, obstacles, PROPS } from "./world.js";
+import {
+  PROJECTILES,
+  projectile,
+  launchVelocity,
+  CHARGE_MAX,
+  CHARGE_TIME,
+  PROJECTILE_GRAVITY,
+} from "./projectiles.js";
+import { Effects, projectileMesh } from "./effects.js";
 import {
   createState,
   serializeState,
@@ -37,10 +48,12 @@ import {
   unpackObject,
   findObject,
   timerLeft,
+  stepPushes,
 } from "./state.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
 import { Media } from "./media.js";
 import { apiUrl, currentRoom, roomLink } from "./config.js";
+import { MAPS, mapInfo, DEFAULT_MAP } from "./maps.js";
 const $ = (s) => document.querySelector(s),
   $$ = (s) => [...document.querySelectorAll(s)],
   esc = (s) =>
@@ -77,6 +90,8 @@ const icons = {
   help: '<circle cx="12" cy="12" r="9"/><path d="M9 8a3 3 0 0 1 6 0c0 2-3 2-3 5M12 17h.01"/>',
   invite:
     '<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-4.9M19 14v6M16 17h6"/>',
+  settings:
+    '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
 };
 $$("[data-icon]").forEach(
   (e) =>
@@ -179,27 +194,21 @@ const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 120),
   pointerNDC = new T.Vector2(),
   groundPlane = new T.Plane(new T.Vector3(0, 1, 0), 0),
   pointerWorld = new T.Vector3(0, 0, 7);
-let camElevation = 60,
-  baseDistance = roomDistance(innerWidth / innerHeight);
+let camElevation = ELEVATION.initial;
 let cinema = null,
   avatarEditor = null;
+// The near corners of the floor stay in the bottom corners of the viewport at every angle; the wall
+// is refitted so it spans the far edge of the floor and reaches the top of the viewport.
 function updateCamera() {
-  const d = baseDistance,
-    el = (camElevation * Math.PI) / 180;
-  camera.position.set(
-    0,
-    ROOM_TARGET.y + Math.sin(el) * d,
-    ROOM_TARGET.z + Math.cos(el) * d,
-  );
-  camera.lookAt(ROOM_TARGET);
-  camera.updateMatrixWorld();
+  fitRoomCamera(camera, camElevation);
+  const wall = fitWall(camera);
+  setWallShape(wall.height, wall.edges);
+  cinema?.reshape();
   cinema?.updateCamera(camera);
 }
 function resize() {
   renderer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
-  baseDistance = roomDistance(camera.aspect, camera.fov);
-  camera.far = Math.max(120, baseDistance + 40);
   camera.updateProjectionMatrix();
   updateCamera();
 }
@@ -295,7 +304,8 @@ function makePlayer(profile, pose) {
 function drawLabel(p) {
   const cv = p.label.material.map.image,
     c = cv.getContext("2d"),
-    name = (p.profile.name || "Вы") + (p === players[0] ? " · вы" : "");
+    base = p.profile.name || "Вы",
+    name = base + (p === players[0] && base !== "Вы" ? " · вы" : "");
   c.clearRect?.(0, 0, cv.width, cv.height);
   c.font = "600 50px system-ui, sans-serif";
   const w = Math.min(cv.width - 8, (c.measureText(name).width || 200) + 64);
@@ -468,7 +478,8 @@ function portraitCaption(p) {
   c.fillStyle = "#ffffff";
   c.textAlign = "center";
   c.textBaseline = "middle";
-  c.fillText((p.profile.name || "Вы") + (p.profile.id === "self" ? " · вы" : ""), 192, 34);
+  const base = p.profile.name || "Вы";
+  c.fillText(base + (p.profile.id === "self" && base !== "Вы" ? " · вы" : ""), 192, 34);
   const texture = new T.CanvasTexture(cv);
   texture.colorSpace = T.SRGBColorSpace;
   const mesh = new T.Mesh(
@@ -777,82 +788,206 @@ function select(o) {
   selected = { kind: o.userData.kind, id: o.userData.id };
   highlight();
 }
-const snowMat = new T.MeshStandardMaterial({
-    color: "#faf5ff",
-    roughness: 0.8,
-  }),
-  snowGeo = new T.SphereGeometry(0.09, 12, 10),
-  particleGeo = new T.SphereGeometry(0.035, 6, 6);
-function throwSnow(hit) {
+// ——— Throwing: snowballs, tomatoes, tennis balls, rocks, bricks, grenades, fireballs ———
+const effects = new Effects(scene);
+let weapon = read("kino-weapon-v1", "snow");
+if (!PROJECTILES.some((k) => k.id === weapon)) weapon = "snow";
+const cooldownUntil = {},
+  shownBooms = new Set();
+let charge = null;
+const projectileId = () => Math.random().toString(36).slice(2, 12);
+function setWeapon(id) {
+  const kind = projectile(id);
+  weapon = kind.id;
+  try {
+    localStorage.setItem("kino-weapon-v1", JSON.stringify(weapon));
+  } catch {}
+  setTool("snow");
+  renderWeapon();
+  toast(`${kind.emoji} ${kind.label}${kind.cooldown >= 1 ? ` · раз в ${kind.cooldown} с` : ""}`, 1400);
+}
+function renderWeapon() {
+  const kind = projectile(weapon),
+    btn = $('[data-tool="snow"]');
+  if (!btn) return;
+  const icon = btn.querySelector("[data-icon], .weapon-emoji");
+  if (icon) icon.outerHTML = `<span class="weapon-emoji" aria-hidden="true">${kind.emoji}</span>`;
+  const tip = btn.querySelector(".tip");
+  if (tip) tip.textContent = `${kind.label} · клик, ПКМ — сильнее`;
+  btn.title = `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–7 — выбрать снаряд`;
+  if (!$("#weaponPicker").hidden) renderWeaponPicker();
+}
+function renderWeaponPicker() {
   const now = performance.now();
-  if (now - lastThrow < 240) return;
-  lastThrow = now;
+  $("#weaponPicker").innerHTML = PROJECTILES.map((k) => {
+    const left = Math.max(0, ((cooldownUntil[k.id] || 0) - now) / 1000);
+    return `<button data-weapon="${k.id}" class="${k.id === weapon ? "selected" : ""}" title="${k.label}"><span class="weapon-emoji">${k.emoji}</span><span class="weapon-name">${k.label}</span><kbd>${k.key}</kbd>${left > 0 ? `<i class="weapon-cd">${Math.ceil(left)}</i>` : ""}</button>`;
+  }).join("");
+}
+function toggleWeaponPicker(force) {
+  const open = force ?? $("#weaponPicker").hidden;
+  $("#weaponPicker").hidden = !open;
+  if (open) {
+    renderWeaponPicker();
+    const r = $('[data-tool="snow"]').getBoundingClientRect();
+    $("#weaponPicker").style.left = Math.max(8, r.left + r.width / 2 - 120) + "px";
+  }
+}
+// Cooldown shown on the throw button and in the picker.
+function renderCooldowns() {
+  const kind = projectile(weapon),
+    left = Math.max(0, (cooldownUntil[kind.id] || 0) - performance.now());
+  $('[data-tool="snow"]')?.style.setProperty("--cd", kind.cooldown >= 1 ? (left / (kind.cooldown * 1000)).toFixed(3) : 0);
+  if (!$("#weaponPicker").hidden) renderWeaponPicker();
+}
+function chargeLevel() {
+  return charge ? Math.min(1, (performance.now() - charge.start) / 1000 / CHARGE_TIME) : 0;
+}
+function throwSnow(hit, power = 1) {
+  const kind = projectile(weapon),
+    now = performance.now();
+  if (now < (cooldownUntil[kind.id] || 0)) {
+    if (kind.cooldown >= 1) toast(`${kind.emoji} ${kind.label} будет готов${kind.id === "grenade" ? "а" : ""} через ${Math.ceil((cooldownUntil[kind.id] - now) / 1000)} с`, 1300);
+    return;
+  }
   let to = hit?.point.clone() || pointerWorld.clone();
   const targetOwner = hit && owner(hit.object);
   if (targetOwner?.userData.kind === "avatar") {
     const p = players.find((p) => p.profile.id === targetOwner.userData.id);
     to.set(p.x, p.y + 1.05, p.z);
   }
-  if (startAction(active, "throw", worldTime, { to }))
-    net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3) });
+  const pid = projectileId();
+  if (startAction(active, "throw", worldTime, { to, w: kind.id, pw: power, pid })) {
+    cooldownUntil[kind.id] = now + kind.cooldown * 1000;
+    net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid });
+    renderCooldowns();
+  }
 }
-function releaseSnow(player, to) {
+function releaseSnow(player, payload) {
+  const kind = projectile(payload.w);
+  let to = payload.to;
   const from = new T.Vector3(player.x, player.y + 1.08, player.z);
   if (to.distanceTo(from) < 0.6)
-    to = new T.Vector3(
-      player.x + Math.sin(player.angle) * 3,
-      0.2,
-      player.z + Math.cos(player.angle) * 3,
-    );
+    to = new T.Vector3(player.x + Math.sin(player.angle) * 3, 0.2, player.z + Math.cos(player.angle) * 3);
   const direction = to.clone().sub(from);
   direction.y = 0;
   direction.normalize();
   from.addScaledVector(direction, 0.5);
-  const time = clamp(from.distanceTo(to) / 19, 0.18, 0.85),
-    v = to.clone().sub(from).divideScalar(time);
-  v.y += 6 * time;
-  const mesh = new T.Mesh(snowGeo, snowMat);
+  const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1),
+    v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g);
+  const mesh = projectileMesh(kind);
   mesh.position.copy(from);
-  mesh.castShadow = true;
   scene.add(mesh);
-  projectiles.push({ mesh, v, age: 0, owner: player.profile.id });
+  projectiles.push({
+    mesh,
+    v: new T.Vector3(v.x, v.y, v.z),
+    age: 0,
+    owner: player.profile.id,
+    kind,
+    g,
+    pid: payload.pid,
+    bounces: 0,
+    spin: new T.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
+  });
 }
-function burst(pos, kind, snowOwner = "self") {
-  for (let i = 0; i < 10; i++) {
-    const m = new T.Mesh(particleGeo, snowMat);
-    m.position.copy(pos);
-    scene.add(m);
-    particles.push({
-      mesh: m,
-      v: new T.Vector3(
-        (Math.random() - 0.5) * 3,
-        Math.random() * 2,
-        (Math.random() - 0.5) * 3,
-      ),
-      age: 0,
-    });
-  }
+const IMPACT_COLORS = { snow: "#faf5ff", tomato: "#d1352a", tennis: "#d8ef4a", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a" };
+// What a projectile does where it lands: a puff or a splat, a push for loose objects (thrower only)
+// and a knock for avatars (each avatar's owner applies it, so it travels with their pose).
+function burst(pos, kind, snowOwner = "self", pr = null) {
+  const k = pr?.kind || projectile("snow"),
+    speed = pr ? pr.v.length() : 12,
+    normal = pr?.normal || new T.Vector3(0, 1, 0);
+  if (k.splat) {
+    const parent = kind?.userData.kind === "avatar" || ["cube", "ball", "big", "structure"].includes(kind?.userData.kind) ? kind : null;
+    effects.splat(pos, normal, k.splat, parent);
+    effects.puff(pos, k.splat, 6, 2.6, 0.03);
+  } else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : k.id === "tennis" ? 3 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
   if (["cube", "ball"].includes(kind?.userData.kind) && snowOwner === "self") {
-    const c =
-      kind.userData.kind === "ball"
-        ? playground.ball
-        : cubes.find((c) => c.id === kind.userData.id);
-    if (c) kickObject(c, active, 3);
+    const c = kind.userData.kind === "ball" ? playground.ball : cubes.find((c) => c.id === kind.userData.id);
+    if (c) {
+      const dir = pr ? pr.v.clone().setY(0).normalize() : new T.Vector3(c.x - active.x, 0, c.z - active.z).normalize();
+      kickObject(c, { x: c.x - dir.x, z: c.z - dir.z }, clamp(k.impact * (speed / 12), 0.6, 9));
+    }
   }
   if (kind?.userData.kind === "avatar") {
     const p = players.find((p) => p.profile.id === kind.userData.id);
     if (p) {
       p.hit = 0.55;
-      // Only your own avatar hops; others hop on their screens and it arrives with their pose.
-      if (p === active && p.grounded) {
-        p.vy = 2.1;
-        p.grounded = false;
+      if (p === active) {
+        const knock = k.mass * speed * 0.35,
+          dir = pr ? pr.v.clone().setY(0).normalize() : new T.Vector3();
+        active.kx = (active.kx || 0) + dir.x * knock;
+        active.kz = (active.kz || 0) + dir.z * knock;
+        if (p.grounded) {
+          p.vy = Math.min(7, 2.1 + knock * 0.35);
+          p.grounded = false;
+        }
       }
     }
   }
   if (kind?.userData.kind === "note") kind.userData.wobble = 0.7;
   if (kind?.userData.kind === "screen" || kind?.userData.kind === "tile")
     screenGroup.userData.wobble = 0.35;
+}
+// Grenade fuse or fireball contact: the thrower reports the explosion, the server applies it to
+// everything and tells everyone. The thrower sees the blast at once.
+function explodeProjectile(pr, point) {
+  if (pr.owner !== "self") {
+    pr.mesh.visible = false;
+    setTimeout(() => {
+      if (!shownBooms.has(pr.pid) && !pr.boomed) {
+        pr.boomed = true;
+        effects.explosion(point, pr.kind.explosion.radius);
+      }
+    }, 900);
+    return;
+  }
+  shownBooms.add(pr.pid);
+  effects.explosion(point, pr.kind.explosion.radius);
+  op({ t: "boom", kind: pr.kind.id, pid: pr.pid, x: r3(point.x), y: r3(point.y), z: r3(point.z) });
+}
+function onBoom(m) {
+  const point = new T.Vector3(m.x, m.y, m.z);
+  const flying = projectiles.find((pr) => pr.pid && pr.pid === m.pid);
+  if (flying) {
+    flying.boomed = true;
+    scene.remove(flying.mesh);
+    projectiles.splice(projectiles.indexOf(flying), 1);
+  }
+  if (shownBooms.has(m.pid)) shownBooms.delete(m.pid);
+  else effects.explosion(point, m.r);
+  // Your own avatar is thrown by the blast; others are thrown on their screens.
+  const body = new T.Vector3(active.x, active.y + 0.8, active.z),
+    d = body.distanceTo(point);
+  if (d < m.r) {
+    const k = m.power * (1 - d / m.r),
+      dir = new T.Vector3(active.x - m.x, 0, active.z - m.z);
+    if (dir.lengthSq() < 1e-4) dir.set(Math.sin(active.angle), 0, Math.cos(active.angle));
+    dir.normalize();
+    active.kx = (active.kx || 0) + dir.x * k * 0.85;
+    active.kz = (active.kz || 0) + dir.z * k * 0.85;
+    active.vy = Math.max(active.vy, 3 + k * 0.6);
+    active.grounded = false;
+    active.hit = 0.9;
+    pending = null;
+  }
+  for (const p of remotes.values()) if (Math.hypot(p.x - m.x, p.z - m.z) < m.r) p.hit = 0.8;
+  for (const [, mesh] of noteMeshes)
+    if (Math.hypot(mesh.position.x - m.x, mesh.position.z - m.z) < m.r) mesh.userData.wobble = 0.9;
+  if (Math.abs(m.z - floorBack(m.x)) < m.r) screenGroup.userData.wobble = 0.5;
+  // Loose objects start flying at once; the server's state follows and corrects them.
+  if (net.connected)
+    for (const o of [...cubes, playground.ball]) {
+      const dx = o.x - m.x,
+        dz = o.z - m.z,
+        dist = Math.hypot(dx, dz, o.y - m.y);
+      if (dist > m.r) continue;
+      const k = m.power * (1 - dist / m.r),
+        len = Math.hypot(dx, dz) || 1;
+      o.vx += (dx / len) * k;
+      o.vz += (dz / len) * k;
+      o.vy = Math.max(o.vy, k * 0.7);
+    }
 }
 function doJump() {
   if (jump(active)) {
@@ -1014,7 +1149,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросить снежок</strong>Левый клик по сцене.<br>Персонажи поворачиваются к курсору.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Правая кнопка — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 30–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег — кнопка «Пригласить» или меню «k».</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>7</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с). Тяжёлое летит ближе.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 15–45°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -1206,22 +1341,9 @@ const actions = {
       "Эмоции",
       `<div class="emotion-picker">${EMOTIONS.map(([id, emoji, label]) => `<button data-emoji="${id}" aria-label="${label}"><span>${emoji}</span><strong>${label}</strong></button>`).join("")}</div>`,
     ),
-  view: () => {
-    modal(
-      "Ваш ракурс",
-      `<div class="label-row"><label for="elevation">Угол к полу</label><span id="elevationValue">${Math.round(camElevation)}°</span></div><input id="elevation" type="range" min="30" max="80" value="${camElevation}"><div class="modal-actions"><button class="secondary" id="resetView">Вернуть 60°</button><button class="primary" data-action="close">Готово</button></div>`,
-    );
-    $("#elevation").oninput = (e) => {
-      camElevation = +e.target.value;
-      $("#elevationValue").textContent = camElevation + "°";
-      updateCamera();
-    };
-    $("#resetView").onclick = () => {
-      camElevation = 60;
-      updateCamera();
-      $("#modal").close();
-    };
-  },
+  view: () => openSettings("view"),
+  settings: () => (settingsOpen() ? closeSettings() : openSettings()),
+  settingsClose: () => closeSettings(),
   room: () => roomModal(),
 };
 function contextAction(action) {
@@ -1294,8 +1416,14 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.action) actions[b.dataset.action]?.();
   if (b.dataset.tool) {
+    if (b.dataset.tool === "snow" && tool === "snow") toggleWeaponPicker();
+    else toggleWeaponPicker(false);
     setTool(b.dataset.tool);
     canvas.focus();
+  }
+  if (b.dataset.weapon) {
+    setWeapon(b.dataset.weapon);
+    toggleWeaponPicker(false);
   }
   if (b.dataset.context) contextAction(b.dataset.context);
   if (b.dataset.edit) noteModal(b.dataset.edit);
@@ -1354,6 +1482,15 @@ canvas.addEventListener("pointerdown", (e) => {
   }
   if (e.button === 2) {
     e.preventDefault();
+    if (tool === "snow") {
+      // Hold to wind up a stronger throw; a short tap still opens the object's actions.
+      charge = { start: performance.now(), x: e.clientX, y: e.clientY, target: o };
+      const ring = $("#chargeRing");
+      ring.hidden = false;
+      ring.style.left = e.clientX + "px";
+      ring.style.top = e.clientY + "px";
+      return;
+    }
     select(o);
     return;
   }
@@ -1425,9 +1562,9 @@ canvas.addEventListener("pointermove", (e) => {
   }
   if (orbitDrag) {
     camElevation = clamp(
-      orbitDrag.elevation + (e.clientY - orbitDrag.y) * 0.12,
-      30,
-      80,
+      orbitDrag.elevation + (e.clientY - orbitDrag.y) * 0.08,
+      ELEVATION.min,
+      ELEVATION.max,
     );
     updateCamera();
     return;
@@ -1537,6 +1674,29 @@ function endDrag() {
   canvas.classList.remove("dragging");
 }
 canvas.addEventListener("pointerup", endDrag);
+function cancelCharge() {
+  charge = null;
+  $("#chargeRing").hidden = true;
+}
+window.addEventListener("pointerup", (e) => {
+  if (e.button !== 2 || !charge) return;
+  const held = performance.now() - charge.start,
+    moved = Math.hypot(e.clientX - charge.x, e.clientY - charge.y),
+    target = charge.target,
+    level = chargeLevel();
+  cancelCharge();
+  if (held < 180 && moved < 6) {
+    select(target);
+    return;
+  }
+  throwSnow(e.target === canvas ? rayAt(e) : null, 1 + (CHARGE_MAX - 1) * level);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!charge) return;
+  const ring = $("#chargeRing");
+  ring.style.left = e.clientX + "px";
+  ring.style.top = e.clientY + "px";
+});
 canvas.addEventListener("pointercancel", endDrag);
 canvas.addEventListener("pointerleave", () => {
   $("#objectHint").hidden = true;
@@ -1555,7 +1715,11 @@ canvas.addEventListener(
     if (cinema.media?.share && owner(rayAt(e)?.object)?.userData.kind === "share") {
       cinema.zoomShare(Math.exp(-e.deltaY * 0.0015));
       updateShareTools();
-    }
+    } else if (Math.abs(e.deltaY) > 4)
+      throttled("wheel", () => {
+        const i = PROJECTILES.findIndex((k) => k.id === weapon);
+        setWeapon(PROJECTILES[(i + Math.sign(e.deltaY) + PROJECTILES.length) % PROJECTILES.length].id);
+      }, 160);
   },
   { passive: false },
 );
@@ -1576,6 +1740,9 @@ document.addEventListener("keydown", (e) => {
     keys.add(keyMap[e.code]);
     pending = null;
   }
+  if (e.key === "Shift") sprinting = true;
+  const digit = /^Digit([1-7])$/.exec(e.code);
+  if (digit && !e.repeat) setWeapon(PROJECTILES[+digit[1] - 1].id);
   if (e.code === "Space") {
     e.preventDefault();
     if (!e.repeat) doJump();
@@ -1585,6 +1752,10 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "KeyX") setTool("snow");
   if (e.code === "KeyN") setTool("note");
   if (e.code === "KeyC") setTool("cube");
+  if (e.code === "Escape" && settingsOpen()) {
+    closeSettings();
+    return;
+  }
   if (e.code === "Escape") {
     closeContext();
     setTool("snow");
@@ -1592,9 +1763,12 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("keyup", (e) => {
   if (keyMap[e.code]) keys.delete(keyMap[e.code]);
+  if (e.key === "Shift") sprinting = false;
 });
 window.addEventListener("blur", () => {
   keys.clear();
+  sprinting = false;
+  cancelCharge();
   endDrag();
 });
 document.addEventListener("visibilitychange", () => {
@@ -1662,7 +1836,7 @@ function physics(dt) {
       oldX = p.x,
       oldZ = p.z;
     if (!p.remote) {
-      stepBody(p, move, obstacles, dt);
+      stepBody(p, move, obstacles, dt, sprinting && (move.x || move.z) ? SPRINT : 1);
       p.velocityX = (p.x - oldX) / dt;
       p.velocityZ = (p.z - oldZ) / dt;
       if (!wasGrounded && p.grounded) p.land = 0.2;
@@ -1671,7 +1845,7 @@ function physics(dt) {
       const age = worldTime - p.action.started;
       if (!p.action.released && age >= p.action.release) {
         p.action.released = true;
-        if (p.action.type === "throw") releaseSnow(p, p.action.payload.to);
+        if (p.action.type === "throw") releaseSnow(p, p.action.payload);
         if (p.action.type === "kick" && p === active) {
           const c = p.action.payload.cube;
           if (
@@ -1719,34 +1893,77 @@ function physics(dt) {
     );
     react("firework");
   }
+  updatePushing(move, dt);
   const removal = [];
-  for (const snow of projectiles) {
-    const old = snow.mesh.position.clone();
-    snow.age += dt;
-    snow.v.y -= 12 * dt;
-    snow.mesh.position.addScaledVector(snow.v, dt);
-    const delta = snow.mesh.position.clone().sub(old);
-    const dist = delta.length();
-    raycaster.set(old, delta.normalize());
-    raycaster.far = dist + 0.09;
-    const hit = raycaster
-      .intersectObjects(
-        pickables.filter((o) => o.userData.id !== snow.owner),
-        true,
-      )
-      .find((h) => visibleObject(h.object));
-    if (hit || snow.mesh.position.y < 0.08 || snow.age > 3) {
-      if (snow.age < 3)
-        burst(
-          hit?.point || snow.mesh.position,
-          hit && owner(hit.object),
-          snow.owner,
-        );
-      removal.push(snow);
+  for (const pr of projectiles) {
+    const k = pr.kind,
+      pos = pr.mesh.position,
+      old = pos.clone();
+    pr.age += dt;
+    if (!pr.resting) {
+      pr.v.y -= pr.g * dt;
+      pos.addScaledVector(pr.v, dt);
+      if (k.id !== "fireball") {
+        pr.mesh.rotation.x += pr.spin.x * dt;
+        pr.mesh.rotation.y += pr.spin.y * dt;
+        pr.mesh.rotation.z += pr.spin.z * dt;
+      }
     }
+    if (k.id === "fireball") {
+      if (Math.random() < 0.8) effects.ember(pos);
+      pr.mesh.userData.flame?.scale.setScalar(k.radius * (1 + Math.sin(pr.age * 40) * 0.12));
+    }
+    if (k.id === "grenade" && pr.mesh.userData.spark)
+      pr.mesh.userData.spark.visible = Math.sin(pr.age * (8 + pr.age * 10)) > 0;
+    let hit = null;
+    const delta = pos.clone().sub(old),
+      dist = delta.length();
+    if (dist > 1e-6) {
+      raycaster.set(old, delta.divideScalar(dist));
+      raycaster.far = dist + k.radius;
+      hit = raycaster
+        .intersectObjects(pickables.filter((o) => o.userData.id !== pr.owner || pr.age > 0.3), true)
+        .find((h) => visibleObject(h.object));
+    }
+    if (!hit && !pr.resting && pos.y < k.radius)
+      hit = { point: new T.Vector3(pos.x, 0, pos.z), object: floor, face: null };
+    if (hit) {
+      const target = owner(hit.object);
+      pr.normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new T.Vector3(0, 1, 0);
+      if (pr.normal.dot(pr.v) > 0) pr.normal.negate();
+      if (k.explodeOnContact) {
+        explodeProjectile(pr, hit.point);
+        if (pr.owner === "self") removal.push(pr);
+        else pr.resting = true;
+        continue;
+      }
+      if (pr.v.length() > 2.5 || !k.bounce) burst(hit.point, target, pr.owner, pr);
+      if (k.bounce && pr.bounces < 7 && pr.v.length() > 1.4) {
+        const vn = pr.v.dot(pr.normal);
+        pr.v.addScaledVector(pr.normal, -(1 + k.bounce) * vn).multiplyScalar(0.82);
+        pos.copy(hit.point).addScaledVector(pr.normal, k.radius + 0.01);
+        pr.bounces++;
+        pr.spin.multiplyScalar(0.7);
+      } else if (k.fuse) {
+        pr.resting = true;
+        pr.v.set(0, 0, 0);
+        pos.copy(hit.point).addScaledVector(pr.normal, k.radius);
+      } else {
+        removal.push(pr);
+        continue;
+      }
+    }
+    if (k.fuse && pr.age >= k.fuse) {
+      explodeProjectile(pr, pos.clone());
+      removal.push(pr);
+      continue;
+    }
+    if ((!k.fuse && pr.age > (k.life || 3)) || pos.y < -3 || (pr.resting && pr.owner !== "self" && pr.age > 6))
+      removal.push(pr);
   }
   raycaster.far = Infinity;
   for (const s of removal) {
+    if (!projectiles.includes(s)) continue;
     scene.remove(s.mesh);
     projectiles.splice(projectiles.indexOf(s), 1);
   }
@@ -1769,6 +1986,12 @@ function physics(dt) {
   }
 }
 function visual(dt) {
+  effects.update(dt);
+  if (charge) {
+    const ring = $("#chargeRing");
+    ring.style.setProperty("--p", chargeLevel().toFixed(3));
+    ring.classList.toggle("full", chargeLevel() >= 1);
+  }
   // Remote avatars are sampled once per rendered frame, so their motion is as smooth as the display.
   for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
@@ -1802,6 +2025,8 @@ function visual(dt) {
         action: p.action,
         emote: p.emote,
         hit: p.hit,
+        pushing: p === active ? pushState : p.flags?.ps || 0,
+        charge: p === active ? chargeLevel() : p.flags?.c || 0,
         seed: p.x * 0.13,
         lookPitch: p.remote
           ? 0.06
@@ -1916,32 +2141,67 @@ function throttled(key, fn, interval = 50) {
   fn();
 }
 // Moves a structure (or the big cube) and carries your avatar if it stands on top.
-function moveStructure(id, x, z) {
-  const carry = (colliders, dx, dz) => {
+function moveStructure(id, x, z, y = 0) {
+  const carry = (colliders, dx, dz, dy) => {
     if (
       active.grounded &&
       colliders.some((c) => Math.abs(active.y - c.h) < 0.02 && inside(active.x, active.z, c))
     ) {
       active.x += dx;
       active.z += dz;
+      active.y += dy;
     }
   };
   if (id === "big") {
-    carry([big], x - big.x, z - big.z);
+    carry([{ ...big, h: big.h + (big.y || 0) }], x - big.x, z - big.z, y - (big.y || 0));
     big.x = x;
     big.z = z;
-    bigGroup.position.set(x, 0, z);
+    big.y = y;
+    bigGroup.position.set(x, y, z);
     return;
   }
   const s = playground.structures.get(id);
   if (!s) return;
   carry(
-    s.localColliders.map((c) => ({ ...c, x: s.x + c.x, z: s.z + c.z })),
+    s.localColliders.map((c) => ({ ...c, x: s.x + c.x, z: s.z + c.z, h: c.h + (s.y || 0) })),
     x - s.x,
     z - s.z,
+    y - (s.y || 0),
   );
-  playground.move(id, x, z);
-  world.structures[id] = { x, z };
+  playground.move(id, x, z, y);
+  world.structures[id] = y ? { x, z, y } : { x, z };
+}
+// ——— Shift: sprint, push, lift ———
+let sprinting = false,
+  pushState = 0;
+const liftedBy = {};
+// Leaning into a prop with Shift shows the pushing pose; holding a lifted prop raises the arms.
+// Without a server the same rules run here, so pushing works offline too.
+function updatePushing(move, dt) {
+  const me = net?.id;
+  pushState = me && Object.values(liftedBy).some((by) => by.includes(me)) ? 2 : 0;
+  if (!sprinting) return;
+  if (!pushState && (move.x || move.z)) {
+    const len = Math.hypot(move.x, move.z);
+    for (const prop of PROPS) {
+      const pos = prop.id === "big" ? big : playground.structures.get(prop.id);
+      if (!pos || pos.y) continue;
+      const dx = active.x - (pos.x + prop.cx),
+        dz = active.z - (pos.z + prop.cz);
+      const gap = prop.round
+        ? Math.hypot(dx, dz) - prop.r
+        : Math.hypot(Math.max(0, Math.abs(dx) - prop.hw), Math.max(0, Math.abs(dz) - prop.hd));
+      if (gap < 0.55 && active.y < prop.h - 0.1 && (move.x * -dx + move.z * -dz) / len / (Math.hypot(dx, dz) || 1) > 0.4) {
+        pushState = 1;
+        break;
+      }
+    }
+  }
+  if (!net?.connected) {
+    const len = Math.hypot(move.x, move.z) || 1;
+    for (const m of stepPushes(world, [{ id: "self", x: active.x, y: active.y, z: active.z, mx: move.x / len, mz: move.z / len }], dt))
+      moveStructure(m.id, m.x, m.z, m.y || 0);
+  }
 }
 function updateRemote(p, dt) {
   const renderAt = clockNow() - p.buffer.delay();
@@ -1964,7 +2224,7 @@ function updateRemote(p, dt) {
 }
 function remoteEvent(p, ev) {
   if (ev.k === "throw" && Array.isArray(ev.to))
-    startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to) });
+    startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to), w: ev.w || "snow", pw: ev.pw || 1, pid: ev.pid });
   if (ev.k === "kick")
     startAction(p, "kick", worldTime, { cube: findObject(world, ev.target) || null });
   if (ev.k === "emote") emotionEffects.start(p, ev.e, worldTime);
@@ -1973,7 +2233,7 @@ let lastPoseSent = -Infinity,
   lastPose = null,
   movedAt = -Infinity;
 function currentPose() {
-  return {
+  const pose = {
     x: r3(active.x),
     y: r3(active.y),
     z: r3(active.z),
@@ -1981,6 +2241,15 @@ function currentPose() {
     vy: Math.round(active.vy * 100) / 100,
     g: active.grounded ? 1 : 0,
   };
+  if (sprinting) {
+    const mv = movement(),
+      len = Math.hypot(mv.x, mv.z) || 1;
+    pose.sh = 1;
+    pose.m = [Math.round((mv.x / len) * 100) / 100, Math.round((mv.z / len) * 100) / 100];
+  }
+  if (pushState) pose.ps = pushState;
+  if (charge) pose.c = Math.round(chargeLevel() * 10) / 10;
+  return pose;
 }
 // Up to 30 poses a second while moving (plus a few after stopping so others land exactly),
 // one per second while idle.
@@ -1993,7 +2262,11 @@ function sendPose(now) {
     lastPose.y !== pose.y ||
     lastPose.z !== pose.z ||
     lastPose.g !== pose.g ||
-    Math.abs(lastPose.a - pose.a) > 0.02;
+    Math.abs(lastPose.a - pose.a) > 0.02 ||
+    lastPose.sh !== pose.sh ||
+    String(lastPose.m) !== String(pose.m) ||
+    lastPose.ps !== pose.ps ||
+    lastPose.c !== pose.c;
   if (changed) movedAt = now;
   const since = now - lastPoseSent;
   const due = now - movedAt < 200 ? since >= POSE_INTERVAL : since >= HEARTBEAT;
@@ -2085,7 +2358,7 @@ function onWelcome(m) {
     toast(
       remotes.size
         ? `Вы в комнате. Здесь уже: ${[...remotes.values()].map((p) => p.profile.name).join(", ")}`
-        : "Вы в комнате одни. Пригласите коллег — кнопка «Пригласить» в меню «k»",
+        : "Вы в комнате одни. Пригласите коллег — ссылка в настройках (правый верхний угол)",
       5000,
     );
   }
@@ -2102,9 +2375,13 @@ function onServer(m, at) {
     case "leave":
       removeRemote(m.id);
       break;
-    case "pose":
-      remotes.get(m.id)?.buffer.push(m, m.s, clockNow());
+    case "pose": {
+      const p = remotes.get(m.id);
+      if (!p) break;
+      p.buffer.push(m, m.s, clockNow());
+      p.flags = { ps: m.ps || 0, c: m.c || 0 };
       break;
+    }
     case "profile":
       updateRemoteProfile(m.id, m.profile);
       break;
@@ -2142,7 +2419,11 @@ function onServer(m, at) {
       applyObjects(m);
       break;
     case "struct":
-      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z);
+      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z, m.y || 0);
+      liftedBy[m.id] = m.by || [];
+      break;
+    case "boom":
+      onBoom(m);
       break;
     case "goal": {
       world.score = playground.score = m.score;
@@ -2169,6 +2450,7 @@ function peopleNames() {
   return players.map((p) => (p === active ? `${p.profile.name || "Вы"} (вы)` : p.profile.name));
 }
 function renderPresence() {
+  refreshSettings();
   const chip = $("#netStatus");
   if (!chip) return;
   const s = net?.status || "offline";
@@ -2193,23 +2475,78 @@ async function copyLink() {
     await navigator.clipboard.writeText(link);
     toast("Ссылка на комнату скопирована — отправьте её коллегам", 3000);
   } catch {
-    roomModal();
+    openSettings("room");
     $("#roomLink")?.select();
   }
 }
-function roomModal() {
-  const online = net?.connected;
-  modal(
-    "Комната",
-    `<label class="field-label" for="roomLink">Ссылка-приглашение</label><div class="link-row"><input id="roomLink" readonly value="${esc(inviteLink())}"><button class="primary" data-context="copy">Скопировать</button></div><p class="modal-text">Все, кто откроет ссылку, попадут в эту комнату: увидят друг друга, стикеры и таймер, услышат голос.</p><label class="field-label">В комнате · ${players.length}</label><ul class="people">${players
-      .map(
-        (p) =>
-          `<li><span class="dot" style="background:${esc(p.profile.color || "#aaa")}"></span>${esc(p.profile.name || "Вы")}${p === active ? " <em>вы</em>" : ""}${p.speaking ? " 🔊" : ""}</li>`,
-      )
-      .join("")}</ul><div class="modal-actions"><button class="secondary" data-action="help">Управление</button><button class="secondary" data-action="newRoom">Новая комната</button><button class="primary" data-action="export">Скачать итоги</button></div><p class="modal-text">${online ? `Сервер api.sohimazdai.ru · задержка ${net.rtt ? Math.round(net.rtt) + " мс" : "измеряется"} · медиа ${mediaClient.ready ? "подключены" : "не подключены"}` : "Нет связи с сервером: изменения сохраняются только в этом браузере."}</p>`,
-  );
+// ——— Settings panel (top right): room, map, view angle, avatar ———
+function settingsOpen() {
+  return !$("#settings").hidden;
+}
+function peopleHTML() {
+  return players
+    .map(
+      (p) =>
+        `<li><span class="dot" style="background:${esc(p.profile.color || "#aaa")}"></span>${esc(p.profile.name || "Вы")}${p === active ? " <em>вы</em>" : ""}${p.speaking ? " <em>говорит</em>" : ""}</li>`,
+    )
+    .join("");
+}
+function connectionText() {
+  return net?.connected
+    ? `Сервер api.sohimazdai.ru · задержка ${net.rtt ? Math.round(net.rtt) + " мс" : "измеряется"} · звук и видео ${mediaClient?.ready ? "подключены" : "не подключены"}`
+    : "Нет связи с сервером: изменения сохраняются только в этом браузере.";
+}
+function renderSettings() {
+  const current = world.map || DEFAULT_MAP;
+  $("#settings").innerHTML = `<div class="settings-head"><h2>Настройки</h2><button class="close" data-action="settingsClose" aria-label="Закрыть настройки">×</button></div>
+<section data-section="room"><h3>Комната</h3>
+<label class="field-label" for="roomLink">Ссылка-приглашение</label><div class="link-row"><input id="roomLink" readonly value="${esc(inviteLink())}"><button class="primary" data-action="invite">Пригласить</button></div>
+<p class="settings-hint">Все, кто откроет ссылку, попадут в эту комнату: увидят друг друга, стикеры и таймер, услышат голос.</p>
+<label class="field-label">В комнате · <span id="peopleCount">${players.length}</span></label><ul class="people" id="peopleList">${peopleHTML()}</ul>
+<div class="settings-row"><button class="secondary" data-action="newRoom">Новая комната</button><button class="secondary" data-action="export">Скачать итоги</button></div>
+<p class="settings-hint" id="connectionText">${connectionText()}</p></section>
+<section data-section="map"><h3>Карта</h3><div class="map-grid">${MAPS.map(
+    (m) =>
+      `<button class="map-card${m.id === current ? " selected" : ""}" data-map="${m.id}" style="--map:${m.color}" aria-pressed="${m.id === current}"><strong>${esc(m.title)}</strong><span>${esc(m.description)}</span></button>`,
+  ).join("")}</div><p class="settings-hint">Карта общая: меняется сразу у всех в комнате. Стикеры остаются на месте.</p></section>
+<section data-section="view"><h3>Ракурс</h3><div class="label-row"><label for="elevation">Угол к полу</label><span id="elevationValue">${Math.round(camElevation)}°</span></div><input id="elevation" type="range" min="${ELEVATION.min}" max="${ELEVATION.max}" value="${camElevation}"><div class="settings-row"><button class="secondary" id="resetView">Вернуть ${ELEVATION.initial}°</button></div><p class="settings-hint">Также средняя кнопка мыши и движение вверх-вниз. Ракурс только ваш.</p></section>
+<section data-section="avatar"><h3>Аватар</h3><div class="avatar-row"><span class="dot" style="background:${esc(active.profile.color || "#aaa")}"></span><strong>${esc(active.profile.name || "Вы")}</strong><button class="secondary" data-action="avatar">Изменить внешность</button></div></section>`;
+  $("#elevation").oninput = (e) => {
+    camElevation = +e.target.value;
+    $("#elevationValue").textContent = camElevation + "°";
+    updateCamera();
+  };
+  $("#resetView").onclick = () => {
+    camElevation = ELEVATION.initial;
+    $("#elevation").value = camElevation;
+    $("#elevationValue").textContent = camElevation + "°";
+    updateCamera();
+  };
   $("#roomLink").onfocus = (e) => e.target.select();
 }
+function refreshSettings() {
+  if (!settingsOpen()) return;
+  $("#peopleList").innerHTML = peopleHTML();
+  $("#peopleCount").textContent = players.length;
+  $("#connectionText").textContent = connectionText();
+}
+function openSettings(section) {
+  renderSettings();
+  $("#settings").hidden = false;
+  $("#settingsBtn").setAttribute("aria-expanded", "true");
+  $("#settingsBtn").classList.add("on");
+  if (section) $(`#settings [data-section="${section}"]`)?.scrollIntoView?.({ block: "nearest" });
+}
+function closeSettings() {
+  $("#settings").hidden = true;
+  $("#settingsBtn").setAttribute("aria-expanded", "false");
+  $("#settingsBtn").classList.remove("on");
+  canvas.focus();
+}
+const roomModal = () => openSettings("room");
+document.addEventListener("pointerdown", (e) => {
+  if (settingsOpen() && !e.target.closest?.("#settings, #settingsBtn, #netStatus, dialog")) closeSettings();
+});
 function askName(then) {
   modal(
     "Как вас зовут?",
@@ -2302,10 +2639,12 @@ function frame(now) {
 setInterval(() => {
   renderTimer();
   status();
+  renderCooldowns();
 }, 250);
 requestAnimationFrame(frame);
 $("#loading").classList.add("hidden");
 setTimeout(() => $("#loading").remove(), 600);
 toast("WASD / стрелки — движение · Space — прыжок · клик — снежок", 6500);
 status();
+renderWeapon();
 startNetwork();

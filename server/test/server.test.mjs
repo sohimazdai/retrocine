@@ -292,3 +292,84 @@ test("LiveKit tokens are valid HS256 JWTs bound to the room and the peer", async
   a.close();
   await app.close();
 });
+
+test("Shift pushes: a light prop moves for one avatar, a heavy one needs several on its side", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port),
+    c = client(port);
+  await a.join("push");
+  await b.join("push");
+  await c.join("push");
+  const room = app.rooms.get("push");
+  const spool = { ...room.state.structures["spool-b"] }; // x 6.2, z 5.8, r 1.25
+  // A stands just right of the spool and pushes left (−x).
+  a.send({ t: "pose", x: spool.x + 1.5, y: 0, z: spool.z, a: 0, vy: 0, g: 1, sh: 1, m: [-1, 0] });
+  await b.wait((m) => m.t === "struct" && m.id === "spool-b" && m.x < spool.x - 0.2, 3000);
+  a.send({ t: "pose", x: spool.x + 1.5, y: 0, z: spool.z, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 120));
+  const pyramid = { ...room.state.structures.pyramid }; // 4.4 × 4.4, weight 3
+  const pushRight = (cl, dz) => cl.send({ t: "pose", x: pyramid.x - 2.5, y: 0, z: pyramid.z + dz, a: 0, vy: 0, g: 1, sh: 1, m: [1, 0] });
+  pushRight(a, 0);
+  pushRight(b, 1);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(room.state.structures.pyramid.x, pyramid.x, "two avatars are not enough for the pyramid");
+  pushRight(c, -1);
+  await a.wait((m) => m.t === "struct" && m.id === "pyramid" && m.x > pyramid.x + 0.1, 3000);
+  for (const cl of [a, b, c]) cl.close();
+  await app.close();
+});
+
+test("Shift lift: avatars on opposite sides lift a prop, carry it together and drop it on release", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("lift");
+  await b.join("lift");
+  const room = app.rooms.get("lift");
+  const s = { ...room.state.structures["spool-a"] }; // x −8.3, z 3.7, r 1.25, lift 2
+  const pose = (cl, x, z, extra) => cl.send({ t: "pose", x, y: 0, z, a: 0, vy: 0, g: 1, sh: 1, ...extra });
+  pose(a, s.x - 1.5, s.z, { m: [1, 0] });
+  pose(b, s.x + 1.5, s.z, { m: [-1, 0] });
+  const up = await a.wait((m) => m.t === "struct" && m.id === "spool-a" && m.y > 1, 3000);
+  assert.equal(up.by.length, 2);
+  // Both walk +z by 2 units: the spool follows their midpoint.
+  pose(a, s.x - 1.5, s.z + 2, { m: [0, 1] });
+  pose(b, s.x + 1.5, s.z + 2, { m: [0, 1] });
+  await a.wait((m) => m.t === "struct" && m.id === "spool-a" && Math.abs(m.z - (s.z + 2)) < 0.05, 3000);
+  a.send({ t: "pose", x: s.x - 1.5, y: 0, z: s.z + 2, a: 0, vy: 0, g: 1 });
+  const down = await b.wait((m) => m.t === "struct" && m.id === "spool-a" && m.y === 0, 3000);
+  assert.equal(down.by.length, 0);
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("grenades explode only when thrown, respect the cooldown and blast objects away", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("boom");
+  await b.join("boom");
+  const room = app.rooms.get("boom");
+  const ball = room.state.ball;
+  a.send({ t: "boom", kind: "grenade", pid: "fake", x: ball.x, y: 0.3, z: ball.z });
+  a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g1", pw: 1.3 });
+  a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g2" });
+  const thrown = await b.wait((m) => m.t === "act" && m.k === "throw");
+  assert.equal(thrown.w, "grenade");
+  assert.equal(thrown.pw, 1.3);
+  a.send({ t: "boom", kind: "grenade", pid: "g2", x: ball.x - 1, y: 0.3, z: ball.z });
+  a.send({ t: "boom", kind: "grenade", pid: "g1", x: ball.x - 1, y: 0.3, z: ball.z });
+  const boom = await b.wait((m) => m.t === "boom");
+  assert.equal(boom.pid, "g1");
+  assert.equal(boom.by, a.welcome.id);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(b.inbox.filter((m) => m.t === "act").length, 1, "second grenade within 10 s is refused");
+  assert.equal(b.inbox.filter((m) => m.t === "boom").length, 1, "fake and refused grenades do not explode");
+  const flying = await b.wait((m) => m.t === "objs" && m.o.some((o) => o[0] === "football" && o[4] > 1));
+  assert(flying);
+  a.close();
+  b.close();
+  await app.close();
+});

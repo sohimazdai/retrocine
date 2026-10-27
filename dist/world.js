@@ -2,7 +2,8 @@
 // No Three.js here: the server imports this file to run the same physics as the client.
 import { clamp, inside } from "./physics.js";
 
-export const BIG = { w: 2.8, d: 2.8, h: 1.65 };
+// weight: how many avatars (Shift) it takes to push it; lift: how many, from opposite sides, to lift it.
+export const BIG = { w: 2.8, d: 2.8, h: 1.65, weight: 2, lift: 3 };
 export const BIG_DEFAULT = { x: 2.4, z: -1.1 };
 export const BIG_BOUNDS = { x: 10, z: 7 };
 export const STRUCTURE_BOUNDS = { x: 10.7, zMin: -6.2, zMax: 7.3 };
@@ -34,6 +35,8 @@ export const GOAL_COLLIDERS = [
 export const STRUCTURES = [
   {
     id: "pyramid",
+    weight: 3,
+    lift: 4,
     label: "Пирамида",
     kind: "pyramid",
     x: -6.5,
@@ -47,6 +50,8 @@ export const STRUCTURES = [
   },
   {
     id: "spool-a",
+    weight: 1,
+    lift: 2,
     label: "Кабельная катушка",
     kind: "spool",
     x: -8.3,
@@ -57,6 +62,8 @@ export const STRUCTURES = [
   },
   {
     id: "spool-b",
+    weight: 1,
+    lift: 2,
     label: "Кабельная катушка",
     kind: "spool",
     x: 6.2,
@@ -67,6 +74,8 @@ export const STRUCTURES = [
   },
   {
     id: "goal",
+    weight: 1,
+    lift: 2,
     label: "Футбольные ворота",
     kind: "goal",
     x: 8.1,
@@ -93,14 +102,16 @@ export function defaultStructures() {
   return Object.fromEntries(STRUCTURES.map((s) => [s.id, { x: s.x, z: s.z }]));
 }
 // positions: { [id]: {x, z} } → world-space collider boxes.
+// A lifted prop floats at p.y: avatars can walk under it, or stand on top of it.
+const lifted = (c, y) => (y ? { ...c, y: (c.y || 0) + y, h: c.h + y } : c);
 export function structureColliders(positions) {
   return STRUCTURES.flatMap((s) => {
     const p = positions?.[s.id] || s;
-    return s.colliders.map((c) => ({ ...c, x: p.x + c.x, z: p.z + c.z }));
+    return s.colliders.map((c) => lifted({ ...c, x: p.x + c.x, z: p.z + c.z }, p.y));
   });
 }
 export function bigBox(big) {
-  return { ...BIG, x: big.x, z: big.z, id: "big" };
+  return lifted({ ...BIG, x: big.x, z: big.z, id: "big" }, big.y);
 }
 export function obstacles(big, positions) {
   return [bigBox(big), ...structureColliders(positions)];
@@ -171,3 +182,24 @@ export function supportHeight(x, z, big, positions) {
       .map((b) => b.h),
   );
 }
+
+// ——— Movable props: footprints for pushing and lifting ———
+function footprint(colliders) {
+  const round = colliders.length === 1 && colliders[0].shape === "cylinder";
+  if (round) return { round, r: colliders[0].radius, hw: colliders[0].radius, hd: colliders[0].radius, h: colliders[0].h };
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, h = 0;
+  for (const c of colliders) {
+    x0 = Math.min(x0, c.x - c.w / 2);
+    x1 = Math.max(x1, c.x + c.w / 2);
+    z0 = Math.min(z0, c.z - c.d / 2);
+    z1 = Math.max(z1, c.z + c.d / 2);
+    h = Math.max(h, c.h);
+  }
+  return { round, cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, hw: (x1 - x0) / 2, hd: (z1 - z0) / 2, h };
+}
+export const PROPS = [
+  { id: "big", label: "Большой куб", weight: BIG.weight, lift: BIG.lift, round: false, cx: 0, cz: 0, hw: BIG.w / 2, hd: BIG.d / 2, h: BIG.h },
+  ...STRUCTURES.map((s) => ({ id: s.id, label: s.label, weight: s.weight, lift: s.lift, cx: 0, cz: 0, ...footprint(s.colliders) })),
+];
+export const LIFT_HEIGHT = 1.75;
+export const PUSH_SPEED = 1.9;

@@ -217,7 +217,7 @@ export class Playground {
   }
   positions() {
     return Object.fromEntries(
-      [...this.structures].map(([id, s]) => [id, { x: s.x, z: s.z }]),
+      [...this.structures].map(([id, s]) => [id, s.y ? { x: s.x, z: s.z, y: s.y } : { x: s.x, z: s.z }]),
     );
   }
   colliders() {
@@ -229,11 +229,12 @@ export class Playground {
       s?.waypoints.map((p) => ({ ...p, x: p.x + s.x, z: p.z + s.z })) || []
     );
   }
-  move(id, x, z) {
+  move(id, x, z, y = 0) {
     const s = this.structures.get(id);
     s.x = x;
     s.z = z;
-    s.root.position.set(x, 0, z);
+    s.y = y;
+    s.root.position.set(x, y, z);
   }
   resetBall() {
     Object.assign(this.ball, ballResetPosition(this.goal));

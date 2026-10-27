@@ -1,5 +1,6 @@
 import * as T from "three";
 import { RoundedBoxGeometry } from "./vendor/RoundedBoxGeometry.js";
+import { CHARACTERS, dressCharacter, animateCharacter } from "./characters.js";
 
 const geometries = new Map(),
   materials = new Map();
@@ -72,7 +73,10 @@ function cylinder(parent, color, radiusTop, radiusBottom, height, x, y, z) {
       key,
       new T.CylinderGeometry(radiusTop, radiusBottom, height, 24),
     );
-  const mesh = new T.Mesh(geometries.get(key), material(color));
+  const mesh = new T.Mesh(
+    geometries.get(key),
+    typeof color === "string" ? material(color) : color,
+  );
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
   parent.add(mesh);
@@ -118,7 +122,7 @@ export const FOOTWEAR = [
   ["space", "Луноходы"],
   ["bare", "Босиком"],
 ];
-export const LOOKS = [
+const BASIC_LOOKS = [
   {
     id: "everyday",
     name: "На расслабоне",
@@ -186,7 +190,37 @@ export const LOOKS = [
     pantsColor: "#403a4b",
   },
 ];
+export const LOOKS = [
+  ...CHARACTERS,
+  ...BASIC_LOOKS.map((p) => ({
+    ...p,
+    category: "basic",
+    subtitle: "Свободная настройка",
+  })),
+];
+export function applyLook(profile, lookId) {
+  const preset = LOOKS.find((p) => p.id === lookId);
+  if (!preset) return { ...profile };
+  const { id, name, category, subtitle, ...look } = preset;
+  return normalizeProfile({
+    ...profile,
+    character: null,
+    skin: "#e4b59b",
+    hairColor: "#493339",
+    shoeColor: "#f0e9f0",
+    glasses: false,
+    ...look,
+    lookId: id,
+    id: profile.id,
+    name: profile.name,
+  });
+}
 export function normalizeProfile(profile) {
+  const preset = CHARACTERS.find((p) => p.id === profile.character);
+  if (preset) {
+    const { id, name, category, subtitle, ...defaults } = preset;
+    profile = { ...defaults, ...profile };
+  } else profile = { ...profile, character: null };
   const legacy = profile.hat || "headphones";
   return {
     ...profile,
@@ -403,7 +437,10 @@ export function avatar(input) {
   const mouthOpen = ball(mouth, "#5b3546", 0, 0, -0.004, 0.045, 0.038, 0.016);
   mouthOpen.visible = false;
   const flames = [];
-  if (p.hairstyle === "flame" && p.headwear !== "bear") {
+  const coveredHair =
+    p.headwear === "signature" &&
+    ["builder", "miner", "doctor", "samurai", "astronaut"].includes(p.character);
+  if (p.hairstyle === "flame" && p.headwear !== "bear" && !coveredHair) {
     const flameMaterials = ["#ff6230", "#ffa12e", "#ffe89a"].map(
       (c) =>
         new T.MeshStandardMaterial({
@@ -430,7 +467,7 @@ export function avatar(input) {
       head.add(flame);
       flames.push(flame);
     }
-  } else if (p.hairstyle !== "bald" && p.headwear !== "bear") {
+  } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
     box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
     box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
     for (let i = 0; i < 5; i++) {
@@ -534,11 +571,12 @@ export function avatar(input) {
     box(bear, 0.02, 0.09, 0.015, "#704e42", 0, -0.2, 0.575, 0.006);
   }
   root.userData = { kind: "avatar", id: p.id };
-  return {
+  const rig = {
     root,
     model,
     torso,
     head,
+    face,
     legs,
     knees,
     feet,
@@ -552,9 +590,12 @@ export function avatar(input) {
     flames,
     profile: p,
   };
+  dressCharacter(rig, p, { box, ball, material, cylinder, pivot });
+  return rig;
 }
 
 export function tickAccessories(rig, time) {
+  animateCharacter(rig, time);
   for (const flame of rig.flames || []) {
     const seed = flame.userData.seed;
     flame.scale.set(

@@ -83,7 +83,14 @@ export function createFloor(scene) {
 
 export function framePortrait(camera, rig) {
   rig.root.updateMatrixWorld(true);
-  const bounds = new T.Box3().setFromObject(rig.root);
+  const bounds = new T.Box3();
+  rig.root.traverseVisible((object) => {
+    if (!object.isMesh) return;
+    if (!object.geometry.boundingBox) object.geometry.computeBoundingBox();
+    bounds.union(
+      object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld),
+    );
+  });
   const size = bounds.getSize(new T.Vector3()),
     center = bounds.getCenter(new T.Vector3());
   const halfView = Math.max(size.y, size.x / camera.aspect) / 2 / 0.82;

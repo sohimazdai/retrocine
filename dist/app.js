@@ -465,7 +465,6 @@ function portraitTexture(p) {
   const current = renderer.getRenderTarget();
   renderer.setScissorTest(false);
   renderer.setRenderTarget(rt);
-  renderer.setViewport(0, 0, 384, 384);
   renderer.render(ps, pc);
   renderer.setRenderTarget(current);
   const old = portraits.get(p.profile.id);
@@ -1763,7 +1762,6 @@ function drawRoom(dt) {
         0.12,
       );
       renderer.setRenderTarget(portrait.target);
-      renderer.setViewport(0, 0, 384, 384);
       renderer.render(portrait.scene, portrait.camera);
     }
     renderer.setRenderTarget(null);

@@ -18,9 +18,10 @@ const html = fs.readFileSync(
   new URL("../dist/index.html", import.meta.url),
   "utf8",
 );
-function boot() {
+function boot({ pixelRatio = 1 } = {}) {
   const dom = new JSDOM(html, { url: "https://kino.test/" }),
     w = dom.window;
+  Object.defineProperty(w, "devicePixelRatio", { value: pixelRatio });
   let now = 0,
     raf;
   const canvasContext = {
@@ -30,6 +31,10 @@ function boot() {
     textBaseline: "",
     fillRect() {},
     fillText() {},
+    createImageData(width, height) {
+      return { data: new Uint8ClampedArray(width * height * 4) };
+    },
+    putImageData() {},
     measureText(t) {
       return {
         width:
@@ -40,6 +45,8 @@ function boot() {
     },
   };
   w.HTMLCanvasElement.prototype.getContext = () => canvasContext;
+  w.HTMLCanvasElement.prototype.toDataURL = () =>
+    "data:image/png;base64,iVBORw0KGgo=";
   w.HTMLCanvasElement.prototype.setPointerCapture = () => {};
   w.HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
@@ -53,11 +60,18 @@ function boot() {
       this.shadowMap = {};
       this.capabilities = { getMaxAnisotropy: () => 8 };
       this.target = null;
+      this.ratio = 1;
+      this.offscreenDraws = [];
     }
-    setPixelRatio() {}
-    setSize() {}
+    setPixelRatio(value) {
+      this.ratio = value;
+    }
+    setSize(width, height) {
+      this.setViewport(0, 0, width, height);
+    }
     setViewport(...rect) {
-      this.viewport = rect;
+      this.viewport = rect.map((v) => v * this.ratio);
+      this.defaultViewport = this.viewport;
     }
     setScissor() {}
     setScissorTest() {}
@@ -69,10 +83,22 @@ function boot() {
     }
     setRenderTarget(t) {
       this.target = t;
+      this.viewport = t ? [0, 0, t.width, t.height] : this.defaultViewport;
+    }
+    readRenderTargetPixels(target, x, y, width, height, pixels) {
+      pixels.fill(128);
     }
     render(s, c) {
       s.updateMatrixWorld(true);
       c.updateMatrixWorld(true);
+      if (this.target) {
+        this.offscreenDraws.push({
+          width: this.target.width,
+          height: this.target.height,
+          viewport: [...this.viewport],
+        });
+        if (this.offscreenDraws.length > 64) this.offscreenDraws.shift();
+      }
     }
   }
   const sandbox = {
@@ -82,7 +108,7 @@ function boot() {
     navigator: w.navigator,
     innerWidth: 1363,
     innerHeight: 936,
-    devicePixelRatio: 1,
+    devicePixelRatio: pixelRatio,
     performance: { now: () => now },
     setTimeout: () => 1,
     clearTimeout() {},
@@ -139,6 +165,86 @@ test("scene boot builds real meshes and a full viewport perspective camera", () 
   assert.equal(a.w.document.querySelector("header"), null);
   a.tick(0.2);
 });
+
+test("Retina renders portraits and gallery thumbnails into their full target without double scaling", () => {
+  const a = boot({ pixelRatio: 2 });
+  a.run("avatarModal()");
+  a.tick(0.02);
+  const portraits = a.run("renderer.offscreenDraws");
+  assert(portraits.length >= 6);
+  for (const draw of portraits)
+    assert.deepEqual(Array.from(draw.viewport), [0, 0, 384, 384]);
+  const thumbnails = a.run("avatarEditor.renderer.offscreenDraws");
+  assert(thumbnails.length > 0);
+  for (const draw of thumbnails)
+    assert.deepEqual(Array.from(draw.viewport), [0, 0, 160, 176]);
+  assert.equal(a.run("avatarEditor.renderer.getRenderTarget()"), null);
+  assert.deepEqual(
+    Array.from(a.run("avatarEditor.renderer.viewport")),
+    [0, 0, 720, 1000],
+  );
+  assert(
+    a.w.document
+      .querySelector('[data-look-thumbnail="six"]')
+      .src.startsWith("data:image/png"),
+  );
+  const renderer = a.run("avatarEditor.renderer");
+  a.run('$("#modal").close()');
+  assert.equal(renderer.disposed, true);
+});
+
+test("character gallery filters, previews, saves and cancels while preserving participant identity", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.run("avatarModal()");
+  assert.equal(d.querySelectorAll("[data-look]").length, 25);
+  const name = d.querySelector("#avatarName");
+  name.value = "Аня";
+  name.dispatchEvent(new a.w.Event("input", { bubbles: true }));
+  d.querySelector('[data-look-category="creatures"]').click();
+  assert.equal(d.querySelectorAll("[data-look]").length, 5);
+  const search = d.querySelector("#lookSearch");
+  search.value = "волк";
+  search.dispatchEvent(new a.w.Event("input", { bubbles: true }));
+  assert.equal(d.querySelectorAll("[data-look]").length, 1);
+  assert.equal(d.querySelector("#lookSearch"), search);
+  d.querySelector('[data-look="wolf"]').click();
+  assert.equal(a.run("avatarEditor.rig.root.userData.character"), "wolf");
+  assert.equal(a.run("avatarEditor.draft.name"), "Аня");
+  d.querySelector('[data-editor-tab="head"]').click();
+  d.querySelector('[data-choice="headwear"][data-value="cap"]').click();
+  const save = () =>
+    d
+      .querySelector("#avatarForm")
+      .dispatchEvent(
+        new a.w.Event("submit", { bubbles: true, cancelable: true }),
+      );
+  save();
+  const saved = JSON.parse(a.w.localStorage.getItem("kino-avatar-v1"));
+  assert.equal(saved.character, "wolf");
+  assert.equal(saved.headwear, "cap");
+  assert.equal(saved.name, "Аня");
+  assert.equal(saved.id, "self");
+  assert.equal(
+    a.run("portraits.get('self').avatar.root.userData.character"),
+    "wolf",
+  );
+  a.run("avatarModal()");
+  d.querySelector('[data-look="lego-boy"]').click();
+  a.run('$("#modal").close()');
+  assert.equal(a.run("active.profile.character"), "wolf");
+  assert.deepEqual(
+    JSON.parse(a.w.localStorage.getItem("kino-avatar-v1")),
+    saved,
+  );
+  a.run("avatarModal()");
+  d.querySelector('[data-look="everyday"]').click();
+  save();
+  assert.equal(a.run("active.profile.character"), null);
+  assert.equal(a.run("active.profile.name"), "Аня");
+  assert.equal(a.run("active.profile.id"), "self");
+});
+
 test("mouse click creates ballistic snow; keyboard moves and Space jumps", () => {
   const a = boot();
   a.tick(0.1);
@@ -257,7 +363,9 @@ test("enabling a camera preserves the square grid and applies cover UVs", () => 
 
 test("sharing moves all participants to the sides, preserving cameras, and restores the wall grid", () => {
   const a = boot();
-  a.run("camTexture=new T.Texture({videoWidth:1920,videoHeight:1080});screenUpdate()");
+  a.run(
+    "camTexture=new T.Texture({videoWidth:1920,videoHeight:1080});screenUpdate()",
+  );
   const cameraMap = a.run("screenTiles[0].material.map");
   a.run(
     "shareTexture=new T.Texture({videoWidth:1920,videoHeight:1080});displayStream={};screenUpdate()",

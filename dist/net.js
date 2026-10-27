@@ -56,7 +56,6 @@ export class Net {
           v: 1,
           room: this.room,
           uid: this.uid,
-          prev: this.id,
           profile: this.profile(),
           pose: this.pose?.(),
         }),

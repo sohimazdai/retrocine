@@ -101,6 +101,7 @@ test("notes, votes, timer and cubes are authoritative and reach every participan
   assert.equal(na.note.type, "idea");
   a.send({ t: "note.vote", id: na.note.id });
   const voted = await b.wait((m) => m.t === "note" && m.note.voters.length === 1);
+  assert.deepEqual(voted.note.voters, [a.welcome.voter], "votes are keyed by an opaque voter id");
   a.send({ t: "note.vote", id: na.note.id });
   await b.wait((m) => m.t === "note" && m.note.voters.length === 0 && b.inbox.indexOf(m) > b.inbox.indexOf(voted));
   a.send({ t: "note.move", id: na.note.id, x: -3, z: 4 });
@@ -214,13 +215,19 @@ test("room state persists across server restarts", async () => {
   await app.close();
 });
 
-test("reconnecting with the previous id keeps identity; full rooms and bad origins are refused", async () => {
+test("a browser keeps its identity across reconnects; full rooms and bad origins are refused", async () => {
   const { app, port } = await boot({ allowedOrigins: ["https://sohimazdai.ru", "http://localhost:*"] });
   const a = client(port, "https://sohimazdai.ru");
   const w = await a.join("ids", { uid: "browser-1" });
   const again = client(port, "http://localhost:8000");
-  const w2 = await again.join("ids", { uid: "browser-1", prev: w.id });
-  assert.equal(w2.id, w.id, "same browser takes over its identity");
+  const w2 = await again.join("ids", { uid: "browser-1" });
+  assert.equal(w2.id, w.id, "same browser keeps its identity");
+  assert.equal((await a.wait((m) => m.t === "error")).code, "replaced", "the older tab is told why it was disconnected");
+  assert(!JSON.stringify(w2).includes("browser-1"), "the secret uid is never sent back");
+  const other = client(port);
+  const w3 = await other.join("ids", { uid: "browser-2" });
+  assert.notEqual(w3.id, w.id);
+  other.close();
   const evil = client(port, "https://evil.example");
   await assert.rejects(evil.open());
   const many = [];

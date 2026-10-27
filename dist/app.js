@@ -106,6 +106,8 @@ if (typeof clientUid !== "string" || clientUid.length < 8) {
     localStorage.setItem("kino-client-v1", JSON.stringify(clientUid));
   } catch {}
 }
+// Votes are keyed by an opaque per-room id the server derives from clientUid.
+let myVoter = clientUid;
 const roomId = currentRoom(location, history);
 const API_URL = apiUrl(location),
   OFFLINE = API_URL === "off",
@@ -347,7 +349,7 @@ const ring = new T.Mesh(
 ring.rotation.x = -Math.PI / 2;
 scene.add(ring);
 const voteCount = (n) => (n.votes || 0) + (n.voters?.length || 0),
-  votedByMe = (n) => !!n.voters?.includes(clientUid);
+  votedByMe = (n) => !!n.voters?.includes(myVoter);
 function textureForNote(n) {
   const cv = document.createElement("canvas");
   cv.width = 640;
@@ -1888,7 +1890,7 @@ function op(msg) {
   }
   if (msg.t.startsWith("obj.")) return;
   const result = applyOp(world, msg, {
-    uid: clientUid,
+    uid: myVoter,
     peer: "self",
     name: active.profile.name || "Вы",
     now: clockNow(),
@@ -2051,6 +2053,7 @@ function applyObjects(m) {
 let placedOnce = false,
   welcomed = false;
 function onWelcome(m) {
+  myVoter = m.voter || clientUid;
   for (const p of players.slice(1)) removeRemote(p.profile.id, true);
   for (const peer of m.peers) addRemote(peer.id, peer.profile, peer.pose, true);
   const fresh = createState(m.state, uid);

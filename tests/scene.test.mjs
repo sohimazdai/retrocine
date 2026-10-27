@@ -60,7 +60,7 @@ function fakeServer(peers, notes) {
       if (m.t === "hello") {
         server.uid = m.uid;
         server.emit({
-          t: "welcome", id: "me", uid: m.uid, room: m.room, s: server.clock(),
+          t: "welcome", id: "me", voter: "voter-key", room: m.room, s: server.clock(),
           you: { pose: { x: -2.8, y: 0, z: 1.3, a: 0, vy: 0, g: 1 } },
           peers: structuredClone(peers),
           state: stateModule.serializeState(state),
@@ -69,7 +69,7 @@ function fakeServer(peers, notes) {
         });
       } else if (m.t === "ping") server.emit({ t: "pong", c: m.c, s: server.clock() });
       else if (stateModule.STATE_OPS.has(m.t)) {
-        const r = stateModule.applyOp(state, m, { uid: server.uid, peer: "me", name: "Вы", now: server.clock(), newId });
+        const r = stateModule.applyOp(state, m, { uid: "voter-key", peer: "me", name: "Вы", now: server.clock(), newId });
         if (r) for (const o of r.out) if (!o.others) server.emit(o.msg);
       }
     }

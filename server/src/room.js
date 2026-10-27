@@ -1,5 +1,5 @@
 // One room: who is in it, the shared state, the authoritative simulation of cubes and the ball.
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import {
   createState,
   serializeState,
@@ -18,6 +18,9 @@ const OBJECT_BROADCAST = 1 / 30;
 const ACTS = new Set(["throw", "kick", "emote", "jump"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
+// Stable per browser and room, without revealing the browser's secret uid to anyone.
+export const derivedId = (kind, room, uid, length) =>
+  createHash("sha256").update(`${kind}:${room}:${uid}`).digest("hex").slice(0, length);
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
 export function sanitizeProfile(p) {
@@ -63,7 +66,6 @@ export class Room {
     this.store = store;
     this.log = log;
     this.peers = new Map();
-    this.recent = new Map();
     this.state = createState(saved || {}, newId);
     this.dirty = false;
     this.saveTimer = null;
@@ -83,25 +85,23 @@ export class Room {
   }
   join(ws, hello, ip) {
     const uid = typeof hello.uid === "string" && /^[\w-]{6,64}$/.test(hello.uid) ? hello.uid : newId();
-    let id = null;
-    if (typeof hello.prev === "string") {
-      const live = this.peers.get(hello.prev);
-      if (live && live.uid === uid) {
-        // The same browser came back before its old socket timed out: take its place silently.
-        this.peers.delete(live.id);
-        live.replaced = true;
-        try {
-          live.ws.close(4001, "replaced");
-        } catch {}
-        id = live.id;
-      } else if (!live && this.recent.get(hello.prev)?.uid === uid) id = hello.prev;
+    // The same browser always gets the same id in a room, so identity (and the media session)
+    // survives reconnects and server restarts. A second tab of that browser takes over.
+    const id = derivedId("peer", this.id, uid, 12);
+    const live = this.peers.get(id);
+    if (live) {
+      this.peers.delete(id);
+      live.replaced = true;
+      try {
+        live.ws.send(JSON.stringify({ t: "error", code: "replaced", message: "Комната открыта в другой вкладке или на другом устройстве с этим браузером" }));
+        live.ws.close(4001, "replaced");
+      } catch {}
     }
     if (this.peers.size >= MAX_PEERS) return { error: "full" };
-    id ||= newId();
-    this.recent.delete(id);
     const peer = {
       id,
       uid,
+      voter: derivedId("vote", this.id, uid, 16),
       ws,
       ip,
       profile: sanitizeProfile(hello.profile),
@@ -127,7 +127,7 @@ export class Room {
     this.send(peer, {
       t: "welcome",
       id,
-      uid,
+      voter: peer.voter,
       room: this.id,
       s: now(),
       you: { pose: peer.pose },
@@ -144,8 +144,6 @@ export class Room {
   leave(peer) {
     if (this.peers.get(peer.id) !== peer) return;
     this.peers.delete(peer.id);
-    this.recent.set(peer.id, { uid: peer.uid, until: now() + 5 * 60e3 });
-    for (const [k, v] of this.recent) if (v.until < now()) this.recent.delete(k);
     for (const o of dynamicObjects(this.state))
       if (o.dragBy === peer.id) {
         o.dragBy = null;
@@ -210,7 +208,7 @@ export class Room {
     }
     if (!STATE_OPS.has(msg.t)) return;
     const result = applyOp(this.state, msg, {
-      uid: peer.uid,
+      uid: peer.voter,
       peer: peer.id,
       name: peer.profile.name,
       now: now(),

@@ -456,6 +456,7 @@ function portraitTexture(p) {
 }
 // The participant's name is drawn over the bottom of their square on the wall.
 const captionCamera = new T.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+captionCamera.position.z = 1;
 function portraitCaption(p) {
   const cv = document.createElement("canvas");
   cv.width = 384;

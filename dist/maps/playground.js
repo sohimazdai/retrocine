@@ -82,7 +82,7 @@ export default {
     },
     { id: "goal-left", kind: "goal", label: "Левые ворота", x: -12.3, z: 1.0, rot: Math.PI / 2, colliders: GOAL_COLLIDERS, goal: true, ballSpot: { x: 0, z: 4.3 }, colors: { post: "#f6f3ea", base: "#e4734f", net: "#ffffff" } },
     { id: "goal-right", kind: "goal", label: "Правые ворота", x: 12.3, z: 1.0, rot: -Math.PI / 2, colliders: GOAL_COLLIDERS, goal: true, ballSpot: { x: 0, z: 4.3 }, colors: { post: "#f6f3ea", base: "#3f7b8c", net: "#ffffff" } },
-    { id: "bench", kind: "bench", label: "Скамейка", x: 0, z: -9.9, weight: 1, lift: 2, colliders: [{ x: 0, z: 0, w: 2.2, d: 0.7, h: 0.5 }], waypoints: [{ x: 0, z: 0, h: 0.5 }] },
+    { id: "bench", kind: "kid-bench", label: "Скамейка", x: 0, z: -9.9, weight: 1, lift: 2, colliders: [{ x: 0, z: 0, w: 2.2, d: 0.7, h: 0.5 }], waypoints: [{ x: 0, z: 0, h: 0.5 }] },
   ],
   balls: [
     { id: "football", kind: "football", x: 0, z: 1.0, home: true },

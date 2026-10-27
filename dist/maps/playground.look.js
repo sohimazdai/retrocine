@@ -144,7 +144,7 @@ function seesaw(g, p) {
     plank.rotation.z = Math.atan2(tilt * SEESAW.swing * 2, c.w);
   };
 }
-function bench(g) {
+function kidBench(g) {
   const wood = mat("#e4a35a", { roughness: 0.7 }),
     frame = mat(BLUE, { roughness: 0.5 });
   for (let i = 0; i < 3; i++) mesh(g, new T.BoxGeometry(2.2, 0.06, 0.18), wood, 0, 0.46, -0.22 + i * 0.22);
@@ -155,7 +155,7 @@ registerProps({
   trampoline,
   hoop,
   seesaw,
-  bench,
+  "kid-bench": kidBench,
   goal: (g, p) => goal(g, p, p.colors),
 });
 

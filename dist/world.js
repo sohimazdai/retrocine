@@ -24,6 +24,7 @@ export const BALLS = {
   barrel: { size: 0.8, restitution: 0.2, friction: 3.2, label: "Бочка" },
   mug: { size: 0.28, restitution: 0.1, friction: 0.5, label: "Кружка" },
   paintball: { size: 0.5, restitution: 0.55, friction: 1.6, label: "Мяч" },
+  cone: { size: 0.5, restitution: 0.25, friction: 3.6, label: "Конус" },
 };
 
 // Props may be turned by quarter turns (rot, radians). Same convention as Object3D.rotation.y.
@@ -125,6 +126,9 @@ export function makeBall(def) {
   };
 }
 export const defaultBalls = (map) => (map.balls || []).map(makeBall);
+// Skateboards, scooters and bikes: free ones stand where they were left; by — who rides it.
+export const RIDE_KINDS = ["skateboard", "scooter", "bike"];
+export const defaultRides = (map) => (map.rides || []).map((r) => ({ id: r.id, kind: r.kind, x: r.x, z: r.z, a: r.a || 0, by: null }));
 export function makeCube({ id, x, z, y, color }) {
   return { id, x, z, y: y ?? CUBE_SIZE / 2, size: CUBE_SIZE, color, vx: 0, vy: 0, vz: 0, spin: 0, rotation: 0 };
 }

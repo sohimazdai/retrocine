@@ -10,6 +10,7 @@ import {
   STATE_OPS,
   stepPushes,
   stateMap,
+  releaseRides,
 } from "../../dist/state.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
 import { projectile, PROJECTILES } from "../../dist/projectiles.js";
@@ -19,7 +20,7 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -64,6 +65,10 @@ export function sanitizePose(p) {
     pose.m = p.m.map((v) => Math.round(clamp(v, -1, 1) * 100) / 100);
   if (p.ps === 1 || p.ps === 2) pose.ps = p.ps;
   if (Number.isFinite(p.c) && p.c > 0) pose.c = Math.round(clamp(p.c, 0, 1) * 10) / 10;
+  // Riding: which ride, the flip in progress (0…1), grinding a rail.
+  if (typeof p.rd === "string" && /^[\w-]{1,24}$/.test(p.rd)) pose.rd = p.rd;
+  if (Number.isFinite(p.fl) && p.fl >= 0) pose.fl = Math.round(clamp(p.fl, 0, 1) * 100) / 100;
+  if (p.gr === 1) pose.gr = 1;
   return pose;
 }
 function spawnPose(state) {
@@ -81,6 +86,8 @@ export class Room {
     this.log = log;
     this.peers = new Map();
     this.state = createState(saved || {}, newId);
+    // Nobody is riding anything in a room that was just loaded.
+    for (const r of this.state.rides) r.by = null;
     this.dirty = false;
     this.saveTimer = null;
     this.physTimer = null;
@@ -167,6 +174,7 @@ export class Room {
         o.dragBy = null;
         this.startPhysics();
       }
+    for (const ride of releaseRides(this.state, peer.id, peer.pose)) this.broadcast({ t: "ride", ride });
     this.broadcast({ t: "leave", id: peer.id });
     this.log(`room ${this.id}: ${peer.id} left, ${this.peers.size} inside`);
   }
@@ -231,6 +239,10 @@ export class Room {
           }
         }
         if ((msg.k === "kick" || msg.k === "shoot") && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
+        if (msg.k === "trick") {
+          if (typeof msg.n !== "string") return;
+          out.n = msg.n.slice(0, 60);
+        }
         if (msg.k === "emote") {
           if (typeof msg.e !== "string") return;
           out.e = msg.e.slice(0, 16);
@@ -249,6 +261,7 @@ export class Room {
     const result = applyOp(this.state, msg, {
       uid: peer.voter,
       peer: peer.id,
+      pose: peer.pose,
       name: peer.profile.name,
       now: now(),
       newId,

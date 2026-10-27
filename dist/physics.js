@@ -124,12 +124,16 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
       }
     }
   for (const b of boxes) resolveHorizontal(body, b);
-  // Slopes: walk up gentle ones; a side higher than a step blocks like a wall.
+  // Slopes: walk up gentle ones; a side higher than a step, or one too steep to walk (the top of a
+  // quarter pipe), blocks like a wall.
+  const moved = Math.hypot(body.x - oldX, body.z - oldZ);
   for (const b of boxes) {
     if (!sloped(b) || !inside(body.x, body.z, b)) continue;
-    if (surfaceOf(b, body.x, body.z) > oldY + 0.55) {
-      if (!inside(oldX, body.z, b) || surfaceOf(b, oldX, body.z) <= oldY + 0.55) body.x = oldX;
-      else if (!inside(body.x, oldZ, b) || surfaceOf(b, body.x, oldZ) <= oldY + 0.55) body.z = oldZ;
+    const rise = surfaceOf(b, body.x, body.z) - oldY;
+    if (rise > 0.55 || rise > Math.max(0.004, moved * 1.2)) {
+      const ok = (x, z) => !inside(x, z, b) || surfaceOf(b, x, z) - oldY <= Math.min(0.55, Math.max(0.004, Math.hypot(x - oldX, z - oldZ) * 1.2));
+      if (ok(oldX, body.z)) body.x = oldX;
+      else if (ok(body.x, oldZ)) body.z = oldZ;
       else {
         body.x = oldX;
         body.z = oldZ;

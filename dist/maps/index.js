@@ -6,8 +6,9 @@ import playground from "./playground.js";
 import river from "./river.js";
 import paintball from "./paintball.js";
 import saloon from "./saloon.js";
+import skatepark from "./skatepark.js";
 
-export const MAPS = [cinema, maze, playground, river, paintball, saloon];
+export const MAPS = [cinema, maze, playground, river, paintball, saloon, skatepark];
 export const DEFAULT_MAP = "cinema";
 export const mapDef = (id) => MAPS.find((m) => m.id === id) || MAPS[0];
 export const mapInfo = mapDef;

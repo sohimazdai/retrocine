@@ -31,6 +31,8 @@ import {
 } from "./room.js";
 import { MapScene } from "./mapscene.js";
 import { HitboxView } from "./hitboxes.js";
+import { stepRide, mountRide, rideInfo, surfaceUnder, gradient } from "./riding.js";
+import { buildRide, poseRide, disposeRide } from "./rides.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
@@ -256,6 +258,110 @@ function setHitboxes(on) {
 function showExplosion(point, radius) {
   effects.explosion(point, radius);
   hitboxes.blast(point, radius);
+}
+// ——— Skateboards, scooters, bikes ———
+const rideMeshes = new Map();
+const myRider = () => (net?.connected ? net.id : "self");
+function buildRides() {
+  for (const g of rideMeshes.values()) {
+    scene.remove(g);
+    disposeRide(g);
+    pickables = pickables.filter((o) => o !== g);
+  }
+  rideMeshes.clear();
+  for (const r of world.rides || []) {
+    const g = buildRide(r);
+    scene.add(g);
+    rideMeshes.set(r.id, g);
+    pickables.push(g);
+  }
+}
+const riderOf = (r) => (!r.by ? null : r.by === myRider() ? active : remotes.get(r.by) || null);
+// Slope under a rider along their heading (remote riders are tilted from their position).
+function slopePitch(p) {
+  const g = surfaceUnder(mapScene.colliders(), p.x, p.z, p.y + 0.05);
+  if (Math.abs(g.h - p.y) > 0.1) return 0;
+  const d = gradient(g.support, p.x, p.z);
+  return Math.atan(d.x * Math.sin(p.angle) + d.z * Math.cos(p.angle));
+}
+function updateRides(dt) {
+  for (const r of world.rides || []) {
+    const g = rideMeshes.get(r.id);
+    if (!g) continue;
+    const p = riderOf(r);
+    if (p) {
+      const own = p === active && p.ride;
+      if (!own) p.pitch = p.grounded ? slopePitch(p) : (p.pitch || 0) * Math.exp(-dt * 4);
+      poseRide(g, {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        angle: p.angle,
+        pitch: own ? p.ride.pitch : p.pitch,
+        lean: own ? p.ride.lean : 0,
+        speed: own ? p.ride.speed : Math.hypot(p.velocityX || 0, p.velocityZ || 0),
+        flip: own ? p.ride.flip : (p.flags?.fl ?? -1),
+        dt,
+      });
+    } else {
+      const h = surfaceUnder(mapScene.colliders(), r.x, r.z, 0.3).h;
+      poseRide(g, { x: r.x, y: h, z: r.z, angle: r.a, dt: 0 });
+    }
+  }
+}
+function nearestFreeRide(d = 1.7) {
+  return (world.rides || [])
+    .filter((r) => !r.by && Math.hypot(r.x - active.x, r.z - active.z) < d)
+    .sort((a, b) => Math.hypot(a.x - active.x, a.z - active.z) - Math.hypot(b.x - active.x, b.z - active.z))[0];
+}
+function takeRide(r) {
+  if (!r || r.by || active.ride) return;
+  op({ t: "ride.take", id: r.id });
+}
+// Off the ride: it stays where you are. A bail throws you off it.
+function leaveRide(bail = false) {
+  const st = active.ride;
+  if (!st) return;
+  delete active.ride;
+  const a = active.angle,
+    speed = st.speed || 0;
+  op({ t: "ride.leave", id: st.id, x: r3(active.x), z: r3(active.z), a: Math.round(a * 100) / 100 });
+  active.root.rotation.x = 0;
+  active.y = Math.max(active.y, 0);
+  if (bail) {
+    active.kx = Math.sin(a) * speed * 0.6;
+    active.kz = Math.cos(a) * speed * 0.6;
+    active.vy = Math.max(active.vy, 4);
+    active.grounded = false;
+    active.hit = 0.6;
+    toast("Падение! Подойдите и нажмите E, чтобы встать обратно", 2200);
+  } else {
+    active.x += Math.cos(a) * 0.5;
+    active.z -= Math.sin(a) * 0.5;
+  }
+}
+function onRide(r) {
+  const mine = (world.rides || []).find((x) => x.id === r.id);
+  if (!mine) return;
+  Object.assign(mine, r);
+  if (r.by === myRider() && !active.ride) {
+    pending = null;
+    Object.assign(active, { x: r.x, z: r.z });
+    mountRide(active, r);
+    active.y = surfaceUnder(mapScene.colliders(), r.x, r.z, active.y + 0.3).h;
+    const R = rideInfo(r.kind);
+    toast(`${R.label}: W A S D — ехать и рулить, Space — ${R.jump.toLowerCase()}, в воздухе A/D — вращение, Shift — ${R.flip.toLowerCase()}; рельсы — запрыгнуть вдоль. E — слезть`, 6000);
+  } else if (active.ride?.id === r.id && r.by !== myRider()) delete active.ride;
+}
+function rideEvents(events) {
+  for (const e of events) {
+    if (e.t === "bail") leaveRide(true);
+    if (e.t === "grind") effects.puff(new T.Vector3(active.x, active.y, active.z), "#ffd27a", 8, 3, 0.02);
+    if (e.t === "land" && e.score >= 40) {
+      toast(`${e.name} · +${e.score}`, 1800);
+      if (e.score >= 200) net.send({ t: "act", k: "trick", n: e.name });
+    }
+  }
 }
 const cubeMeshes = new Map(),
   noteMeshes = new Map();
@@ -751,6 +857,16 @@ function highlight() {
       (structure.waypoints.length ? '<button data-context="climb">Забраться</button>' : "") +
       (structure.movable ? '<button data-context="move">Переместить</button>' : "");
   }
+  if (obj.kind === "ride") {
+    const r = (world.rides || []).find((x) => x.id === obj.id);
+    label = rideInfo(r?.kind).label;
+    buttons = r?.by
+      ? r.by === myRider()
+        ? '<button data-context="unride">Слезть · E</button>'
+        : ""
+      : '<button data-context="ride">Прокатиться · E</button>';
+    if (r?.by && r.by !== myRider()) label += " · занят";
+  }
   if (obj.kind === "note") {
     label = "Стикер";
     buttons =
@@ -996,6 +1112,10 @@ function onBoom(m) {
     }
 }
 function doJump() {
+  if (active.ride) {
+    active.ride.ollie = true;
+    return;
+  }
   if (jump(active)) {
     active.land = 0;
     status();
@@ -1004,6 +1124,15 @@ function doJump() {
 // Within reach of your feet or hands: lets you knock a mug off the bar, too.
 const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y - p.y < 1.45 && c.y - p.y > -0.9;
 function kickNearest() {
+  if (active.ride) {
+    leaveRide();
+    return;
+  }
+  const ride = nearestFreeRide();
+  if (ride) {
+    takeRide(ride);
+    return;
+  }
   const near = dynamicObjects(world)
     .filter((c) => reachable(c, active))
     .sort(
@@ -1358,6 +1487,16 @@ function contextAction(action) {
   }
   if (!selected) return;
   const { kind, id } = selected;
+  if (action === "ride") {
+    const r = (world.rides || []).find((x) => x.id === id);
+    if (r && Math.hypot(r.x - active.x, r.z - active.z) < 2.2) takeRide(r);
+    else if (r) pending = { type: "ride", target: r, started: worldTime };
+    closeContext();
+  }
+  if (action === "unride") {
+    leaveRide();
+    closeContext();
+  }
   if (action === "kick") {
     const c = findObject(world, id);
     pending = { type: "kick", target: c, started: worldTime };
@@ -1733,7 +1872,11 @@ document.addEventListener("keydown", (e) => {
     keys.add(keyMap[e.code]);
     pending = null;
   }
-  if (e.key === "Shift") sprinting = true;
+  if (e.key === "Shift") {
+    if (active.ride) {
+      if (!e.repeat) active.ride.trick = true;
+    } else sprinting = true;
+  }
   const digit = /^Digit([1-7])$/.exec(e.code);
   if (digit && !e.repeat) setWeapon(PROJECTILES[+digit[1] - 1].id);
   if (e.code === "Space") {
@@ -1832,6 +1975,11 @@ function physics(dt) {
       dist = Math.hypot(dx, dz);
     if (worldTime - pending.started > 20) {
       pending = null;
+    } else if (pending.type === "ride") {
+      if (dist < 1.4) {
+        takeRide(t);
+        pending = null;
+      } else move = { x: dx / dist, z: dz / dist };
     } else if (pending.type === "kick") {
       if (dist < 1.25) {
         if (t.kind === "basketball") shoot(t);
@@ -1857,7 +2005,13 @@ function physics(dt) {
     const wasGrounded = p.grounded,
       oldX = p.x,
       oldZ = p.z;
-    if (!p.remote) {
+    if (!p.remote && p.ride) {
+      const was = { x: p.x, z: p.z };
+      rideEvents(stepRide(p, move, obstacles, dt));
+      p.velocityX = (p.x - was.x) / dt;
+      p.velocityZ = (p.z - was.z) / dt;
+      if (p.ride?.grind && Math.random() < dt * 30) effects.puff(new T.Vector3(p.x, p.y, p.z), "#ffcf6b", 2, 2.4, 0.015);
+    } else if (!p.remote) {
       // Rivers slow you down and carry you downstream.
       const water = p.y < 0.35 ? waterAt(mapScene.map, p.x, p.z) : null;
       if (water) {
@@ -1906,7 +2060,7 @@ function physics(dt) {
   // Online the server is the referee and its corrections arrive; offline the browser announces.
   const events = stepWorld(world, dt, (o) => drag?.moved && drag.id === o.id);
   if (!net.connected) for (const event of events) onServer(event);
-  updatePushing(move, dt);
+  if (!active.ride) updatePushing(move, dt);
   const removal = [];
   for (const pr of projectiles) {
     const k = pr.kind,
@@ -1998,8 +2152,15 @@ function physics(dt) {
     save();
   }
 }
+function rideState(p) {
+  if (p.ride)
+    return { kind: p.ride.kind, lean: p.ride.lean, speed: p.ride.speed, air: !p.grounded && !p.ride.grind, grind: !!p.ride.grind, push: p.grounded && keys.size > 0 && Math.abs(p.ride.speed) < rideInfo(p.ride.kind).max * 0.9 && !p.ride.grind };
+  const r = (world.rides || []).find((x) => x.id === p.flags.rd);
+  return { kind: r?.kind || "skateboard", lean: 0, speed: Math.hypot(p.velocityX || 0, p.velocityZ || 0), air: !p.grounded, grind: !!p.flags.gr };
+}
 function visual(dt) {
   effects.update(dt);
+  updateRides(dt);
   if (charge) {
     const ring = $("#chargeRing");
     ring.style.setProperty("--p", chargeLevel().toFixed(3));
@@ -2009,7 +2170,7 @@ function visual(dt) {
   for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
-    if (!p.remote) {
+    if (!p.remote && !p.ride) {
       // You face your cursor; others face where their owners look (sent with their pose).
       const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
         delta = Math.atan2(
@@ -2020,6 +2181,10 @@ function visual(dt) {
       p.angle = Math.atan2(Math.sin(p.angle), Math.cos(p.angle));
     }
     p.root.rotation.y = p.angle;
+    // Riders lean with the slope they roll on.
+    const riding = p.ride || (p.remote && p.flags?.rd);
+    p.root.rotation.order = "YXZ";
+    p.root.rotation.x = riding ? -(p.ride ? p.ride.pitch : p.pitch || 0) : 0;
     const vx = p.velocityX || 0,
       vz = p.velocityZ || 0,
       speed = Math.hypot(vx, vz);
@@ -2039,6 +2204,7 @@ function visual(dt) {
         emote: p.emote,
         hit: p.hit,
         pushing: p === active ? pushState : p.flags?.ps || 0,
+        ride: riding ? rideState(p) : null,
         charge: p === active ? chargeLevel() : p.flags?.c || 0,
         seed: p.x * 0.13,
         lookPitch: p.remote
@@ -2269,6 +2435,7 @@ function remoteEvent(p, ev) {
     startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to), w: ev.w || "snow", pw: ev.pw || 1, pid: ev.pid });
   if (ev.k === "kick")
     startAction(p, "kick", worldTime, { cube: findObject(world, ev.target) || null });
+  if (ev.k === "trick" && ev.n) toast(`${p.profile.name}: ${ev.n}!`, 1600);
   if (ev.k === "shoot") startAction(p, "throw", worldTime, { ball: findObject(world, ev.target) || {} });
   if (ev.k === "emote") emotionEffects.start(p, ev.e, worldTime);
 }
@@ -2292,6 +2459,11 @@ function currentPose() {
   }
   if (pushState) pose.ps = pushState;
   if (charge) pose.c = Math.round(chargeLevel() * 10) / 10;
+  if (active.ride) {
+    pose.rd = active.ride.id;
+    if (active.ride.flip >= 0) pose.fl = Math.round(active.ride.flip * 100) / 100;
+    if (active.ride.grind) pose.gr = 1;
+  }
   return pose;
 }
 // Up to 30 poses a second while moving (plus a few after stopping so others land exactly),
@@ -2377,6 +2549,7 @@ function loadState(fresh, objs) {
     notes: fresh.notes,
     cubes: fresh.cubes,
     balls: fresh.balls,
+    rides: fresh.rides,
     structures: fresh.structures,
     scores: fresh.scores,
     timer: fresh.timer,
@@ -2402,6 +2575,10 @@ function loadState(fresh, objs) {
   refreshNotes();
   renderTimer();
   for (const id of Object.keys(liftedBy)) delete liftedBy[id];
+  buildRides();
+  // Back on the ride you were on (a reconnect), or off it if the room says so.
+  const mine = (world.rides || []).find((r) => r.by === myRider());
+  if (active.ride && mine?.id !== active.ride.id) delete active.ride;
   if (mapChanged) {
     // Step out of anything solid on the new map.
     if (mapScene.colliders().some((b) => !b.y && b.h > 0.2 && inside(active.x, active.z, b, 0.3))) {
@@ -2448,7 +2625,7 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0 };
       break;
     }
     case "profile":
@@ -2507,7 +2684,11 @@ function onServer(m, at) {
       emotionEffects.start(scorer || active, "firework", worldTime);
       break;
     }
+    case "ride":
+      onRide(m.ride);
+      break;
     case "reset": {
+      delete active.ride;
       loadState(createState(m.state, uid), m.objs);
       // Everyone starts the new map at its entrance.
       Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0 });

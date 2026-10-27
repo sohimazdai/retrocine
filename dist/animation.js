@@ -116,6 +116,7 @@ export function animateRig(rig, state, dt) {
     );
     rig.knees.forEach((knee) => (knee.rotation.x += compression * 2.5));
   }
+  if (state.ride) applyRide(rig, state.ride, t, dt);
   const action = state.action;
   if (action) {
     const age = t - action.started,
@@ -190,6 +191,67 @@ export function animateRig(rig, state, dt) {
   }
   if (state.hit > 0) rig.model.rotation.z += Math.sin(state.hit * 40) * 0.13;
   tickAccessories(rig, t);
+}
+
+// Riding: a sideways stance on a skateboard, standing with both hands on a scooter's bar, seated
+// and pedalling on a bike. Crouched in the air, leaning into turns, pushing off when speeding up.
+function applyRide(rig, ride, t, dt) {
+  const motion = rig.motion;
+  motion.pedal = (motion.pedal || 0) + dt * Math.min(14, Math.abs(ride.speed || 0) * 2.2);
+  const crouch = ride.air ? 1 : 0,
+    lean = ride.lean || 0,
+    push = ride.push ? Math.sin(t * 9) : 0;
+  rig.model.rotation.order = "YXZ";
+  rig.model.position.x = 0;
+  for (let i = 0; i < 2; i++) {
+    rig.feet[i].rotation.set(0, 0, 0);
+    rig.legs[i].rotation.set(0, 0, 0);
+    rig.knees[i].rotation.set(0, 0, 0);
+  }
+  if (ride.kind === "skateboard") {
+    rig.model.rotation.y = -1.35;
+    rig.model.rotation.x = lean * 0.3;
+    rig.model.position.y = 0.14 - crouch * 0.1;
+    for (let i = 0; i < 2; i++) {
+      const s = i ? -1 : 1;
+      rig.legs[i].rotation.set(-0.25 - crouch * 0.35, 0, s * 0.3);
+      rig.knees[i].rotation.x = 0.45 + crouch * 0.7;
+      rig.arms[i].rotation.set(-0.15, 0, s * -(0.9 + crouch * 0.3));
+      rig.elbows[i].rotation.x = -0.3;
+    }
+    if (push) {
+      rig.legs[1].rotation.set(push * 0.7, 0, -0.5);
+      rig.knees[1].rotation.x = 0.3 + Math.max(0, push) * 0.5;
+    }
+    rig.torso.rotation.set(0.12 + crouch * 0.2, 0.25, lean * 0.1);
+  } else if (ride.kind === "scooter") {
+    rig.model.rotation.y = 0;
+    rig.model.rotation.z = -lean * 0.18;
+    rig.model.position.y = 0.13 - crouch * 0.08;
+    rig.legs[0].rotation.set(-0.08 - crouch * 0.4, 0, 0.04);
+    rig.knees[0].rotation.x = 0.15 + crouch * 0.8;
+    rig.legs[1].rotation.set(push ? push * 0.8 : 0.35 - crouch * 0.6, 0, -0.06);
+    rig.knees[1].rotation.x = 0.25 + crouch * 0.8;
+    for (let i = 0; i < 2; i++) {
+      rig.arms[i].rotation.set(-1.15, 0, (i ? -1 : 1) * -0.12);
+      rig.elbows[i].rotation.x = -0.35;
+    }
+    rig.torso.rotation.set(0.16 + crouch * 0.15, 0, -lean * 0.08);
+  } else {
+    rig.model.rotation.y = 0;
+    rig.model.rotation.z = -lean * 0.22;
+    rig.model.position.y = 0.2 - crouch * 0.04;
+    for (let i = 0; i < 2; i++) {
+      const p = motion.pedal + i * Math.PI;
+      rig.legs[i].rotation.set(-1.0 + Math.sin(p) * 0.45 - crouch * 0.2, 0, (i ? -1 : 1) * 0.06);
+      rig.knees[i].rotation.x = 1.3 + Math.cos(p) * 0.45;
+      rig.feet[i].rotation.x = -0.2;
+      rig.arms[i].rotation.set(-1.25, 0, (i ? -1 : 1) * -0.18);
+      rig.elbows[i].rotation.x = -0.25;
+    }
+    rig.torso.rotation.set(0.35 + crouch * 0.1, 0, -lean * 0.1);
+  }
+  if (ride.grind) rig.model.rotation.z += Math.sin(t * 20) * 0.03;
 }
 
 function applyEmote(rig, type, t, s) {

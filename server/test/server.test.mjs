@@ -33,7 +33,7 @@ function client(port, origin) {
       return new Promise((resolve, reject) => {
         const w = { pred, resolve };
         waiters.push(w);
-        setTimeout(() => reject(new Error("timeout waiting for message")), ms);
+        setTimeout(() => reject(new Error("timeout waiting for message: " + pred.toString().slice(0, 120))), ms);
       });
     },
     next(t, ms) {
@@ -402,5 +402,49 @@ test("a map switch resets the room for everyone; the river keeps flowing while p
   const back = await c.wait((m) => m.t === "reset" && m.state.map === "saloon");
   assert.equal(back.state.balls.filter((x) => x.kind === "mug").length, 5);
   for (const x of [a, b, c]) x.close();
+  await app.close();
+});
+
+test("rides: one rider per board, taken only from next to it, left where you step off or leave", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("park", { name: "Аня" });
+  await b.join("park", { name: "Борис" });
+  a.send({ t: "map.set", id: "skatepark" });
+  const reset = await b.wait((m) => m.t === "reset");
+  const board = reset.state.rides.find((r) => r.id === "board-1");
+  assert.equal(board.by, null);
+  // Too far away: nothing happens. Next to it: it is yours.
+  a.send({ t: "pose", x: 0, y: 0, z: -5, a: 0, vy: 0, g: 1 });
+  a.send({ t: "ride.take", id: "board-1" });
+  a.send({ t: "pose", x: board.x + 0.5, y: 0, z: board.z, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  a.send({ t: "ride.take", id: "board-1" });
+  const taken = await b.wait((m) => m.t === "ride" && m.ride.by === a.welcome.id);
+  assert.equal(taken.ride.id, "board-1");
+  assert.equal(b.inbox.filter((m) => m.t === "ride").length, 1, "the far attempt was refused");
+  // Someone else cannot take it from under you, nor leave it for you.
+  b.send({ t: "pose", x: board.x, y: 0, z: board.z, a: 0, vy: 0, g: 1 });
+  b.send({ t: "ride.take", id: "board-1" });
+  b.send({ t: "ride.leave", id: "board-1", x: 0, z: 0 });
+  // Riding poses carry the board and the flip.
+  a.send({ t: "pose", x: 1, y: 0.4, z: 2, a: 3.1, vy: 2, g: 0, rd: "board-1", fl: 0.5 });
+  const pose = await b.wait((m) => m.t === "pose" && m.rd === "board-1");
+  assert.equal(pose.fl, 0.5);
+  a.send({ t: "ride.leave", id: "board-1", x: 1, z: 2, a: 3.1 });
+  const left = await b.wait((m) => m.t === "ride" && m.ride.by === null);
+  assert.deepEqual([left.ride.x, left.ride.z], [1, 2]);
+  // Leaving the room on a board leaves the board where you were.
+  b.send({ t: "pose", x: 1.5, y: 0, z: 2, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  b.send({ t: "ride.take", id: "board-1" });
+  await a.wait((m) => m.t === "ride" && m.ride.by === b.welcome.id);
+  b.send({ t: "pose", x: -3, y: 0, z: 4, a: 0, vy: 0, g: 1, rd: "board-1" });
+  await new Promise((r) => setTimeout(r, 50));
+  b.close();
+  const freed = await a.wait((m) => m.t === "ride" && m.ride.by === null && m.ride.x === -3);
+  assert.equal(freed.ride.z, 4);
+  a.close();
   await app.close();
 });

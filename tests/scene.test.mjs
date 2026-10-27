@@ -23,6 +23,8 @@ import * as effectsModule from "../dist/effects.js";
 import * as mapsceneModule from "../dist/mapscene.js";
 import * as propsModule from "../dist/props.js";
 import * as hitboxesModule from "../dist/hitboxes.js";
+import * as ridingModule from "../dist/riding.js";
+import * as ridesModule from "../dist/rides.js";
 import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
@@ -207,6 +209,8 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...mapsceneModule,
     ...propsModule,
     ...hitboxesModule,
+    ...ridingModule,
+    ...ridesModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -949,7 +953,7 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
 test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
-  for (const id of ["maze", "playground", "river", "paintball", "saloon", "cinema"]) {
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "cinema"]) {
     a.run(`op({ t: "map.set", id: "${id}" })`);
     a.tick(0.3);
     assert.equal(a.run("mapScene.map.id"), id);
@@ -995,4 +999,63 @@ test("river: the current carries you and slows you down", () => {
   const dry = a.run("active.z") + 4;
   a.run("keys.clear()");
   assert(wet < dry * 0.75, `in water ${wet} vs on the beach ${dry}`);
+});
+
+test("skatepark: E gets you on a board, you ride and land tricks, E leaves it where you stopped", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "skatepark" })');
+  a.tick(0.2);
+  assert.equal(a.run("rideMeshes.size"), 6);
+  a.run("const r = world.rides.find((r) => r.id === 'board-1'); Object.assign(active, { x: r.x + 0.6, z: r.z, y: 0 })");
+  a.run("kickNearest()");
+  a.tick(0.05);
+  assert.equal(a.run("active.ride?.kind"), "skateboard");
+  assert.equal(a.run("world.rides.find((r) => r.id === 'board-1').by"), "self");
+  // Ride toward the screen: W.
+  const z0 = a.run("active.z");
+  a.run("keys.add('up')");
+  a.tick(1.2);
+  a.run("keys.clear()");
+  assert(a.run("active.z") < z0 - 4, "rolled forward");
+  assert(a.run("active.ride.speed") > 5);
+  // The board is drawn under you, facing where you ride.
+  assert(a.run("rideMeshes.get('board-1').position.distanceTo(new T.Vector3(active.x, active.y, active.z))") < 0.01);
+  // Ollie with Space.
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+  a.tick(0.1);
+  assert.equal(a.run("active.grounded"), false);
+  let landed = false;
+  for (let i = 0; i < 12 && !landed; i++) {
+    a.tick(0.1);
+    landed = a.run("active.grounded");
+  }
+  assert(landed && a.run("!!active.ride"), "landed the ollie and still riding");
+  // E: off the board; it stays where you got off.
+  a.run("kickNearest()");
+  a.tick(0.05);
+  assert.equal(a.run("active.ride"), undefined);
+  const r = a.run("JSON.stringify(world.rides.find((r) => r.id === 'board-1'))");
+  const ride = JSON.parse(r);
+  assert.equal(ride.by, null);
+  assert(ride.z < z0 - 4);
+  // Walking up the top of a quarter pipe is not possible.
+  a.run("Object.assign(active, { x: 11, z: 0, y: 0, grounded: true }); keys.add('right')");
+  a.tick(2);
+  a.run("keys.clear()");
+  assert(a.run("active.y") < 1.2, `walked up to ${a.run("active.y")}`);
+});
+
+test("remote riders: the board follows them and flips with their kickflip", () => {
+  const a = boot();
+  const server = a.server;
+  a.tick(0.1);
+  server.emit({ t: "reset", by: "anya", name: "Аня", state: { ...stateModule.serializeState(server.state), map: "skatepark", rides: [{ id: "board-1", kind: "skateboard", x: 0, z: 6, a: Math.PI, by: "anya" }] }, objs: [] });
+  a.tick(0.1);
+  assert.equal(a.run("mapScene.map.id"), "skatepark");
+  const now = a.run("net.serverNow()");
+  for (let i = 0; i < 12; i++) server.emit({ t: "pose", id: "anya", s: now + i * 33, x: 0, y: 0.6, z: 6 - i * 0.3, a: Math.PI, vy: 2, g: 0, rd: "board-1", fl: i / 12 });
+  a.tick(0.6);
+  const board = a.run("(() => { const g = rideMeshes.get('board-1'); const p = remotes.get('anya'); return { d: g.position.distanceTo(new T.Vector3(p.x, p.y, p.z)), flip: g.userData.parts.flip.rotation.z }; })()");
+  assert(board.d < 0.01, `board ${board.d} from Аня`);
+  assert(board.flip > 0.5, "the deck turns over");
 });

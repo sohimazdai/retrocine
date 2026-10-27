@@ -5,3 +5,4 @@ import "./playground.look.js";
 import "./river.look.js";
 import "./paintball.look.js";
 import "./saloon.look.js";
+import "./skatepark.look.js";

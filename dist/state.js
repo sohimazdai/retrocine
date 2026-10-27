@@ -19,6 +19,7 @@ import {
   supportHeight,
   makeBall,
   defaultBalls,
+  defaultRides,
   makeCube,
   defaultCubes,
   goalsOf,
@@ -52,6 +53,12 @@ export function createState(saved = {}, newId) {
       if (p && finite(p.x) && finite(p.z)) Object.assign(b, { x: p.x, z: p.z, y: Math.max(b.size / 2, num(p.y, 0, 20, b.size / 2)) });
     }
   const cubes = sameMap && saved.cubes ? saved.cubes : defaultCubes(map, newId);
+  const rides = defaultRides(map);
+  if (sameMap)
+    for (const r of rides) {
+      const p = (saved.rides || []).find((x) => x.id === r.id);
+      if (p && finite(p.x) && finite(p.z)) Object.assign(r, { x: clamp(p.x, -LIMITS.x, LIMITS.x), z: clamp(p.z, -12, LIMITS.z), a: num(p.a, -10, 10), by: typeof p.by === "string" ? p.by : null });
+    }
   return {
     map: map.id,
     notes: (saved.notes || []).slice(0, MAX_NOTES).map((n) => sanitizeNote(n, n.id || newId())),
@@ -59,6 +66,7 @@ export function createState(saved = {}, newId) {
       .slice(0, MAX_CUBES)
       .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -14, 14), z: num(c.z, -10, 10), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
     balls,
+    rides,
     structures,
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     flags: {},
@@ -100,12 +108,24 @@ export function serializeState(s) {
     notes: s.notes,
     cubes: s.cubes.map(({ id, x, y, z, color, size }) => ({ id, x, y, z, color, size })),
     balls: s.balls.map(({ id, kind, x, y, z }) => ({ id, kind, x, y, z })),
+    rides: (s.rides || []).map(({ id, kind, x, z, a, by }) => ({ id, kind, x, z, a, by })),
     structures: s.structures,
     scores: s.scores,
     timer: s.timer,
   };
 }
 export const stateMap = (s) => mapDef(s.map);
+// Someone left the room: whatever they rode stays where they were.
+export function releaseRides(s, peer, pose) {
+  const freed = [];
+  for (const r of s.rides || [])
+    if (r.by === peer) {
+      r.by = null;
+      if (pose && finite(pose.x) && finite(pose.z)) Object.assign(r, { x: clamp(pose.x, -LIMITS.x, LIMITS.x), z: clamp(pose.z, floorBack(pose.x), LIMITS.z), a: finite(pose.a) ? pose.a : r.a });
+      freed.push({ ...r });
+    }
+  return freed;
+}
 export const THROW_SPEED = 22;
 // Colliders of the current map, cached until a prop moves (s.v is bumped on every prop change).
 export function stateObstacles(s) {
@@ -350,6 +370,7 @@ export function applyOp(s, op, ctx) {
       s.structures = defaultPositions(map);
       s.balls = defaultBalls(map);
       s.cubes = defaultCubes(map, ctx.newId);
+      s.rides = defaultRides(map);
       s.scores = {};
       s.flags = {};
       s.lifts = {};
@@ -359,6 +380,34 @@ export function applyOp(s, op, ctx) {
       for (const n of s.notes) Object.assign(n, freeSpot(s, n.x, n.z));
       all({ t: "reset", by: ctx.peer, name: ctx.name, state: serializeState(s), objs: dynamicObjects(s).map(packObject) });
       physics = true;
+      break;
+    }
+    case "ride.take": {
+      // Get on a free skateboard, scooter or bike next to you (one at a time).
+      const r = (s.rides || []).find((x) => x.id === op.id);
+      if (!r || (r.by && r.by !== ctx.peer)) return null;
+      if (ctx.pose && Math.hypot(ctx.pose.x - r.x, ctx.pose.z - r.z) > 3) return null;
+      for (const other of s.rides)
+        if (other !== r && other.by === ctx.peer) {
+          other.by = null;
+          if (ctx.pose) Object.assign(other, { x: ctx.pose.x, z: ctx.pose.z });
+          all({ t: "ride", ride: { ...other } });
+        }
+      r.by = ctx.peer;
+      all({ t: "ride", ride: { ...r } });
+      break;
+    }
+    case "ride.leave": {
+      // Step off: the ride stays where you left it.
+      const r = (s.rides || []).find((x) => x.id === op.id);
+      if (!r || r.by !== ctx.peer) return null;
+      r.by = null;
+      if (finite(op.x) && finite(op.z)) {
+        r.x = clamp(op.x, -LIMITS.x, LIMITS.x);
+        r.z = clamp(op.z, floorBack(r.x), LIMITS.z);
+      }
+      if (finite(op.a)) r.a = clamp(op.a, -10, 10);
+      all({ t: "ride", ride: { ...r } });
       break;
     }
     case "boom": {
@@ -412,6 +461,8 @@ export const STATE_OPS = new Set([
   "struct.move",
   "ball.reset",
   "map.set",
+  "ride.take",
+  "ride.leave",
   "boom",
   "timer.start",
   "timer.toggle",

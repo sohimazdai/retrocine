@@ -2,7 +2,7 @@
 
 3D-комната для ретро: фронт — статический Three.js в `dist/`, сервер синхронизации — `server/` (Node 22, `ws`), медиа — LiveKit.
 
-- Прод: фронт https://sohimazdai.ru/cine/ (старый VPS, рядом с planner), сервер `wss://api.sohimazdai.ru` (новый VPS). Устройство — `docs/architecture.md`, серверы, выкладка и доступ — `docs/servers.md`.
+- Прод: фронт https://sohimazdai.ru/cine/ (VPS в Амстердаме, рядом с planner), сервер `wss://api.sohimazdai.ru` (VPS в Москве, 185.209.160.44). Сервер должен быть доступен из российских сетей — проверять через Globalping (см. `docs/servers.md`). Устройство — `docs/architecture.md`, серверы, выкладка и доступ — `docs/servers.md`.
 - Проверка перед коммитом: `npm run check` (тесты фронта и сервера). Новые модули фронта, импортируемые в `app.js`, нужно добавить в песочницу `tests/scene.test.mjs` (там импорты вырезаются и экспорты подставляются глобально).
 - Общая логика состояния — только в `dist/state.js` / `dist/world.js`: их импортирует и сервер. Не тянуть туда Three.js и DOM.
 - Выкладка: `./deploy/deploy.sh [ref]`. Claude ходит на серверы по SSH через WebSocket (`/_ssh/<секрет>`); ключ и `ssh_config` — в `.secrets/` у владельца (в git не попадает).

@@ -29,6 +29,7 @@ import {
   framePortrait,
 } from "./room.js";
 import { MapScene } from "./mapscene.js";
+import { HitboxView } from "./hitboxes.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
@@ -193,6 +194,8 @@ const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 120),
   pointerNDC = new T.Vector2(),
   groundPlane = new T.Plane(new T.Vector3(0, 1, 0), 0),
   pointerWorld = new T.Vector3(0, 0, 7);
+// Lines are detail, not targets: by default three.js counts a line as hit from a metre away.
+raycaster.params.Line.threshold = 0.02;
 let camElevation = ELEVATION.initial;
 let cinema = null,
   avatarEditor = null;
@@ -238,6 +241,19 @@ const floor = createFloor(scene);
 // The selected map: scenery, props and balls. Rebuilt when the room switches maps.
 const mapScene = new MapScene(scene, { floor, grid: floor.userData.grid, hemi, key: keyLight, rim });
 mapScene.build(mapDef(world.map), world.structures, world.balls);
+// Settings → Хитбоксы: wireframes of colliders, bodies, balls and projectiles (only for this viewer).
+const hitboxes = new HitboxView(scene);
+hitboxes.setEnabled(read("kino-hitboxes-v1", false) === true, mapScene);
+function setHitboxes(on) {
+  hitboxes.setEnabled(on, mapScene);
+  try {
+    localStorage.setItem("kino-hitboxes-v1", JSON.stringify(!!on));
+  } catch {}
+}
+function showExplosion(point, radius) {
+  effects.explosion(point, radius);
+  hitboxes.blast(point, radius);
+}
 const cubeMeshes = new Map(),
   noteMeshes = new Map();
 let pickables = [floor, ...mapScene.pickables];
@@ -924,13 +940,13 @@ function explodeProjectile(pr, point) {
     setTimeout(() => {
       if (!shownBooms.has(pr.pid) && !pr.boomed) {
         pr.boomed = true;
-        effects.explosion(point, pr.kind.explosion.radius);
+        showExplosion(point, pr.kind.explosion.radius);
       }
     }, 900);
     return;
   }
   shownBooms.add(pr.pid);
-  effects.explosion(point, pr.kind.explosion.radius);
+  showExplosion(point, pr.kind.explosion.radius);
   op({ t: "boom", kind: pr.kind.id, pid: pr.pid, x: r3(point.x), y: r3(point.y), z: r3(point.z) });
 }
 function onBoom(m) {
@@ -942,7 +958,7 @@ function onBoom(m) {
     projectiles.splice(projectiles.indexOf(flying), 1);
   }
   if (shownBooms.has(m.pid)) shownBooms.delete(m.pid);
-  else effects.explosion(point, m.r);
+  else showExplosion(point, m.r);
   // Your own avatar is thrown by the blast; others are thrown on their screens.
   const body = new T.Vector3(active.x, active.y + 0.8, active.z),
     d = body.distanceTo(point);
@@ -2026,6 +2042,13 @@ function visual(dt) {
       Math.sin(m.userData.wobble * 38) * m.userData.wobble * 0.13;
   }
   mapScene.update(dt, worldTime);
+  if (hitboxes.enabled)
+    hitboxes.update(dt, {
+      mapScene,
+      bodies: players.filter((p) => p.root.visible !== false),
+      objects: dynamicObjects(world).map((o) => ({ x: o.x, y: o.y, z: o.z, size: o.size, cube: !o.kind })),
+      projectiles: projectiles.filter((pr) => pr.mesh.visible).map((pr) => ({ x: pr.mesh.position.x, y: pr.mesh.position.y, z: pr.mesh.position.z, r: pr.kind.radius })),
+    });
   ring.position.set(
     active.x,
     (active.grounded
@@ -2496,6 +2519,7 @@ function renderSettings() {
       `<button class="map-card${m.id === current ? " selected" : ""}" data-map="${m.id}" style="--map:${m.color}" aria-pressed="${m.id === current}"><strong>${esc(m.title)}</strong><span>${esc(m.description)}</span></button>`,
   ).join("")}</div><p class="settings-hint">Карта общая: меняется сразу у всех в комнате. Стикеры остаются на месте.</p></section>
 <section data-section="view"><h3>Ракурс</h3><div class="label-row"><label for="elevation">Угол к полу</label><span id="elevationValue">${Math.round(camElevation)}°</span></div><input id="elevation" type="range" min="${ELEVATION.min}" max="${ELEVATION.max}" value="${camElevation}"><div class="settings-row"><button class="secondary" id="resetView">Вернуть ${ELEVATION.initial}°</button></div><p class="settings-hint">Также средняя кнопка мыши и движение вверх-вниз. Ракурс только ваш.</p></section>
+<section data-section="debug"><h3>Хитбоксы</h3><label class="switch-row"><input type="checkbox" id="hitboxToggle"${hitboxes.enabled ? " checked" : ""}><span class="switch" aria-hidden="true"></span><span>Показать хитбоксы</span></label><p class="settings-hint hitbox-legend"><span><i style="--c:#4fd2ff"></i>стены и декор</span><span><i style="--c:#6dff7c"></i>двигается Shift</span><span><i style="--c:#ffae42"></i>поднято</span><span><i style="--c:#ff5fd2"></i>аватары</span><span><i style="--c:#ffffff"></i>мячи и кубики</span><span><i style="--c:#ff4848"></i>снаряды и взрывы</span></p><p class="settings-hint">Видно только вам. Бледная линия на полу — докуда может дойти центр аватара.</p></section>
 <section data-section="avatar"><h3>Аватар</h3><div class="avatar-row"><span class="dot" style="background:${esc(active.profile.color || "#aaa")}"></span><strong>${esc(active.profile.name || "Вы")}</strong><button class="secondary" data-action="avatar">Изменить внешность</button></div></section>`;
   $("#elevation").oninput = (e) => {
     camElevation = +e.target.value;
@@ -2509,6 +2533,7 @@ function renderSettings() {
     updateCamera();
   };
   $("#roomLink").onfocus = (e) => e.target.select();
+  $("#hitboxToggle").onchange = (e) => setHitboxes(e.target.checked);
 }
 function refreshSettings() {
   if (!settingsOpen()) return;

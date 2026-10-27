@@ -13,12 +13,32 @@ export function jump(body) {
   body.grounded = false;
   return true;
 }
+// Sloped colliders: "ramp" (straight wedge, height h0 → h1 along axis) and "qpipe" (quarter pipe,
+// a concave curve rising toward the dir side, as tall as h). Their top surface carries bodies and balls.
+export const sloped = (b) => b.shape === "ramp" || b.shape === "qpipe";
+export function surfaceOf(b, x, z) {
+  if (!sloped(b)) return b.h;
+  const u = clamp(b.axis === "x" ? (x - (b.x - b.w / 2)) / b.w : (z - (b.z - b.d / 2)) / b.d, 0, 1);
+  if (b.shape === "ramp") return b.h0 + (b.h1 - b.h0) * u;
+  const t = b.dir < 0 ? 1 - u : u;
+  return b.h - Math.sqrt(Math.max(0, 1 - t * t)) * b.h;
+}
+// Downhill direction and steepness on a sloped collider at (x, z): { x, z, slope }.
+export function downhill(b, x, z) {
+  const e = 0.05,
+    ax = b.axis === "x";
+  const hi = surfaceOf(b, x + (ax ? e : 0), z + (ax ? 0 : e)),
+    lo = surfaceOf(b, x - (ax ? e : 0), z - (ax ? 0 : e));
+  const slope = (hi - lo) / (2 * e);
+  return { x: ax ? -Math.sign(slope) : 0, z: ax ? 0 : -Math.sign(slope), slope: Math.abs(slope) };
+}
 export function inside(x, z, b, pad = 0) {
   if (b.shape === "cylinder")
     return Math.hypot(x - b.x, z - b.z) < b.radius + pad;
   return Math.abs(x - b.x) < b.w / 2 + pad && Math.abs(z - b.z) < b.d / 2 + pad;
 }
 export function resolveHorizontal(body, box) {
+  if (sloped(box)) return;
   if (body.y >= box.h - 0.035 || body.y + 1.55 <= (box.y || 0)) return;
   if (box.shape === "cylinder") {
     const dx = body.x - box.x,
@@ -70,7 +90,9 @@ export function resolveHorizontal(body, box) {
 // speedScale > 1 is a sprint (Shift). kx/kz is knockback from hits and explosions: it carries the
 // body on its own and fades, quickly on the ground and slowly in the air.
 export function stepBody(body, move, boxes, dt, speedScale = 1) {
-  const oldY = body.y;
+  const oldY = body.y,
+    oldX = body.x,
+    oldZ = body.z;
   const len = Math.hypot(move.x, move.z) || 1;
   const kx = body.kx || 0,
     kz = body.kz || 0;
@@ -91,23 +113,62 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
     if (Math.hypot(body.kx, body.kz) < 0.05) body.kx = body.kz = 0;
   }
   for (const b of boxes) resolveHorizontal(body, b);
+  // Slopes: walk up gentle ones; a side higher than a step blocks like a wall.
+  for (const b of boxes) {
+    if (!sloped(b) || !inside(body.x, body.z, b)) continue;
+    if (surfaceOf(b, body.x, body.z) > oldY + 0.55) {
+      if (!inside(oldX, body.z, b) || surfaceOf(b, oldX, body.z) <= oldY + 0.55) body.x = oldX;
+      else if (!inside(body.x, oldZ, b) || surfaceOf(b, body.x, oldZ) <= oldY + 0.55) body.z = oldZ;
+      else {
+        body.x = oldX;
+        body.z = oldZ;
+      }
+    }
+  }
+  const wasGrounded = body.grounded,
+    vyBefore = body.vy;
   body.vy -= (body.vy < 0 ? GRAVITY * 1.32 : GRAVITY) * dt;
   body.y += body.vy * dt;
   body.grounded = false;
-  let surface = 0;
-  for (const b of boxes)
-    if (
-      inside(body.x, body.z, b, 0.04) &&
-      oldY >= b.h - 0.05 &&
-      body.y <= b.h &&
-      body.vy <= 0
-    )
-      surface = Math.max(surface, b.h);
-  if (body.y <= surface) {
+  let surface = 0,
+    support = null,
+    snap = false;
+  for (const b of boxes) {
+    if (sloped(b)) {
+      if (!inside(body.x, body.z, b, 0.02)) continue;
+      const h = surfaceOf(b, body.x, body.z);
+      // Stick to the slope while walking down it; land on it from above.
+      if (body.vy <= 0 && body.y <= h + (wasGrounded ? 0.4 : 0) && oldY >= h - 0.6 && h >= surface) {
+        surface = h;
+        support = b;
+        snap = wasGrounded;
+      }
+      continue;
+    }
+    if (inside(body.x, body.z, b, 0.04) && oldY >= b.h - 0.05 && body.y <= b.h && body.vy <= 0 && b.h >= surface) {
+      surface = b.h;
+      support = b;
+      snap = false;
+    }
+  }
+  if (body.y <= surface || (snap && support)) {
     body.y = surface;
     body.vy = 0;
     body.grounded = true;
+    // Trampolines throw you back up, higher if you were falling fast.
+    if (support?.bounce && vyBefore < -2) {
+      body.vy = Math.max(support.bounce, -vyBefore * 0.92) + (body.boost || 0);
+      body.grounded = false;
+      body.bounced = (body.bounced || 0) + 1;
+    }
+    // Slides carry you down.
+    if (support?.slide) {
+      const d = downhill(support, body.x, body.z);
+      body.kx = (body.kx || 0) + d.x * dt * 16 * Math.min(1.5, d.slope);
+      body.kz = (body.kz || 0) + d.z * dt * 16 * Math.min(1.5, d.slope);
+    }
   }
+  body.support = support;
   return body;
 }
 export function kickCube(cube, from, power = 6) {
@@ -129,15 +190,27 @@ export function stepCube(c, boxes, dt) {
   c.z += c.vz * dt;
   c.vy -= GRAVITY * dt;
   c.y += c.vy * dt;
-  let surface = 0;
+  let surface = 0,
+    support = null;
   for (const b of boxes) {
+    if (sloped(b)) {
+      if (!inside(c.x, c.z, b)) continue;
+      const h = surfaceOf(b, c.x, c.z);
+      if (c.y - c.size / 2 < h + 0.25 && h >= surface) {
+        surface = h;
+        support = b;
+      }
+      continue;
+    }
     if (
       inside(c.x, c.z, b, c.size / 2) &&
       c.y - c.size / 2 < b.h &&
       c.y + c.size / 2 > (b.y || 0)
     ) {
-      if (c.y - c.size / 2 > b.h - 0.3 && c.vy < 0)
+      if (c.y - c.size / 2 > b.h - 0.3 && c.vy < 0) {
+        if (b.h >= surface) support = b;
         surface = Math.max(surface, b.h);
+      }
       else if (b.shape === "cylinder") {
         const dx = c.x - b.x,
           dz = c.z - b.z,
@@ -171,6 +244,14 @@ export function stepCube(c, boxes, dt) {
   if (c.y < c.size / 2 + surface) {
     c.y = c.size / 2 + surface;
     c.vy = Math.abs(c.vy) > 1 ? -c.vy * (c.restitution ?? 0.3) : 0;
+    if (support?.bounce && c.vy >= 0) c.vy = Math.max(c.vy, support.bounce * 0.55);
+    // On a slope a ball rolls downhill.
+    if (support && sloped(support)) {
+      const d = downhill(support, c.x, c.z),
+        a = (GRAVITY * 0.55 * d.slope) / Math.sqrt(1 + d.slope * d.slope);
+      c.vx += d.x * a * dt;
+      c.vz += d.z * a * dt;
+    }
     const f = Math.exp(-(c.friction ?? 3.2) * dt);
     c.vx *= f;
     c.vz *= f;

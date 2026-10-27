@@ -15,6 +15,10 @@ export function cyl(parent, rTop, rBottom, h, color, x = 0, y = 0, z = 0, segmen
 export function lines(parent, points, color, opacity = 1) {
   const geometry = own(new T.BufferGeometry().setFromPoints(points.map((p) => new T.Vector3(...p))));
   const mesh = new T.LineSegments(geometry, own(new T.LineBasicMaterial({ color, transparent: opacity < 1, opacity })));
+  // Drawn detail only: three.js would otherwise "hit" a line from up to a metre away (Line.threshold),
+  // so snowballs and the mouse caught spools and nets well before touching them. Solid parts and
+  // ghost panels are what gets hit.
+  mesh.raycast = () => {};
   parent.add(mesh);
   return mesh;
 }
@@ -30,6 +34,7 @@ export function solid(parent, geometry, color, x = 0, y = 0, z = 0, opts = {}) {
 export function ghost(parent, w, h, d, x, y, z) {
   const m = new T.Mesh(own(new T.BoxGeometry(w, h, d)), own(new T.MeshBasicMaterial({ color: "#d5cadf", transparent: true, opacity: 0.035, depthWrite: false })));
   m.position.set(x, y, z);
+  m.userData.ghost = true;
   parent.add(m);
   return m;
 }

@@ -22,6 +22,7 @@ import * as projectilesModule from "../dist/projectiles.js";
 import * as effectsModule from "../dist/effects.js";
 import * as mapsceneModule from "../dist/mapscene.js";
 import * as propsModule from "../dist/props.js";
+import * as hitboxesModule from "../dist/hitboxes.js";
 import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
@@ -205,6 +206,7 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...effectsModule,
     ...mapsceneModule,
     ...propsModule,
+    ...hitboxesModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -901,4 +903,45 @@ test("offline, one avatar pushes a spool but not the pyramid", () => {
   const px = a.run("mapScene.props.get('pyramid').x");
   a.tick(1);
   assert.equal(a.run("mapScene.props.get('pyramid').x"), px);
+});
+
+test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; spool hitbox matches its mesh", () => {
+  const a = boot();
+  a.tick(0.1);
+  assert.equal(a.run("hitboxes.group.visible"), false);
+  a.run("openSettings()");
+  const toggle = a.w.document.querySelector("#hitboxToggle");
+  assert(toggle);
+  toggle.checked = true;
+  toggle.dispatchEvent(new a.w.Event("change"));
+  a.tick(0.1);
+  assert.equal(a.run("hitboxes.group.visible"), true);
+  assert.equal(a.w.localStorage.getItem("kino-hitboxes-v1"), "true");
+  // Every avatar and every ball or cube has its own wireframe; props and the floor edge are drawn once.
+  assert.equal(a.run("hitboxes.used"), a.run("players.length + dynamicObjects(world).length"));
+  assert(a.run("hitboxes.statics.children.length") >= 2);
+  // Overlay is never a target for the mouse or snowballs.
+  assert.equal(a.run("raycaster.set(new T.Vector3(0, 6, 0), new T.Vector3(0, -1, 0)); raycaster.intersectObject(hitboxes.group, true).length"), 0);
+  // The spool's collider is exactly as wide as its flanges.
+  const width = a.run("(() => { const s = mapScene.props.get('spool-a'); const b = new T.Box3().setFromObject(s.root); return b.max.x - b.min.x; })()");
+  const radius = a.run("mapScene.colliders().find((c) => c.prop === 'spool-a').radius");
+  assert(Math.abs(width - radius * 2) < 0.02, `spool mesh ${width} vs collider ${radius * 2}`);
+  // Decorative lines no longer catch rays half a metre away from the spool (three.js' default is 1 m).
+  const near = a.run("(() => { const s = mapScene.props.get('spool-a'); const r = new T.Raycaster(new T.Vector3(s.x, 5, s.z + 1.25 + 0.5), new T.Vector3(0, -1, 0)); return r.intersectObject(s.root, true).length; })()");
+  assert.equal(near, 0);
+  const on = a.run("(() => { const s = mapScene.props.get('spool-a'); const r = new T.Raycaster(new T.Vector3(s.x, 5, s.z + 1.0), new T.Vector3(0, -1, 0)); return r.intersectObject(s.root, true).length; })()");
+  assert(on > 0);
+  a.run("hitboxes.blast(new T.Vector3(0, 1, 0), 4.6)");
+  assert.equal(a.run("hitboxes.blasts.length"), 1);
+  a.tick(1.6);
+  assert.equal(a.run("hitboxes.blasts.length"), 0);
+  // A switched map rebuilds the wireframes.
+  const before = a.run("hitboxes.version");
+  a.run("mapScene.move('spool-a', mapScene.props.get('spool-a').x + 1, mapScene.props.get('spool-a').z)");
+  a.tick(0.05);
+  assert.notEqual(a.run("hitboxes.version"), before);
+  toggle.checked = false;
+  toggle.dispatchEvent(new a.w.Event("change"));
+  assert.equal(a.run("hitboxes.group.visible"), false);
+  assert.equal(a.w.localStorage.getItem("kino-hitboxes-v1"), "false");
 });

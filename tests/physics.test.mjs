@@ -73,3 +73,63 @@ test("cube collision transfers momentum", () => {
   assert(a.vx < 4);
   assert(b.x - a.x >= 0.62);
 });
+
+import { surfaceOf } from "../dist/physics.js";
+import { colliderEdges } from "../dist/hitboxes.js";
+test("trampolines throw you back up; a ball bounces higher on them", () => {
+  const tramp = { x: 0, z: 0, w: 3, d: 3, h: 0.5, bounce: 14 };
+  const p = { x: 0, z: 0, y: 2.5, vy: 0, grounded: false };
+  let bounced = false,
+    peak = 0;
+  for (let i = 0; i < 240; i++) {
+    stepBody(p, { x: 0, z: 0 }, [tramp], 1 / 120);
+    if (p.bounced) bounced = true;
+    if (bounced) peak = Math.max(peak, p.y);
+  }
+  assert(bounced);
+  assert(peak > 3, `peak ${peak}`);
+  const ball = { x: 0, z: 0, y: 3, vx: 0, vy: 0, vz: 0, size: 0.6, restitution: 0.3, friction: 1, spin: 0 };
+  let up = 0;
+  for (let i = 0; i < 120; i++) {
+    stepCube(ball, [tramp], 1 / 120);
+    up = Math.max(up, ball.vy);
+  }
+  assert(up > 6, `ball rebound ${up}`);
+});
+
+test("ramps carry you up and balls roll down them; a quarter pipe's tall lip blocks like a wall", () => {
+  const ramp = { shape: "ramp", x: 0, z: 0, w: 6, d: 3, h: 1.2, h0: 0, h1: 1.2, axis: "x" };
+  assert.equal(surfaceOf(ramp, -3, 0), 0);
+  assert(Math.abs(surfaceOf(ramp, 0, 0) - 0.6) < 1e-9);
+  const p = { x: -4, z: 0, y: 0, vy: 0, grounded: true };
+  for (let i = 0; i < 120 * 1.1; i++) stepBody(p, { x: 1, z: 0 }, [ramp], 1 / 120);
+  assert(p.x > 1, `walked to ${p.x}`);
+  assert(Math.abs(p.y - surfaceOf(ramp, p.x, p.z)) < 0.02 && p.grounded);
+  // Walking back down keeps your feet on the slope instead of hopping.
+  for (let i = 0; i < 60; i++) {
+    stepBody(p, { x: -1, z: 0 }, [ramp], 1 / 120);
+    assert(p.grounded && Math.abs(p.y - surfaceOf(ramp, p.x, p.z)) < 0.02, `step ${i}: ${p.y} vs ${surfaceOf(ramp, p.x, p.z)}`);
+  }
+  const ball = { x: 2.5, z: 0, y: 1.5, vx: 0, vy: 0, vz: 0, size: 0.6, restitution: 0.3, friction: 0.4, spin: 0 };
+  for (let i = 0; i < 120; i++) stepCube(ball, [ramp], 1 / 120);
+  assert(ball.vx < -1 && ball.x < 2.5, `ball ${ball.x} ${ball.vx}`);
+  const pipe = { shape: "qpipe", x: 0, z: 0, w: 3, d: 4, h: 2.4, axis: "x", dir: 1 };
+  assert(surfaceOf(pipe, -1.5, 0) < 0.01);
+  assert(Math.abs(surfaceOf(pipe, 1.5, 0) - 2.4) < 1e-9);
+  const q = { x: 2.2, z: 0, y: 0, vy: 0, grounded: true };
+  for (let i = 0; i < 120; i++) stepBody(q, { x: -1, z: 0 }, [pipe], 1 / 120);
+  assert(q.x >= 1.5, `walked into the lip: ${q.x}`);
+});
+
+test("hitbox wireframes trace boxes, cylinders and sloped surfaces", () => {
+  const boxEdges = colliderEdges({ x: 1, z: 2, w: 2, d: 4, h: 3 });
+  assert.equal(boxEdges.length, 12 * 6);
+  const xs = boxEdges.filter((_, i) => i % 3 === 0);
+  assert.equal(Math.min(...xs), 0);
+  assert.equal(Math.max(...xs), 2);
+  const cyl = colliderEdges({ shape: "cylinder", x: 0, z: 0, radius: 1.25, h: 1.9 });
+  for (let i = 0; i < cyl.length; i += 3) assert(Math.hypot(cyl[i], cyl[i + 2]) < 1.2501);
+  const ramp = { shape: "ramp", x: 0, z: 0, w: 4, d: 2, h0: 0, h1: 2, h: 2, axis: "x" };
+  const pts = colliderEdges(ramp);
+  for (let i = 0; i < pts.length; i += 3) assert(pts[i + 1] <= surfaceOf(ramp, pts[i], pts[i + 2]) + 1e-9);
+});

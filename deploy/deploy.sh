@@ -22,7 +22,7 @@ target=all
 case "${1:-}" in --api) target=api; shift;; --web) target=web; shift;; esac
 cd "$(git rev-parse --show-toplevel)"
 REF="${1:-origin/main}"
-git fetch --quiet origin 2>/dev/null || true
+GIT_TERMINAL_PROMPT=0 timeout 20 git fetch --quiet origin 2>/dev/null || true
 rev=$(git rev-parse --short "${REF}^{commit}")
 start=$(date +%s)
 if [ "$target" != web ]; then

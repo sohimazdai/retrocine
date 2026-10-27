@@ -15,7 +15,11 @@ export class Net {
     timers = globalThis,
   }) {
     Object.assign(this, { url, room, uid, profile, onMessage, onStatus, WebSocketImpl, clock });
-    const bind = (name) => (...args) => timers[name](...args);
+    // Called detached: browsers reject window timers invoked with another object as `this`.
+    const bind = (name) => (...args) => {
+      const fn = timers[name];
+      return fn(...args);
+    };
     this.timer = {
       setTimeout: bind("setTimeout"),
       clearTimeout: bind("clearTimeout"),

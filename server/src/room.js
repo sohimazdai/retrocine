@@ -8,14 +8,28 @@ import {
   dynamicObjects,
   packObject,
   STATE_OPS,
+  stepPushes,
+  stateMap,
+  releaseRides,
+  runMatchStep,
+  matchActive,
+  runMines,
+  minesPending,
+  fitRoom,
+  stepProps,
+  propsMoving,
 } from "../../dist/state.js";
+import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
+import { spawnPoint, zonesOf } from "../../dist/world.js";
+import { projectile, PROJECTILES } from "../../dist/projectiles.js";
 import { LIMITS, clamp } from "../../dist/physics.js";
+import { ROOM } from "../../dist/layout.js";
 import { livekitToken } from "./livekit.js";
 
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "emote", "jump"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap", "melee", "frost"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -43,10 +57,10 @@ export function sanitizePose(p) {
   if (!p || typeof p !== "object") return null;
   const f = (v, lo, hi) => (Number.isFinite(v) ? clamp(v, lo, hi) : null);
   const x = f(p.x, -LIMITS.x, LIMITS.x),
-    z = f(p.z, -14, LIMITS.z),
+    z = f(p.z, ROOM.back, LIMITS.z),
     y = f(p.y, 0, 12);
   if (x === null || z === null || y === null) return null;
-  return {
+  const pose = {
     x: r3(x),
     y: r3(y),
     z: r3(z),
@@ -54,10 +68,41 @@ export function sanitizePose(p) {
     vy: r3(f(p.vy, -80, 80) ?? 0),
     g: p.g ? 1 : 0,
   };
+  // Shift: sh = held, m = input direction (to push props), ps = pushing/lifting pose, c = throw charge.
+  if (p.sh) pose.sh = 1;
+  if (Array.isArray(p.m) && p.m.length === 2 && p.m.every(Number.isFinite))
+    pose.m = p.m.map((v) => Math.round(clamp(v, -1, 1) * 100) / 100);
+  if (p.ps === 1 || p.ps === 2) pose.ps = p.ps;
+  if (Number.isFinite(p.c) && p.c > 0) pose.c = Math.round(clamp(p.c, 0, 1) * 10) / 10;
+  // Riding: which ride, the flip in progress (0…1), grinding a rail.
+  if (typeof p.rd === "string" && /^[\w-]{1,24}$/.test(p.rd)) pose.rd = p.rd;
+  if (Number.isFinite(p.fl) && p.fl >= 0) pose.fl = Math.round(clamp(p.fl, 0, 1) * 100) / 100;
+  if (p.gr === 1) pose.gr = 1;
+  // Climbing a rope or wall, hanging from a zip line.
+  if (p.cl === 1) pose.cl = 1;
+  if (p.zp === 1) pose.zp = 1;
+  // Sledding down a snow slope.
+  if (p.sd === 1) pose.sd = 1;
+  // Slowed by an icicle.
+  if (p.fr === 1) pose.fr = 1;
+  // Hanging from a bar, and how far pulled up.
+  if (p.hb === 1) pose.hb = 1;
+  if (Number.isFinite(p.pu) && p.pu > 0) pose.pu = Math.round(clamp(p.pu, 0, 1) * 10) / 10;
+  // Driving a kart (and how the front wheels are turned).
+  if (p.kt === 1) pose.kt = 1;
+  if (Number.isFinite(p.ks) && p.ks !== 0) pose.ks = Math.round(clamp(p.ks, -1, 1) * 10) / 10;
+  // Knocked over: orientation of the body and the phase (1 flying, 2 down, 3 getting up).
+  if (Array.isArray(p.tq) && p.tq.length === 4 && p.tq.every(Number.isFinite)) pose.tq = p.tq.map((v) => Math.round(clamp(v, -1, 1) * 100) / 100);
+  if (p.tb === 1 || p.tb === 2 || p.tb === 3) pose.tb = p.tb;
+  if (Number.isInteger(p.tk) && p.tk >= 0 && p.tk <= 4) pose.tk = p.tk;
+  return pose;
 }
-function spawnPose() {
-  return { x: r3((Math.random() - 0.5) * 8), y: 0, z: r3(2 + Math.random() * 4), a: Math.PI, vy: 0, g: 1 };
+function spawnPose(state) {
+  const p = spawnPoint(stateMap(state), Math.random, state.structures);
+  return { x: r3(p.x), y: 0, z: r3(p.z), a: Math.PI, vy: 0, g: 1 };
 }
+// Maps with running water (river) keep simulating while anyone is in the room.
+const flowing = (state) => zonesOf(stateMap(state)).some((z) => z.flow);
 
 export class Room {
   constructor(id, saved, { livekit = null, store = null, log = () => {} } = {}) {
@@ -67,11 +112,14 @@ export class Room {
     this.log = log;
     this.peers = new Map();
     this.state = createState(saved || {}, newId);
+    // Nobody is riding anything in a room that was just loaded.
+    for (const r of this.state.rides) r.by = null;
     this.dirty = false;
     this.saveTimer = null;
     this.physTimer = null;
     this.timerTimeout = null;
     this.sent = new Map();
+    this.pendingProps = new Map();
   }
   get size() {
     return this.peers.size;
@@ -84,6 +132,8 @@ export class Room {
     for (const p of this.peers.values()) if (p !== except) sendRaw(p, data, droppable);
   }
   join(ws, hello, ip) {
+    // One floor geometry serves all rooms: size it for this room's map first.
+    fitRoom(this.state);
     const uid = typeof hello.uid === "string" && /^[\w-]{6,64}$/.test(hello.uid) ? hello.uid : newId();
     // The same browser always gets the same id in a room, so identity (and the media session)
     // survives reconnects and server restarts. A second tab of that browser takes over.
@@ -105,13 +155,16 @@ export class Room {
       ws,
       ip,
       profile: sanitizeProfile(hello.profile),
-      pose: sanitizePose(hello.pose) || spawnPose(),
+      pose: sanitizePose(hello.pose) || spawnPose(this.state),
       tokens: 240,
       poseTokens: 60,
+      thrown: new Map(),
+      lastThrow: {},
       last: now(),
       dropped: 0,
     };
     this.peers.set(id, peer);
+    if (flowing(this.state)) this.startPhysics();
     const others = [...this.peers.values()].filter((p) => p !== peer);
     const rtc = this.livekit
       ? {
@@ -142,6 +195,7 @@ export class Room {
     return { peer };
   }
   leave(peer) {
+    fitRoom(this.state);
     if (this.peers.get(peer.id) !== peer) return;
     this.peers.delete(peer.id);
     for (const o of dynamicObjects(this.state))
@@ -149,6 +203,13 @@ export class Room {
         o.dragBy = null;
         this.startPhysics();
       }
+    for (const ride of releaseRides(this.state, peer.id, peer.pose)) this.broadcast({ t: "ride", ride });
+    // Drop them from any match in progress (a team left empty counts as the other team winning).
+    if (this.state.match) {
+      matchRemovePlayer(this.state.match, peer.id);
+      this.broadcast({ t: "match", match: serializeMatch(this.state.match) });
+      if (matchActive(this.state)) this.startPhysics();
+    }
     this.broadcast({ t: "leave", id: peer.id });
     this.log(`room ${this.id}: ${peer.id} left, ${this.peers.size} inside`);
   }
@@ -169,6 +230,7 @@ export class Room {
     return true;
   }
   handle(peer, msg) {
+    fitRoom(this.state);
     const isPose = msg.t === "pose";
     if (!this.allow(peer, isPose)) {
       if (++peer.dropped > 2000) peer.ws.close(4008, "rate limit");
@@ -183,6 +245,7 @@ export class Room {
         if (!pose) return;
         peer.pose = pose;
         this.broadcast({ t: "pose", id: peer.id, s: now(), ...pose }, peer, true);
+        if (pose.sh) this.startPhysics();
         return;
       }
       case "profile": {
@@ -195,28 +258,82 @@ export class Room {
         const out = { t: "act", id: peer.id, s: now(), k: msg.k };
         if (msg.k === "throw") {
           if (!Array.isArray(msg.to) || msg.to.length !== 3 || !msg.to.every(Number.isFinite)) return;
+          const kind = projectile(msg.w);
+          // Cooldowns per projectile (bricks 1 s, fireballs 5 s, grenades 10 s), with a little slack.
+          const t = now();
+          if (t - (peer.lastThrow[kind.id] || 0) < kind.cooldown * 1000 - 150) return;
+          peer.lastThrow[kind.id] = t;
           out.to = msg.to.map((v) => r3(clamp(v, -40, 40)));
+          out.w = kind.id;
+          out.pw = Number.isFinite(msg.pw) ? Math.round(clamp(msg.pw, 1, 1.6) * 100) / 100 : 1;
+          // The thrower's own velocity, carried into the shot.
+          if (Array.isArray(msg.vel) && msg.vel.length === 2 && msg.vel.every(Number.isFinite)) out.vel = msg.vel.map((v) => r3(clamp(v, -12, 12)));
+          if (typeof msg.pid === "string") {
+            out.pid = msg.pid.slice(0, 24);
+            if (kind.explosion || kind.frost) {
+              peer.thrown.set(out.pid, { kind: kind.id, at: t });
+              for (const [pid, v] of peer.thrown) if (t - v.at > 15000) peer.thrown.delete(pid);
+            }
+          }
         }
-        if (msg.k === "kick" && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
+        if ((msg.k === "kick" || msg.k === "shoot") && typeof msg.target === "string") out.target = msg.target.slice(0, 32);
+        if (msg.k === "trick") {
+          if (typeof msg.n !== "string") return;
+          out.n = msg.n.slice(0, 60);
+        }
         if (msg.k === "emote") {
           if (typeof msg.e !== "string") return;
           out.e = msg.e.slice(0, 16);
+        }
+        // A kart ran someone over: only a driver can, and the throw is limited.
+        if (msg.k === "hit") {
+          if (!peer.pose.kt || typeof msg.target !== "string" || !this.peers.has(msg.target)) return;
+          if (!Array.isArray(msg.v) || msg.v.length !== 3 || !msg.v.every(Number.isFinite)) return;
+          out.target = msg.target;
+          out.v = [clamp(msg.v[0], -14, 14), clamp(msg.v[1], 0, 14), clamp(msg.v[2], -14, 14)].map(r3);
+        }
+        if (msg.k === "lap") {
+          if (!Number.isFinite(msg.ms) || msg.ms < 1500 || msg.ms > 600000) return;
+          out.ms = Math.round(msg.ms);
+        }
+        // An icicle shattered: only one that was really thrown, once.
+        if (msg.k === "frost") {
+          const thrown = typeof msg.pid === "string" && peer.thrown.get(msg.pid);
+          if (!thrown || thrown.kind !== "icicle" || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
+          peer.thrown.delete(msg.pid);
+          out.pid = msg.pid.slice(0, 24);
+          out.x = r3(clamp(msg.x, -40, 40));
+          out.z = r3(clamp(msg.z, -40, 40));
+        }
+        // A melee hit on another player (the victim applies the damage on their own client).
+        if (msg.k === "melee") {
+          if (typeof msg.target !== "string" || !this.peers.has(msg.target)) return;
+          out.target = msg.target;
         }
         this.broadcast(out, peer);
         return;
       }
     }
     if (!STATE_OPS.has(msg.t)) return;
+    // An explosion must come from a grenade or fireball this participant actually threw.
+    if (msg.t === "boom") {
+      const thrown = peer.thrown.get(msg.pid);
+      if (!thrown || thrown.kind !== msg.kind) return;
+      peer.thrown.delete(msg.pid);
+    }
     const result = applyOp(this.state, msg, {
       uid: peer.voter,
       peer: peer.id,
+      pose: peer.pose,
       name: peer.profile.name,
       now: now(),
       newId,
+      peers: [...this.peers.values()].map((p) => p.id),
     });
     if (!result) return;
     for (const { msg: out, others } of result.out) this.broadcast(out, others ? peer : null);
     if (result.physics) this.startPhysics();
+    if (msg.t.startsWith("match")) this.startPhysics();
     if (msg.t.startsWith("timer")) this.scheduleTimer();
     this.markDirty();
   }
@@ -233,6 +350,7 @@ export class Room {
     this.physTimer = null;
   }
   tick() {
+    fitRoom(this.state);
     const t = performance.now(),
       elapsed = Math.min((t - this.lastStep) / 1000, 0.1);
     this.lastStep = t;
@@ -242,14 +360,41 @@ export class Room {
       objects = dynamicObjects(this.state);
     for (const o of objects) if (o.dragBy && nowMs - o.dragAt > 1000) o.dragBy = null;
     const dragged = (o) => !!o.dragBy;
+    const pushers = [...this.peers.values()]
+      .filter((p) => p.pose.sh)
+      .map((p) => ({ id: p.id, x: p.pose.x, y: p.pose.y, z: p.pose.z, mx: p.pose.m?.[0] || 0, mz: p.pose.m?.[1] || 0 }));
+    if (pushers.length || Object.keys(this.state.lifts || {}).length)
+      for (const m of stepPushes(this.state, pushers, elapsed)) this.pendingProps.set(m.id, m);
     let steps = 0;
     while (this.acc >= PHYS_DT && steps < 12) {
-      if (stepWorld(this.state, PHYS_DT, dragged))
-        this.broadcast({ t: "goal", score: this.state.score, by: this.state.lastTouch || null });
+      for (const event of stepWorld(this.state, PHYS_DT, dragged)) {
+        this.broadcast(event);
+        this.markDirty();
+      }
+      // Props knocked about: everyone gets them ~30 times a second, and once more at rest.
+      for (const id of stepProps(this.state, PHYS_DT)) {
+        const m = { id, ...this.state.structures[id] };
+        if (this.state.motion?.[id]) this.pendingProps.set(id, m);
+        else {
+          this.pendingProps.delete(id);
+          this.broadcast({ t: "struct", ...m });
+          this.markDirty();
+        }
+      }
       this.acc -= PHYS_DT;
       steps++;
     }
-    let awake = false;
+    // Mines whose fuse ran out go off.
+    for (const m of runMines(this.state, nowMs)) {
+      this.broadcast(m);
+      this.markDirty();
+    }
+    // Advance the team match (countdown, round ends, respawns) and tell everyone.
+    for (const m of runMatchStep(this.state, nowMs, [...this.peers.values()].map((p) => p.id))) {
+      this.broadcast(m);
+      this.markDirty();
+    }
+    let awake = propsMoving(this.state) || pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || minesPending(this.state);
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;
@@ -271,6 +416,9 @@ export class Room {
     }
   }
   broadcastObjects(final) {
+    for (const m of this.pendingProps.values()) this.broadcast({ t: "struct", ...m }, null, !final);
+    if (this.pendingProps.size) this.markDirty();
+    this.pendingProps.clear();
     const changed = [];
     for (const o of dynamicObjects(this.state)) {
       const packed = packObject(o),

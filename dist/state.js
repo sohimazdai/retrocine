@@ -1,51 +1,104 @@
 // Shared room state and its operations. The sync server applies every operation with these
 // functions, and the browser uses the same ones when it has no connection, so both behave alike.
-import { clamp, stepCube, collideCubes, kickCube } from "./physics.js";
+import { clamp, stepCube, collideCubes, kickCube, LIMITS, inside } from "./physics.js";
+import { floorBack, setRoomScale, ROOM } from "./layout.js";
 import {
   MAX_NOTES,
   MAX_CUBES,
   NOTE_TYPES,
   CUBE_COLORS,
   DRAG_BOUNDS,
-  STRUCTURE_IDS,
-  STRUCTURES,
-  ballDefaults,
-  ballResetPosition,
-  checkGoal,
-  clampBig,
-  clampStructure,
-  defaultCubes,
-  defaultStructures,
-  makeCube,
+  LIFT_HEIGHT,
+  PUSH_SPEED,
+  mapDef,
+  mapProps,
+  propInfo,
   obstacles,
+  defaultPositions,
+  clampProp,
   supportHeight,
-  BIG_DEFAULT,
+  makeBall,
+  defaultBalls,
+  defaultRides,
+  makeCube,
+  defaultCubes,
+  goalsOf,
+  checkGoal,
+  ballResetPosition,
+  hoopsOf,
+  checkHoop,
+  zonesOf,
+  inZone,
+  iceAt,
+  BALLS,
+  TIP_LIE,
+  tipShape,
+  yawed,
+  propColliders,
+  propCentre,
 } from "./world.js";
+import { MAPS } from "./maps/index.js";
+import { projectile } from "./projectiles.js";
+import * as match from "./match.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
+const MAX_MINES = 16;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
 export function createState(saved = {}, newId) {
-  const structures = defaultStructures();
-  for (const id of STRUCTURE_IDS) {
-    const p = saved.structures?.[id];
-    if (p && finite(p.x) && finite(p.z)) structures[id] = clampStructure(p.x, p.z);
-  }
-  const big = saved.big && finite(saved.big.x) ? clampBig(saved.big.x, saved.big.z) : { ...BIG_DEFAULT };
-  const ball = ballDefaults();
-  if (saved.ball && finite(saved.ball.x) && finite(saved.ball.z))
-    Object.assign(ball, { x: saved.ball.x, z: saved.ball.z, y: ball.size / 2 });
+  const map = mapDef(saved.map);
+  setRoomScale(map.scale || 1);
+  const sameMap = saved.map === map.id || (!saved.map && map.id === MAPS[0].id);
+  const structures = defaultPositions(map);
+  if (sameMap)
+    for (const info of mapProps(map)) {
+      const p = saved.structures?.[info.id] || (info.id === "big" ? saved.big : null);
+      if (p && finite(p.x) && finite(p.z)) {
+        structures[info.id] = clampProp(info, p.x, p.z);
+        // How it stands (or lies): its turn and how far it has tipped over.
+        if (finite(info.weight)) {
+          if (finite(p.yaw) && p.yaw) structures[info.id].yaw = Math.atan2(Math.sin(p.yaw), Math.cos(p.yaw));
+          if (finite(p.ta) && p.ta > 0.02) Object.assign(structures[info.id], { ta: clamp(p.ta, 0, TIP_LIE), td: clamp(Math.round(num(p.td, 0, 3)), 0, 3) });
+        }
+      }
+    }
+  const balls = defaultBalls(map);
+  if (sameMap)
+    for (const b of balls) {
+      const p = (saved.balls || []).find((x) => x.id === b.id) || (b.id === "football" ? saved.ball : null);
+      if (p && finite(p.x) && finite(p.z)) {
+        if (BALLS[b.kind]?.grows && finite(p.size)) b.size = clamp(p.size, BALLS[b.kind].size, BALLS[b.kind].grows.max);
+        Object.assign(b, { x: p.x, z: p.z, y: Math.max(b.size / 2, num(p.y, 0, 20, b.size / 2)) });
+      }
+    }
+  const cubes = sameMap && saved.cubes ? saved.cubes : defaultCubes(map, newId);
+  // A prop saved half-tipped settles one way or the other once the room runs again.
+  const motion = {};
+  for (const [id, p] of Object.entries(structures)) if (p.ta && p.ta < TIP_LIE) motion[id] = { vx: 0, vz: 0, vy: 0, wy: 0, wt: 0, idle: 0 };
+  const rides = defaultRides(map);
+  if (sameMap)
+    for (const r of rides) {
+      const p = (saved.rides || []).find((x) => x.id === r.id);
+      if (p && finite(p.x) && finite(p.z)) Object.assign(r, { x: clamp(p.x, -LIMITS.x, LIMITS.x), z: clamp(p.z, floorBack(p.x), LIMITS.z), a: num(p.a, -10, 10), by: typeof p.by === "string" ? p.by : null });
+    }
   return {
+    map: map.id,
     notes: (saved.notes || []).slice(0, MAX_NOTES).map((n) => sanitizeNote(n, n.id || newId())),
-    cubes: (saved.cubes || defaultCubes(newId))
+    cubes: cubes
       .slice(0, MAX_CUBES)
-      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -14, 14), z: num(c.z, -10, 10), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
-    ball,
-    big,
+      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -LIMITS.x, LIMITS.x), z: num(c.z, ROOM.back, LIMITS.z), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
+    balls,
+    rides,
     structures,
-    score: num(saved.score, 0, 1e6),
-    flags: { scored: false },
+    motion,
+    scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
+    match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
+    mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
+    mineAt: {},
+    flags: {},
+    lifts: {},
+    v: 0,
     timer: {
       running: false,
       endAt: null,
@@ -53,6 +106,14 @@ export function createState(saved = {}, newId) {
       visible: !!saved.timer?.visible,
     },
   };
+}
+function sanitizeScores(scores) {
+  return Object.fromEntries(
+    Object.entries(scores)
+      .filter(([k, v]) => /^[\w-]{1,32}$/.test(k) && finite(v))
+      .slice(0, 16)
+      .map(([k, v]) => [k, clamp(Math.round(v), 0, 1e6)]),
+  );
 }
 function sanitizeNote(n, id) {
   return {
@@ -70,56 +131,144 @@ function sanitizeNote(n, id) {
 // What is persisted and what a newcomer receives.
 export function serializeState(s) {
   return {
+    map: s.map,
     notes: s.notes,
     cubes: s.cubes.map(({ id, x, y, z, color, size }) => ({ id, x, y, z, color, size })),
-    ball: { x: s.ball.x, y: s.ball.y, z: s.ball.z },
-    big: s.big,
+    balls: s.balls.map(({ id, kind, x, y, z, size }) => (BALLS[kind]?.grows ? { id, kind, x, y, z, size } : { id, kind, x, y, z })),
+    rides: (s.rides || []).map(({ id, kind, x, z, a, by }) => ({ id, kind, x, z, a, by })),
     structures: s.structures,
-    score: s.score,
+    scores: s.scores,
+    match: s.match ? match.serializeMatch(s.match) : undefined,
+    mines: (s.mines || []).map(({ id, x, z, by, armAt, triggerAt }) => ({ id, x, z, by, armAt, triggerAt })),
     timer: s.timer,
   };
 }
+export const stateMap = (s) => mapDef(s.map);
+// The room's floor follows its map's size (map.scale). One shared geometry serves every room, so
+// each entry point below sets it for the room it works on (cheap when it is already right).
+export const fitRoom = (s) => setRoomScale(stateMap(s).scale || 1);
+// Someone left the room: whatever they rode stays where they were.
+export function releaseRides(s, peer, pose) {
+  fitRoom(s);
+  const freed = [];
+  for (const r of s.rides || [])
+    if (r.by === peer) {
+      r.by = null;
+      if (pose && finite(pose.x) && finite(pose.z)) Object.assign(r, { x: clamp(pose.x, -LIMITS.x, LIMITS.x), z: clamp(pose.z, floorBack(pose.x), LIMITS.z), a: finite(pose.a) ? pose.a : r.a });
+      freed.push({ ...r });
+    }
+  return freed;
+}
+export const THROW_SPEED = 22;
+// Colliders of the current map, cached until a prop moves (s.v is bumped on every prop change).
+export function stateObstacles(s) {
+  if (s._obs && s._obsV === s.v && s._obsMap === s.map) return s._obs;
+  s._obs = obstacles(stateMap(s), s.structures);
+  s._obsV = s.v;
+  s._obsMap = s.map;
+  return s._obs;
+}
 export function dynamicObjects(s) {
-  return [...s.cubes, s.ball];
+  return [...s.cubes, ...s.balls];
 }
 export function findObject(s, id) {
-  return id === s.ball.id ? s.ball : s.cubes.find((c) => c.id === id);
+  return s.balls.find((b) => b.id === id) || s.cubes.find((c) => c.id === id);
 }
+// Growing snowballs also send their size.
 export function packObject(o) {
   const r = (v) => Math.round(v * 1000) / 1000;
-  return [o.id, r(o.x), r(o.y), r(o.z), r(o.vx), r(o.vy), r(o.vz), r(o.spin || 0), r(o.rotation || 0)];
+  const packed = [o.id, r(o.x), r(o.y), r(o.z), r(o.vx), r(o.vy), r(o.vz), r(o.spin || 0), r(o.rotation || 0)];
+  if (BALLS[o.kind]?.grows) packed.push(r(o.size));
+  return packed;
 }
-export function unpackObject([id, x, y, z, vx, vy, vz, spin, rotation]) {
-  return { id, x, y, z, vx, vy, vz, spin, rotation };
+export function unpackObject([id, x, y, z, vx, vy, vz, spin, rotation, size]) {
+  const o = { id, x, y, z, vx, vy, vz, spin, rotation };
+  if (finite(size)) o.size = size;
+  return o;
 }
 export function timerLeft(timer, now) {
   return timer.running ? Math.max(0, Math.ceil((timer.endAt - now) / 1000)) : timer.remaining;
 }
-export function isMoving(o) {
-  return Math.abs(o.vx) + Math.abs(o.vz) + Math.abs(o.vy) > 0.02 || o.y > o.size / 2 + 0.002 + (o.restY || 0);
+// A free spot on the floor near (x, z), clear of every collider of the map.
+export function freeSpot(s, x, z, pad = 1.2) {
+  fitRoom(s);
+  const obs = stateObstacles(s);
+  for (let r = 0; r < 24; r += 0.5)
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
+      const px = clamp(x + Math.sin(a) * r, -DRAG_BOUNDS.x, DRAG_BOUNDS.x),
+        pz = clamp(z + Math.cos(a) * r, floorBack(px) + 1.6, DRAG_BOUNDS.z);
+      if (!obs.some((b) => !b.y && b.h > 0.1 && inside(px, pz, b, pad))) return { x: px, z: pz };
+    }
+  return { x, z };
 }
 
-// Fixed-step simulation of cubes and the ball. Returns true when a goal was scored.
+// Fixed-step simulation of cubes and balls: water currents, wrap-around at river ends, goals and
+// hoops. Returns the scoring events of this step.
 export function stepWorld(s, dt, skip = () => false) {
-  const obs = obstacles(s.big, s.structures);
-  const objects = dynamicObjects(s);
-  const previous = { ...s.ball };
-  for (const o of objects) if (!skip(o)) stepCube(o, obs, dt);
+  fitRoom(s);
+  const map = stateMap(s),
+    obs = stateObstacles(s),
+    objects = dynamicObjects(s),
+    zones = zonesOf(map),
+    events = [];
+  const previous = s.balls.map((b) => ({ x: b.x, y: b.y, z: b.z }));
+  for (const o of objects) {
+    if (skip(o)) continue;
+    let grip = 1;
+    for (const zone of zones) {
+      if (!inZone(zone, o.x, o.z)) continue;
+      if (zone.grip != null) grip = zone.grip;
+      if (zone.flow && o.y < (zone.depth ?? 0.6) + o.size / 2) {
+        const k = 1 - Math.exp(-(zone.drag ?? 1.5) * dt);
+        o.vx += ((zone.flow.x || 0) - o.vx) * k;
+        o.vz += ((zone.flow.z || 0) - o.vz) * k;
+      }
+      // Whatever leaves the field at one end of the river comes back at the other.
+      if (zone.wrap === "z") {
+        const next = o.z + o.vz * dt;
+        if (o.vz > 0 && next > LIMITS.z - o.size / 2 - 0.05) o.z = floorBack(o.x) + o.size / 2 + 0.3;
+        else if (o.vz < 0 && next < floorBack(o.x) + o.size / 2 + 0.05) o.z = LIMITS.z - o.size / 2 - 0.3;
+      }
+    }
+    stepCube(o, obs, dt, grip);
+    // A snowball rolled over snow (not ice) picks it up and grows, slower as it gets big.
+    const grows = BALLS[o.kind]?.grows;
+    if (grows && grip === 1 && o.y <= o.size / 2 + 0.02 && o.size < grows.max) {
+      const speed = Math.hypot(o.vx, o.vz);
+      if (speed > 0.4) {
+        const before = o.size;
+        o.size = Math.min(grows.max, o.size + (speed * dt * grows.rate) / o.size);
+        o.y += (o.size - before) / 2;
+      }
+    }
+  }
   for (let i = 0; i < objects.length; i++)
     for (let j = i + 1; j < objects.length; j++) collideCubes(objects[i], objects[j]);
-  const goal = STRUCTURES.find((x) => x.id === "goal");
-  const goalPos = { ...goal, ...s.structures.goal };
-  if (!skip(s.ball) && checkGoal(s.ball, previous, goalPos, s.flags)) {
-    s.score++;
-    return true;
-  }
-  return false;
+  const goals = goalsOf(map, s.structures),
+    hoops = hoopsOf(map, s.structures);
+  s.balls.forEach((ball, i) => {
+    if (skip(ball)) return;
+    if (BALLS[ball.kind]?.goal)
+      for (const goal of goals)
+        if (checkGoal(ball, previous[i], goal, s.flags)) {
+          s.scores[goal.id] = (s.scores[goal.id] || 0) + 1;
+          events.push({ t: "goal", goal: goal.id, label: goal.label, score: s.scores[goal.id], by: s.lastTouch?.[ball.id] || null });
+        }
+    if (ball.kind === "basketball")
+      for (const hoop of hoops)
+        if (checkHoop(ball, previous[i], hoop, s.flags)) {
+          s.scores[hoop.id] = (s.scores[hoop.id] || 0) + 2;
+          events.push({ t: "basket", hoop: hoop.id, label: hoop.label, score: s.scores[hoop.id], by: s.lastTouch?.[ball.id] || null });
+        }
+  });
+  return events;
 }
 
 // Applies one client operation. Returns { out, physics } where out are messages for everyone in
 // the room ({ msg, others } — others: do not echo to the sender) and physics marks that the
 // simulation must wake up. Returns null for an invalid or forbidden operation.
 export function applyOp(s, op, ctx) {
+  fitRoom(s);
   const out = [],
     all = (msg) => out.push({ msg, others: false }),
     others = (msg) => out.push({ msg, others: true });
@@ -129,10 +278,7 @@ export function applyOp(s, op, ctx) {
       if (s.notes.length >= MAX_NOTES) return null;
       const text = str(op.text, 280).trim();
       if (!text) return null;
-      const note = sanitizeNote(
-        { text, type: op.type, author: ctx.name, x: op.x, z: op.z, votes: 0 },
-        ctx.newId(),
-      );
+      const note = sanitizeNote({ text, type: op.type, author: ctx.name, x: op.x, z: op.z, votes: 0 }, ctx.newId());
       s.notes.push(note);
       all({ t: "note", note });
       break;
@@ -185,7 +331,7 @@ export function applyOp(s, op, ctx) {
         id: ctx.newId(),
         x,
         z,
-        y: supportHeight(x, z, s.big, s.structures) + 0.36,
+        y: supportHeight(x, z, stateMap(s), s.structures) + 0.36,
         color: CUBE_COLORS[s.cubes.length % CUBE_COLORS.length],
       });
       s.cubes.push(cube);
@@ -205,8 +351,22 @@ export function applyOp(s, op, ctx) {
       const o = findObject(s, op.id);
       if (!o || !finite(op.x) || !finite(op.z)) return null;
       if (Math.hypot(o.x - op.x, o.z - op.z) > 4) return null;
-      kickCube(o, { x: op.x, z: op.z, angle: num(op.a, -10, 10) }, num(op.power, 0, 8, 3));
-      if (o === s.ball) s.lastTouch = ctx.peer;
+      kickCube(o, { x: op.x, z: op.z, angle: num(op.a, -10, 10) }, num(op.power, 0, 9, 3));
+      if (s.balls.includes(o)) (s.lastTouch ||= {})[o.id] = ctx.peer;
+      physics = true;
+      break;
+    }
+    case "obj.throw": {
+      // Throwing a ball from your hands (basketball shots, passes): it leaves from (x, y, z) — next to
+      // where it lay — with a launch velocity, limited in speed.
+      const o = findObject(s, op.id);
+      if (!o || ![op.x, op.z, op.vx, op.vy, op.vz].every(finite)) return null;
+      if (Math.hypot(o.x - op.x, o.z - op.z) > 2.5) return null;
+      const speed = Math.hypot(op.vx, op.vy, op.vz),
+        k = speed > THROW_SPEED ? THROW_SPEED / speed : 1;
+      Object.assign(o, { x: op.x, z: op.z, vx: op.vx * k, vy: op.vy * k, vz: op.vz * k, dragBy: null });
+      if (finite(op.y)) o.y = Math.max(o.y, clamp(op.y, 0, 4));
+      if (s.balls.includes(o)) (s.lastTouch ||= {})[o.id] = ctx.peer;
       physics = true;
       break;
     }
@@ -222,7 +382,7 @@ export function applyOp(s, op, ctx) {
       o.vy = 0;
       o.x = x;
       o.z = z;
-      o.y = supportHeight(x, z, s.big, s.structures) + 0.9;
+      o.y = supportHeight(x, z, stateMap(s), s.structures) + 0.9;
       o.dragBy = ctx.peer;
       o.dragAt = ctx.now;
       physics = true;
@@ -239,21 +399,130 @@ export function applyOp(s, op, ctx) {
       break;
     }
     case "struct.move": {
-      if (!finite(op.x) || !finite(op.z)) return null;
-      if (op.id === "big") {
-        s.big = clampBig(op.x, op.z);
-        others({ t: "struct", id: "big", x: s.big.x, z: s.big.z });
-      } else if (STRUCTURE_IDS.includes(op.id)) {
-        s.structures[op.id] = clampStructure(op.x, op.z);
-        others({ t: "struct", id: op.id, ...s.structures[op.id] });
-      } else return null;
+      const info = propInfo(stateMap(s), op.id);
+      if (!info || !finite(op.x) || !finite(op.z) || s.lifts?.[op.id] || !finite(info.weight)) return null;
+      // Dragged: it keeps how it stands (or lies) and stops moving.
+      const { yaw, ta, td } = s.structures[op.id] || {};
+      s.structures[op.id] = { ...clampProp(info, op.x, op.z), ...(yaw ? { yaw } : {}), ...(ta ? { ta, td } : {}) };
+      if (s.motion) delete s.motion[op.id];
+      s.v++;
+      others({ t: "struct", id: op.id, ...s.structures[op.id] });
+      physics = true;
+      break;
+    }
+    case "prop.kick": {
+      // E next to a prop: a kick that shoves it (and may tip a light, tall one over); next to one
+      // that has fallen over, you lift it back onto its feet.
+      const info = propInfo(stateMap(s), op.id),
+        pos = s.structures[op.id],
+        from = ctx.pose || (finite(op.x) && finite(op.z) ? { x: op.x, y: 0, z: op.z } : null);
+      if (!movable(s, info) || !pos || !from) return null;
+      const near = propNearest(info, pos, from.x, (from.y || 0) + 0.35, from.z);
+      if (near.d > 1.3) return null;
+      if ((pos.ta || 0) > tipShape(info, pos.td).crit) raiseProp(s, op.id);
+      else {
+        const c = propCentre(info, pos),
+          dx = c.x - from.x,
+          dz = c.z - from.z,
+          len = Math.hypot(dx, dz) || 1;
+        pushProp(s, op.id, [(dx / len) * KICK_PROP, 0, (dz / len) * KICK_PROP], { x: near.x, y: (from.y || 0) + 0.4, z: near.z }, 0.6);
+      }
+      physics = true;
+      break;
+    }
+    case "prop.hit": {
+      // Something thrown, or a kart, ran into a prop: a push along the way it was going.
+      const info = propInfo(stateMap(s), op.id),
+        pos = s.structures[op.id];
+      if (!movable(s, info) || !pos || ![op.vx, op.vz].every(finite)) return null;
+      let mass;
+      if (op.kind === "kart") {
+        if (ctx.pose && !ctx.pose.kt) return null;
+        mass = 3;
+      } else {
+        const k = projectile(op.kind);
+        if (k.id !== op.kind || k.explosion || k.place) return null;
+        mass = k.mass;
+      }
+      const speed = Math.min(Math.hypot(op.vx, op.vz), op.kind === "kart" ? 14 : 30),
+        J = Math.min(mass * speed * 0.5, op.kind === "kart" ? 12 : 6);
+      if (J < 0.02) return null;
+      const dx = op.vx / (Math.hypot(op.vx, op.vz) || 1),
+        dz = op.vz / (Math.hypot(op.vx, op.vz) || 1),
+        c = propCentre(info, pos),
+        at = [op.x, op.y, op.z].every(finite) && Math.hypot(op.x - c.x, op.z - c.z) < 4 ? { x: op.x, y: clamp(op.y, 0, 6), z: op.z } : null;
+      pushProp(s, op.id, [dx * J, 0, dz * J], at, 1);
       physics = true;
       break;
     }
     case "ball.reset": {
-      const goal = { ...STRUCTURES.find((x) => x.id === "goal"), ...s.structures.goal };
-      Object.assign(s.ball, ballResetPosition(goal), { dragBy: null });
-      s.flags.scored = false;
+      const map = stateMap(s);
+      const list = op.id ? s.balls.filter((b) => b.id === op.id) : s.balls.filter((b) => BALLS[b.kind]?.main);
+      if (!list.length) return null;
+      for (const b of list) Object.assign(b, ballResetPosition(map, s.structures, b), { dragBy: null });
+      s.flags = {};
+      physics = true;
+      break;
+    }
+    case "map.set": {
+      const map = MAPS.find((m) => m.id === op.id);
+      if (!map || map.id === s.map) return null;
+      s.map = map.id;
+      fitRoom(s);
+      s.motion = {};
+      s.structures = defaultPositions(map);
+      s.balls = defaultBalls(map);
+      s.cubes = defaultCubes(map, ctx.newId);
+      s.rides = defaultRides(map);
+      s.scores = {};
+      s.flags = {};
+      s.lifts = {};
+      s.lastTouch = {};
+      s.v++;
+      // Stickers stay, moved out of anything solid on the new map.
+      for (const n of s.notes) Object.assign(n, freeSpot(s, n.x, n.z));
+      all({ t: "reset", by: ctx.peer, name: ctx.name, state: serializeState(s), objs: dynamicObjects(s).map(packObject) });
+      physics = true;
+      break;
+    }
+    case "ride.take": {
+      // Get on a free skateboard, scooter or bike next to you (one at a time).
+      const r = (s.rides || []).find((x) => x.id === op.id);
+      if (!r || (r.by && r.by !== ctx.peer)) return null;
+      if (ctx.pose && Math.hypot(ctx.pose.x - r.x, ctx.pose.z - r.z) > 3) return null;
+      for (const other of s.rides)
+        if (other !== r && other.by === ctx.peer) {
+          other.by = null;
+          if (ctx.pose) Object.assign(other, { x: ctx.pose.x, z: ctx.pose.z });
+          all({ t: "ride", ride: { ...other } });
+        }
+      r.by = ctx.peer;
+      all({ t: "ride", ride: { ...r } });
+      break;
+    }
+    case "ride.leave": {
+      // Step off: the ride stays where you left it.
+      const r = (s.rides || []).find((x) => x.id === op.id);
+      if (!r || r.by !== ctx.peer) return null;
+      r.by = null;
+      if (finite(op.x) && finite(op.z)) {
+        r.x = clamp(op.x, -LIMITS.x, LIMITS.x);
+        r.z = clamp(op.z, floorBack(r.x), LIMITS.z);
+      }
+      if (finite(op.a)) r.a = clamp(op.a, -10, 10);
+      all({ t: "ride", ride: { ...r } });
+      break;
+    }
+    case "boom": {
+      const kind = projectile(op.kind);
+      if (!kind.explosion || op.kind !== kind.id || ![op.x, op.y, op.z].every(finite)) return null;
+      const x = clamp(op.x, -ROOM.halfWidth - 1.3, ROOM.halfWidth + 1.3),
+        y = clamp(op.y, -1, 30),
+        z = clamp(op.z, ROOM.back - 2, ROOM.front + 1.7);
+      const { radius, power } = kind.explosion;
+      const props = applyBlast(s, x, y, z, radius, power);
+      all({ t: "boom", by: ctx.peer, kind: kind.id, pid: typeof op.pid === "string" ? op.pid.slice(0, 24) : null, x, y, z, r: radius, power });
+      for (const p of props) all({ t: "struct", ...p });
       physics = true;
       break;
     }
@@ -264,16 +533,56 @@ export function applyOp(s, op, ctx) {
       break;
     }
     case "timer.toggle": {
-      if (s.timer.running)
-        s.timer = { ...s.timer, running: false, endAt: null, remaining: timerLeft(s.timer, ctx.now) };
-      else
-        s.timer = { running: true, endAt: ctx.now + (s.timer.remaining || 300) * 1000, remaining: s.timer.remaining || 300, visible: true };
+      if (s.timer.running) s.timer = { ...s.timer, running: false, endAt: null, remaining: timerLeft(s.timer, ctx.now) };
+      else s.timer = { running: true, endAt: ctx.now + (s.timer.remaining || 300) * 1000, remaining: s.timer.remaining || 300, visible: true };
       all({ t: "timer", timer: s.timer });
       break;
     }
     case "timer.hide": {
       s.timer = { ...s.timer, running: false, endAt: null, visible: false };
       all({ t: "timer", timer: s.timer });
+      break;
+    }
+    // ——— Mines: set down at your feet; anyone stepping on an armed one starts a 3 s fuse ———
+    case "mine.place": {
+      const M = projectile("mine").mine,
+        cool = projectile("mine").cooldown * 1000;
+      if (![op.x, op.z].every(finite)) return null;
+      if (ctx.pose && Math.hypot(ctx.pose.x - op.x, ctx.pose.z - op.z) > 1.8) return null;
+      s.mines = s.mines || [];
+      s.mineAt = s.mineAt || {};
+      if (s.mines.some((m) => m.by === ctx.peer) || s.mines.length >= MAX_MINES) return null;
+      if (ctx.now - (s.mineAt[ctx.peer] || -Infinity) < cool - 150) return null;
+      s.mineAt[ctx.peer] = ctx.now;
+      s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, ROOM.back, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
+      all({ t: "mines", mines: serializeState(s).mines });
+      break;
+    }
+    case "mine.step": {
+      const mine = (s.mines || []).find((m) => m.id === op.id);
+      if (!mine || mine.triggerAt != null || ctx.now < mine.armAt) return null;
+      mine.triggerAt = ctx.now + projectile("mine").mine.fuse;
+      all({ t: "mines", mines: serializeState(s).mines });
+      physics = true;
+      break;
+    }
+    // ——— Team match (paintball) ———
+    case "match.ready": {
+      if (!match.matchEnabled(stateMap(s))) return null;
+      if (match.ready(s.match, ctx.peer, ctx.now, ctx.peers || [ctx.peer])) { all({ t: "match", match: match.serializeMatch(s.match) }); physics = true; }
+      break;
+    }
+    case "match.unready": {
+      match.unready(s.match, ctx.peer);
+      all({ t: "match", match: match.serializeMatch(s.match) });
+      break;
+    }
+    case "match.dmg": {
+      if (match.damage(s.match, ctx.peer, typeof op.by === "string" ? op.by : null, num(op.amount, 0, 10))) all({ t: "match", match: match.serializeMatch(s.match) });
+      break;
+    }
+    case "match.dead": {
+      if (match.died(s.match, ctx.peer, typeof op.by === "string" ? op.by : null)) all({ t: "match", match: match.serializeMatch(s.match) });
       break;
     }
     default:
@@ -291,11 +600,443 @@ export const STATE_OPS = new Set([
   "cube.add",
   "cube.del",
   "obj.kick",
+  "obj.throw",
   "obj.drag",
   "obj.release",
   "struct.move",
+  "prop.kick",
+  "prop.hit",
   "ball.reset",
+  "map.set",
+  "ride.take",
+  "ride.leave",
+  "boom",
   "timer.start",
   "timer.toggle",
   "timer.hide",
+  "mine.place",
+  "mine.step",
+  "match.ready",
+  "match.unready",
+  "match.dmg",
+  "match.dead",
 ]);
+
+// Advances the match clock (countdown, round transitions). Returns broadcast messages. The server
+// calls it each tick; the browser calls it in its own loop offline. Each round-start message carries
+// `spawns` so clients can reposition their own avatar.
+export function runMatchStep(s, now, peerIds, rand = Math.random) {
+  fitRoom(s);
+  if (!s.match || !match.matchEnabled(stateMap(s))) return [];
+  return match.stepMatch(s.match, now, peerIds, stateMap(s), rand).map((patch) => ({ t: "match", match: match.serializeMatch(s.match), spawns: patch.spawns }));
+}
+// Mines whose fuse has run out go off: the same blast as a grenade (props topple, objects fly, people
+// are hurt on their own screens). Returns broadcast messages and whether physics must wake up.
+export function runMines(s, now) {
+  fitRoom(s);
+  const out = [],
+    gone = (s.mines || []).filter((m) => m.triggerAt != null && now >= m.triggerAt);
+  if (!gone.length) return out;
+  const M = projectile("mine").mine;
+  s.mines = s.mines.filter((m) => !gone.includes(m));
+  for (const m of gone) {
+    const props = applyBlast(s, m.x, 0.3, m.z, M.radius, M.power);
+    out.push({ t: "boom", by: m.by, kind: "mine", pid: null, x: m.x, y: 0.3, z: m.z, r: M.radius, power: M.power });
+    for (const p of props) out.push({ t: "struct", ...p });
+  }
+  out.push({ t: "mines", mines: serializeState(s).mines });
+  return out;
+}
+export const minesPending = (s) => (s.mines || []).some((m) => m.triggerAt != null);
+export function matchActive(s) {
+  return s.match && s.match.phase !== "idle";
+}
+
+// ——— Pushing and lifting props (Shift) ———
+// pushers: [{ id, x, y, z, mx, mz }] — avatars holding Shift, their position and input direction.
+// A prop moves when the pushes on it add up to its weight (opposite sides cancel, adjacent sides
+// add up). Avatars on opposite sides together lift it, if there are as many as its lift value;
+// the lifted prop follows their midpoint until they let go. Returns the props that moved.
+export function propPosition(s, id) {
+  fitRoom(s);
+  return s.structures[id];
+}
+function setPropPosition(s, id, p) {
+  s.structures[id] = { ...s.structures[id], ...p };
+  if (!s.structures[id].y) delete s.structures[id].y;
+  s.v++;
+}
+function propBox(prop, pos, pad = 0) {
+  return { x0: pos.x + prop.cx - prop.hw - pad, x1: pos.x + prop.cx + prop.hw + pad, z0: pos.z + prop.cz - prop.hd - pad, z1: pos.z + prop.cz + prop.hd + pad };
+}
+function overlapsOthers(s, prop, pos) {
+  if (pos.y) return false;
+  const a = propBox(prop, pos, -0.05);
+  const map = stateMap(s);
+  const hitStatic = (map.statics || []).some((b) => {
+    if (b.h < 0.2) return false;
+    const hw = b.shape === "cylinder" ? b.radius : b.w / 2,
+      hd = b.shape === "cylinder" ? b.radius : b.d / 2;
+    return a.x0 < b.x + hw && a.x1 > b.x - hw && a.z0 < b.z + hd && a.z1 > b.z - hd;
+  });
+  if (hitStatic) return true;
+  return mapProps(map).some((other) => {
+    if (other.id === prop.id) return false;
+    const op = s.structures[other.id];
+    if (!op || op.y) return false;
+    const b = propBox(other, op);
+    return a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0;
+  });
+}
+function gapTo(prop, pos, x, z) {
+  const dx = x - (pos.x + prop.cx),
+    dz = z - (pos.z + prop.cz);
+  if (prop.round) return { gap: Math.hypot(dx, dz) - prop.r, dx, dz };
+  return { gap: Math.hypot(Math.max(0, Math.abs(dx) - prop.hw), Math.max(0, Math.abs(dz) - prop.hd)), dx, dz };
+}
+export function stepPushes(s, pushers, dt) {
+  fitRoom(s);
+  const moved = [];
+  s.lifts ||= {};
+  for (const prop of mapProps(stateMap(s))) {
+    if (!finite(prop.weight)) continue;
+    const pos = s.structures[prop.id];
+    const lift = s.lifts[prop.id];
+    if (lift) {
+      const holders = lift.by
+        .map((id) => pushers.find((p) => p.id === id))
+        .filter((h) => h && gapTo(prop, pos, h.x, h.z).gap < 1.4);
+      const sides = new Set(holders.map((h) => lift.sides[h.id]));
+      const opposite = (sides.has("+x") && sides.has("-x")) || (sides.has("+z") && sides.has("-z"));
+      if (holders.length < prop.lift || !opposite) {
+        delete s.lifts[prop.id];
+        const drop = { y: 0 };
+        if (overlapsOthers(s, prop, { ...pos, y: 0 })) Object.assign(drop, { x: lift.from.x, z: lift.from.z });
+        setPropPosition(s, prop.id, drop);
+        moved.push({ id: prop.id, ...s.structures[prop.id], y: 0, by: [] });
+        continue;
+      }
+      const mx = holders.reduce((a, h) => a + h.x, 0) / holders.length,
+        mz = holders.reduce((a, h) => a + h.z, 0) / holders.length;
+      const next = clampProp(prop, mx + lift.offset.x, mz + lift.offset.z);
+      setPropPosition(s, prop.id, { ...next, y: LIFT_HEIGHT });
+      moved.push({ id: prop.id, ...s.structures[prop.id], by: lift.by });
+      continue;
+    }
+    // Moving on its own (knocked about): hands off until it rests.
+    if (s.motion?.[prop.id]) continue;
+    const sides = { "+x": [], "-x": [], "+z": [], "-z": [] };
+    for (const p of pushers) {
+      const { gap, dx, dz } = gapTo(prop, pos, p.x, p.z);
+      if (gap > 0.55 || p.y > (pos.y || 0) + prop.h - 0.1) continue;
+      const side = Math.abs(dx) / prop.hw > Math.abs(dz) / prop.hd ? (dx > 0 ? "+x" : "-x") : dz > 0 ? "+z" : "-z";
+      const nx = side === "+x" ? -1 : side === "-x" ? 1 : 0,
+        nz = side === "+z" ? -1 : side === "-z" ? 1 : 0;
+      sides[side].push({ ...p, pressing: p.mx * nx + p.mz * nz > 0.45 });
+    }
+    const all = Object.values(sides).flat();
+    const opposite = (sides["+x"].length && sides["-x"].length) || (sides["+z"].length && sides["-z"].length);
+    if (finite(prop.lift) && opposite && all.length >= prop.lift && all.length >= 2) {
+      const mx = all.reduce((a, h) => a + h.x, 0) / all.length,
+        mz = all.reduce((a, h) => a + h.z, 0) / all.length;
+      s.lifts[prop.id] = {
+        by: all.map((p) => p.id),
+        sides: Object.fromEntries(Object.entries(sides).flatMap(([side, list]) => list.map((p) => [p.id, side]))),
+        offset: { x: pos.x - mx, z: pos.z - mz },
+        from: { x: pos.x, z: pos.z },
+      };
+      // Picked up, a fallen prop comes up the right way.
+      setPropPosition(s, prop.id, { y: LIFT_HEIGHT });
+      delete s.structures[prop.id].ta;
+      delete s.structures[prop.id].td;
+      moved.push({ id: prop.id, ...s.structures[prop.id], by: s.lifts[prop.id].by });
+      continue;
+    }
+    const fx = sides["-x"].filter((p) => p.pressing).length - sides["+x"].filter((p) => p.pressing).length,
+      fz = sides["-z"].filter((p) => p.pressing).length - sides["+z"].filter((p) => p.pressing).length,
+      force = Math.hypot(fx, fz);
+    if (!force || force < prop.weight) continue;
+    const speed = (PUSH_SPEED * Math.min(1.35, force / prop.weight)) / Math.sqrt(prop.weight);
+    const next = clampProp(prop, pos.x + (fx / force) * speed * dt, pos.z + (fz / force) * speed * dt);
+    if (overlapsOthers(s, prop, next)) continue;
+    setPropPosition(s, prop.id, next);
+    moved.push({ id: prop.id, ...s.structures[prop.id] });
+  }
+  return moved;
+}
+
+// ——— Props that answer to force ———
+// A push (a blast, a kick, something thrown, a kart) gives a movable prop an impulse — its weight
+// is its mass. Then it moves on its own: it hops and falls back, slides and slows by friction (hardly
+// at all on ice), spins down, and rocks on its base: tipped less than its balance angle it rocks
+// back upright, past it it falls over onto its side. It bumps into walls and props (a movable one
+// gets some of the push) and leans on whatever stops its fall. When everything has calmed down it
+// rests — standing, lying or leaning — until the next push. Several people can stand a heavy prop
+// back up together. s.motion holds the props in motion; it is not saved.
+const PROP_G = 9.8,
+  FRICTION = 0.5,
+  SOFT_FRICTION = 0.65,
+  ICE_FRICTION = 0.06;
+export const BLAST_ON_PROPS = 0.42,
+  KICK_PROP = 3.2;
+const motionOf = (s, id) => ((s.motion ||= {})[id] ||= { vx: 0, vz: 0, vy: 0, wy: 0, wt: 0, idle: 0 });
+export const propsMoving = (s) => !!s.motion && Object.keys(s.motion).length > 0;
+const movable = (s, info) => info && finite(info.weight) && !s.lifts?.[info.id];
+// The nearest point of a prop to (x, y, z) and how far it is.
+export function propNearest(info, pos, x, y, z) {
+  let best = { d: Infinity, x, y, z };
+  for (const c of propColliders(info, pos)) {
+    let nx, nz;
+    if (c.shape === "cylinder") {
+      const dx = x - c.x,
+        dz = z - c.z,
+        l = Math.hypot(dx, dz) || 1,
+        k = Math.min(1, c.radius / l);
+      nx = c.x + dx * k;
+      nz = c.z + dz * k;
+    } else {
+      nx = clamp(x, c.x - c.w / 2, c.x + c.w / 2);
+      nz = clamp(z, c.z - c.d / 2, c.z + c.d / 2);
+    }
+    const ny = clamp(y, c.y || 0, c.h),
+      d = Math.hypot(x - nx, y - ny, z - nz);
+    if (d < best.d) best = { d, x: nx, y: ny, z: nz };
+  }
+  return best;
+}
+// j: [jx, jy, jz] — the impulse (upward part only lifts); at: where it is applied (world x, y, z),
+// for the lever (high up tips more) and the spin (off-centre turns it); tip scales the tipping.
+export function pushProp(s, id, j, at = null, tip = 1) {
+  const info = propInfo(stateMap(s), id),
+    pos = s.structures[id];
+  if (!movable(s, info) || !pos) return false;
+  const m = info.weight,
+    mo = motionOf(s, id),
+    [jx, jy, jz] = j;
+  mo.vx += jx / m;
+  mo.vz += jz / m;
+  if (jy > 0) mo.vy = Math.max(mo.vy, jy / m);
+  const J = Math.hypot(jx, jz);
+  if (J > 1e-6) {
+    const yaw = pos.yaw || 0;
+    // Standing, it tips the way it is pushed: over the edge of its base nearest that way.
+    if ((pos.ta || 0) < 0.02 && Math.abs(mo.wt) < 0.3) {
+      const lx = jx * Math.cos(yaw) - jz * Math.sin(yaw),
+        lz = jx * Math.sin(yaw) + jz * Math.cos(yaw),
+        sides = [lx, lz, -lx, -lz];
+      pos.td = sides.indexOf(Math.max(...sides));
+    }
+    const sh = tipShape(info, pos.td),
+      dir = yawed(yaw, sh.ax, sh.az),
+      along = jx * dir.x + jz * dir.z,
+      hy = at ? clamp(at.y - (pos.y || 0), 0, info.h) : info.h / 2,
+      lever = 0.35 + 0.9 * (hy / Math.max(0.2, info.h));
+    mo.wt += (tip * along * lever) / (m * sh.r);
+    if (at) {
+      const c = propCentre(info, pos),
+        rx = at.x - c.x,
+        rz = at.z - c.z,
+        inertia = (m * (info.hw * info.hw + info.hd * info.hd)) / 3 + 0.02;
+      mo.wy = clamp(mo.wy + ((rz * jx - rx * jz) / inertia) * 0.6, -10, 10);
+    }
+  }
+  mo.idle = 0;
+  return true;
+}
+// Standing a fallen prop back up (E next to it): enough for one person to right a light one; a
+// heavy one needs a few at once.
+export function raiseProp(s, id) {
+  const info = propInfo(stateMap(s), id),
+    pos = s.structures[id];
+  if (!movable(s, info) || !pos) return false;
+  const sh = tipShape(info, pos.td),
+    k = (3 * PROP_G) / (4 * sh.r),
+    need = Math.sqrt(2 * k * Math.max(0.02, 1 - Math.sin(sh.crit))),
+    mo = motionOf(s, id);
+  mo.wt -= (need * 1.35) / Math.pow(info.weight, 0.75);
+  mo.idle = 0;
+  return true;
+}
+// Two colliders touching (side by side and at overlapping heights).
+function touching(a, b) {
+  if ((a.y || 0) >= b.h - 0.02 || (b.y || 0) >= a.h - 0.02) return false;
+  const ac = a.shape === "cylinder",
+    bc = b.shape === "cylinder";
+  if (ac && bc) return Math.hypot(a.x - b.x, a.z - b.z) < a.radius + b.radius;
+  if (ac || bc) {
+    const c = ac ? a : b,
+      r = ac ? b : a,
+      nx = clamp(c.x, r.x - r.w / 2, r.x + r.w / 2),
+      nz = clamp(c.z, r.z - r.d / 2, r.z + r.d / 2);
+    return Math.hypot(c.x - nx, c.z - nz) < c.radius;
+  }
+  return Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.z - b.z) < (a.d + b.d) / 2;
+}
+const offFloor = (c) => {
+  const hw = c.shape === "cylinder" ? c.radius : c.w / 2,
+    hd = c.shape === "cylinder" ? c.radius : c.d / 2;
+  return Math.abs(c.x) + hw > ROOM.halfWidth - 0.05 || c.z + hd > ROOM.front - 0.05 || c.z - hd < Math.max(floorBack(c.x - hw), floorBack(c.x + hw)) + 0.05;
+};
+export function stepProps(s, dt) {
+  if (!propsMoving(s)) return [];
+  fitRoom(s);
+  const map = stateMap(s),
+    props = mapProps(map),
+    statics = (map.statics || []).filter((b) => b.shape !== "path" && b.h > 0.15 && !b.rail),
+    moved = [];
+  for (const id of Object.keys(s.motion)) {
+    const info = propInfo(map, id),
+      pos = s.structures[id],
+      mo = s.motion[id];
+    if (!movable(s, info) || !pos) {
+      delete s.motion[id];
+      continue;
+    }
+    mo.lean = false;
+    // Whatever it already overlaps does not hold it (it started there).
+    const own = propColliders(info, pos),
+      others = props.filter((p) => p.id !== id && s.structures[p.id]).flatMap((p) => propColliders(p, s.structures[p.id]));
+    const blockers = [...statics, ...others].filter((b) => !own.some((c) => touching(c, b)));
+    const wasOff = own.some(offFloor);
+    const blockedBy = (pose) => {
+      const cs = propColliders(info, pose);
+      if (!wasOff && cs.some(offFloor)) return { wall: true };
+      return blockers.find((b) => cs.some((c) => touching(c, b))) || null;
+    };
+    // Up and down: a hop from a blast, then falling back.
+    let y = pos.y || 0;
+    const air = y > 0 || mo.vy > 0;
+    if (air) {
+      mo.vy -= PROP_G * dt;
+      y += mo.vy * dt;
+      if (y <= 0) {
+        y = 0;
+        mo.vy = mo.vy < -3 ? -mo.vy * 0.25 : 0;
+        mo.vx *= 0.8;
+        mo.vz *= 0.8;
+        mo.wy *= 0.7;
+      }
+    }
+    // Rocking and falling over: gravity rights it short of the balance angle, lays it down past it.
+    let ta = pos.ta || 0;
+    if (ta > 0 || mo.wt) {
+      const sh = tipShape(info, pos.td);
+      if (!air) mo.wt += ((3 * PROP_G) / (4 * sh.r)) * Math.sin(ta - sh.crit) * dt;
+      mo.wt *= Math.exp(-0.6 * dt);
+      ta += mo.wt * dt;
+      if (ta <= 0) {
+        ta = 0;
+        mo.wt = mo.wt < -1.2 ? -mo.wt * 0.2 : 0;
+      } else if (ta >= TIP_LIE) {
+        ta = TIP_LIE;
+        mo.wt = mo.wt > 1.2 ? -mo.wt * 0.15 : 0;
+      }
+    }
+    // Sliding: friction on the ground (little on ice), none in the air; spinning down the same way.
+    let vx = mo.vx,
+      vz = mo.vz;
+    const speed = Math.hypot(vx, vz);
+    if (!air && speed > 0) {
+      const mu = iceAt(map, pos.x, pos.z) ? ICE_FRICTION : info.local.some((c) => c.soft) ? SOFT_FRICTION : FRICTION,
+        slow = Math.min(speed, mu * PROP_G * dt);
+      vx -= (vx / speed) * slow;
+      vz -= (vz / speed) * slow;
+    }
+    if (!air) mo.wy *= Math.exp(-(iceAt(map, pos.x, pos.z) ? 0.6 : ta > 0.5 ? 5 : 3) * dt);
+    const yaw0 = pos.yaw || 0,
+      yaw = Math.atan2(Math.sin(yaw0 + mo.wy * dt), Math.cos(yaw0 + mo.wy * dt));
+    let next = { ...pos, x: pos.x + vx * dt, z: pos.z + vz * dt, y, ta, yaw };
+    // A tipped prop turns about its middle, not about where its foot was.
+    if (yaw !== yaw0 && ta > 0.02) {
+      const a = propCentre(info, { ...pos, x: 0, z: 0, ta, yaw: yaw0 }),
+        b = propCentre(info, { ...pos, x: 0, z: 0, ta, yaw });
+      next.x += a.x - b.x;
+      next.z += a.z - b.z;
+    }
+    let hit = blockedBy(next);
+    if (hit) {
+      const onlyX = { ...next, z: pos.z },
+        onlyZ = { ...next, x: pos.x };
+      let bx = false,
+        bz = false;
+      if (!blockedBy(onlyX)) {
+        next = onlyX;
+        bz = true;
+      } else if (!blockedBy(onlyZ)) {
+        next = onlyZ;
+        bx = true;
+      } else {
+        next = { ...next, x: pos.x, z: pos.z };
+        bx = bz = true;
+      }
+      // Falling or turning into it: it leans on it.
+      if (blockedBy(next)) {
+        next = { ...next, ta: pos.ta || 0, yaw: yaw0 };
+        if (blockedBy(next)) next = { ...next, y: pos.y || 0 };
+        mo.wt = 0;
+        mo.wy = 0;
+        mo.lean = true;
+      }
+      // A movable prop takes some of the push; the rest bounces back a little.
+      const other = hit.prop && propInfo(map, hit.prop);
+      if (other && movable(s, other)) {
+        const share = info.weight * 0.6;
+        pushProp(s, hit.prop, [bx ? vx * share : 0, 0, bz ? vz * share : 0], null, 0.3);
+      }
+      if (bx) vx *= -0.25;
+      if (bz) vz *= -0.25;
+    }
+    mo.vx = vx;
+    mo.vz = vz;
+    Object.assign(pos, { x: next.x, z: next.z, yaw: next.yaw, ta: next.ta });
+    if (next.y > 0) pos.y = next.y;
+    else delete pos.y;
+    if (!pos.yaw) delete pos.yaw;
+    if (!pos.ta) delete pos.ta;
+    moved.push(id);
+    // Calm for a moment: it rests.
+    const still = !(pos.y > 0) && mo.vy === 0 && Math.hypot(mo.vx, mo.vz) < 0.06 && Math.abs(mo.wy) < 0.08 && Math.abs(mo.wt) < 0.08;
+    const settled = !pos.ta || pos.ta === TIP_LIE || mo.lean;
+    mo.idle = still && settled ? mo.idle + dt : 0;
+    if (mo.idle > 0.12) delete s.motion[id];
+  }
+  if (moved.length) s.v++;
+  return moved;
+}
+
+// ——— Explosions ———
+// Pushes every loose object and every movable prop away from the blast. The props then move on
+// their own (stepProps); nothing is returned for them here.
+export function applyBlast(s, x, y, z, radius, power) {
+  fitRoom(s);
+  const moved = [];
+  for (const o of dynamicObjects(s)) {
+    const dx = o.x - x,
+      dz = o.z - z,
+      d = Math.hypot(dx, dz, o.y - y);
+    if (d > radius) continue;
+    const k = power * (1 - d / radius),
+      len = Math.hypot(dx, dz) || 1;
+    o.vx += (dx / len) * k;
+    o.vz += (dz / len) * k;
+    o.vy = Math.max(o.vy, k * 0.7);
+    o.spin = (o.spin || 0) + k;
+    o.dragBy = null;
+  }
+  // Props: pushed away from the blast from the side facing it — the nearer, the harder; low down it
+  // shoves them, a near one hops; off-centre it spins them; enough of it knocks them over.
+  for (const prop of mapProps(stateMap(s))) {
+    const pos = s.structures[prop.id];
+    if (!movable(s, prop) || !pos) continue;
+    const near = propNearest(prop, pos, x, y, z);
+    if (near.d > radius) continue;
+    const c = propCentre(prop, pos),
+      strength = power * (1 - near.d / radius),
+      dx = c.x - x,
+      dz = c.z - z,
+      len = Math.hypot(dx, dz) || 1,
+      J = strength * BLAST_ON_PROPS;
+    pushProp(s, prop.id, [(dx / len) * J, J * (near.d < radius * 0.5 ? 0.45 : 0.15), (dz / len) * J], near, 1);
+  }
+  return moved;
+}

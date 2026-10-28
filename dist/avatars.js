@@ -1,6 +1,7 @@
 import * as T from "three";
 import { RoundedBoxGeometry } from "./vendor/RoundedBoxGeometry.js";
 import { CHARACTERS, dressCharacter, animateCharacter } from "./characters.js";
+import { buildFireHair } from "./fire.js";
 
 const geometries = new Map(),
   materials = new Map();
@@ -437,36 +438,17 @@ export function avatar(input) {
   const mouthOpen = ball(mouth, "#5b3546", 0, 0, -0.004, 0.045, 0.038, 0.016);
   mouthOpen.visible = false;
   const flames = [];
+  let fireHair = null,
+    fireMaterial = null;
   const coveredHair =
     p.headwear === "signature" &&
     ["builder", "miner", "doctor", "samurai", "astronaut"].includes(p.character);
   if (p.hairstyle === "flame" && p.headwear !== "bear" && !coveredHair) {
-    const flameMaterials = ["#ff6230", "#ffa12e", "#ffe89a"].map(
-      (c) =>
-        new T.MeshStandardMaterial({
-          color: c,
-          emissive: c,
-          emissiveIntensity: 0.8,
-          roughness: 0.65,
-        }),
-    );
-    for (let i = 0; i < 11; i++) {
-      const angle = i * 2.4,
-        radius = i ? 0.25 : 0;
-      const flame = new T.Mesh(
-        new T.ConeGeometry(0.1 + (i % 3) * 0.02, 0.48 + (i % 4) * 0.08, 7),
-        flameMaterials[i % 3],
-      );
-      flame.position.set(
-        Math.sin(angle) * radius,
-        0.44 + (i % 3) * 0.035,
-        Math.cos(angle) * radius,
-      );
-      flame.userData.seed = i;
-      flame.userData.baseY = flame.position.y;
-      head.add(flame);
-      flames.push(flame);
-    }
+    // Flowing fire grown thick on the head, driven by a shader (see fire.js).
+    const built = buildFireHair();
+    fireHair = built.mesh;
+    fireMaterial = built.material;
+    head.add(fireHair);
   } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
     box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
     box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
@@ -588,6 +570,8 @@ export function avatar(input) {
     mouth,
     mouthOpen,
     flames,
+    fireHair,
+    fireMaterial,
     profile: p,
   };
   dressCharacter(rig, p, { box, ball, material, cylinder, pivot });
@@ -596,17 +580,19 @@ export function avatar(input) {
 
 export function tickAccessories(rig, time) {
   animateCharacter(rig, time);
+  if (rig.fireMaterial) rig.fireMaterial.uniforms.uTime.value = time;
   for (const flame of rig.flames || []) {
-    const seed = flame.userData.seed;
+    const d = flame.userData,
+      seed = d.seed,
+      lock = d.lock;
     flame.scale.set(
       1 + Math.sin(time * 9 + seed) * 0.08,
-      0.86 + Math.sin(time * 12 + seed * 1.7) * 0.2,
+      0.86 + Math.sin(time * 12 + seed * 1.7) * (lock ? 0.09 : 0.2),
       1,
     );
-    flame.rotation.z = Math.sin(time * 7 + seed) * 0.19;
-    flame.rotation.x = Math.cos(time * 6 + seed) * 0.13;
-    flame.position.y =
-      flame.userData.baseY + Math.sin(time * 11 + seed) * 0.025;
+    flame.rotation.z = (d.baseRotZ || 0) + Math.sin(time * 7 + seed) * (lock ? 0.09 : 0.19);
+    flame.rotation.x = (d.baseRotX || 0) + Math.cos(time * 6 + seed) * (lock ? 0.07 : 0.13);
+    flame.position.y = d.baseY + Math.sin(time * 11 + seed) * 0.025;
   }
 }
 

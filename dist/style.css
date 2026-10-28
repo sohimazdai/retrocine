@@ -1233,3 +1233,305 @@ dialog.avatar-dialog {
     font-size: 11px;
   }
 }
+
+/* ——— Settings panel (top right) ——— */
+.settings-button {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 14;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid #a899c02c;
+  border-radius: 14px;
+  background: linear-gradient(150deg, #34313eeb, #24232ff2);
+  backdrop-filter: blur(20px);
+  color: #c9bfdc;
+  box-shadow: 0 10px 40px #0a09194d;
+}
+.settings-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.3s;
+}
+.settings-button:hover,
+.settings-button.on {
+  color: #f0ecf8;
+  border-color: #c1a9fa66;
+}
+.settings-button.on svg {
+  transform: rotate(60deg);
+}
+.settings-panel {
+  position: fixed;
+  top: 66px;
+  right: 16px;
+  z-index: 14;
+  width: min(380px, calc(100vw - 32px));
+  max-height: calc(100vh - 170px);
+  overflow: auto;
+  padding: 16px 18px 6px;
+  border: 1px solid #a899c033;
+  border-radius: 18px;
+  background: linear-gradient(160deg, #35313fef, #23222df5);
+  backdrop-filter: blur(22px);
+  box-shadow: 0 20px 70px #07061599;
+  overscroll-behavior: contain;
+}
+.settings-panel[hidden] {
+  display: none;
+}
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.settings-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.settings-panel section {
+  padding: 14px 0 12px;
+  border-top: 1px solid #ffffff10;
+}
+.settings-panel section:first-of-type {
+  border-top: none;
+}
+.settings-panel h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.settings-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.map-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.map-card {
+  display: grid;
+  gap: 4px;
+  min-height: 74px;
+  padding: 10px 11px;
+  border: 1px solid #ffffff12;
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--map) 34%, transparent), transparent 70%),
+    #ffffff06;
+  text-align: left;
+  color: var(--text);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.map-card:hover {
+  border-color: color-mix(in srgb, var(--map) 70%, transparent);
+  transform: translateY(-1px);
+}
+.map-card.selected {
+  border-color: var(--map);
+  box-shadow: 0 0 0 1px var(--map) inset;
+}
+.map-card strong {
+  font-size: 12.5px;
+}
+.map-card span {
+  color: #b9b0c9;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.avatar-row .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.avatar-row button {
+  margin-left: auto;
+}
+@media (max-width: 640px) {
+  .settings-button {
+    top: 8px;
+    right: 8px;
+  }
+  .settings-panel {
+    top: 58px;
+    right: 8px;
+    width: calc(100vw - 16px);
+  }
+}
+
+/* ——— Throwing: weapon picker, charge ring, cooldown ——— */
+.weapon-emoji {
+  font-size: 19px;
+  line-height: 1;
+  filter: saturate(0.9);
+}
+.tool[data-tool="snow"] {
+  --cd: 0;
+}
+.tool[data-tool="snow"]::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 8px;
+  background: conic-gradient(#14121cc7 calc(var(--cd) * 360deg), transparent 0);
+  pointer-events: none;
+}
+.weapon-picker {
+  position: fixed;
+  bottom: 92px;
+  z-index: 16;
+  width: 240px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid #a899c033;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #35313ff2, #23222df7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 16px 50px #07061599;
+}
+.weapon-picker[hidden] {
+  display: none;
+}
+.weapon-picker button {
+  position: relative;
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  color: var(--text);
+  text-align: left;
+  font-size: 12.5px;
+}
+.weapon-picker button:hover {
+  background: #ffffff0d;
+}
+.weapon-picker button.selected {
+  background: #c1a9fa29;
+  box-shadow: 0 0 0 1px #c1a9fa55 inset;
+}
+.weapon-picker kbd {
+  color: var(--muted);
+  font-size: 10px;
+}
+.weapon-cd {
+  position: absolute;
+  right: 30px;
+  font-style: normal;
+  font-size: 10px;
+  color: #f0c46a;
+}
+.charge-ring {
+  --p: 0;
+  position: fixed;
+  z-index: 15;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: conic-gradient(#ffcf6b calc(var(--p) * 360deg), #ffffff1f 0);
+  -webkit-mask: radial-gradient(circle, transparent 16px, #000 17px);
+  mask: radial-gradient(circle, transparent 16px, #000 17px);
+  filter: drop-shadow(0 0 6px #ffb34766);
+}
+.charge-ring.full {
+  background: conic-gradient(#ff7a3d 360deg, #ff7a3d 0);
+  animation: charge-pulse 0.5s ease-in-out infinite alternate;
+}
+.charge-ring[hidden] {
+  display: none;
+}
+@keyframes charge-pulse {
+  to {
+    transform: scale(1.12);
+  }
+}
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.switch-row input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: #ffffff1c;
+  transition: background 0.15s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text);
+  transition: transform 0.15s;
+}
+.switch-row input:checked + .switch {
+  background: var(--accent);
+}
+.switch-row input:checked + .switch::after {
+  transform: translateX(14px);
+  background: #1c1b27;
+}
+.switch-row input:focus-visible + .switch {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.hitbox-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.hitbox-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.hitbox-legend i {
+  width: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--c);
+}

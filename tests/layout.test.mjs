@@ -9,19 +9,16 @@ import {
   fitNoteText,
 } from "../dist/layout.js";
 
-test("entire wall is equidistant from standing viewer and meets the floor", () => {
+test("every column of the wall is equidistant from the viewer, its bottom is the far edge of the floor", () => {
   for (let x = -ROOM.wallWidth / 2; x <= ROOM.wallWidth / 2; x += 0.5)
     for (let y = 0; y <= ROOM.wallHeight; y += 0.3) {
       const p = screenPoint(x, y);
-      assert(
-        Math.abs(
-          Math.hypot(p.x, p.y - ROOM.eyeY, p.z - ROOM.eyeZ) - ROOM.radius,
-        ) < 1e-10,
-      );
+      assert(Math.abs(Math.hypot(p.x, p.z - ROOM.eyeZ) - ROOM.radius) < 1e-9);
+      assert.equal(p.y, y, "columns are vertical");
       if (y === 0) assert.equal(p.z, floorBack(x));
     }
-});
-test("two participants use two equal squares; six form exactly three by two", () => {
+  assert.equal(screenPoint(ROOM.wallWidth / 2, 0).x, ROOM.halfWidth, "bottom corners are the floor's far corners");
+});test("two participants use two equal squares; six form exactly three by two", () => {
   const two = participantGrid(2, 1440, 400);
   assert.equal(two[0].y, two[1].y);
   assert.equal(two[0].width, two[1].height);

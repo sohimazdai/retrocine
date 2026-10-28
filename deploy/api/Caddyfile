@@ -15,6 +15,6 @@ api.sohimazdai.ru {
 	}
 }
 
-http://185.209.162.2 {
+http://185.209.160.44 {
 	redir https://api.sohimazdai.ru{uri}
 }

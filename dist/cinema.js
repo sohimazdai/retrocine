@@ -34,14 +34,8 @@ export class CinemaScreen {
     this.count = players.length;
     this.group = new T.Group();
     this.group.userData.kind = "screen";
-    const rect = {
-      x: -ROOM.wallWidth / 2,
-      y: 0,
-      width: ROOM.wallWidth,
-      height: ROOM.wallHeight,
-    };
     this.frame = new T.Mesh(
-      screenSurface(rect, -0.06, true),
+      new T.BufferGeometry(),
       new T.MeshStandardMaterial({
         color: "#766884",
         metalness: 0.25,
@@ -51,19 +45,11 @@ export class CinemaScreen {
     );
     this.group.add(this.frame);
     this.panel = new T.Mesh(
-      screenSurface(
-        {
-          x: rect.x + 0.1,
-          y: 0.08,
-          width: rect.width - 0.2,
-          height: rect.height - 0.16,
-        },
-        0,
-        true,
-      ),
+      new T.BufferGeometry(),
       new T.MeshBasicMaterial({ color: "#171520", side: T.DoubleSide }),
     );
     this.group.add(this.panel);
+    this.buildWall();
     this.tiles = players.map((player) => this.makeTile(player));
     this.featured = new T.Mesh(
       new T.BufferGeometry(),
@@ -114,65 +100,88 @@ export class CinemaScreen {
     mesh.geometry.dispose();
     mesh.geometry = geometry;
   }
+  // Frame and dark panel follow the wall's current height and edges (they change with the camera).
+  buildWall() {
+    const rect = {
+      x: -ROOM.wallWidth / 2,
+      y: 0,
+      width: ROOM.wallWidth,
+      height: ROOM.wallHeight,
+    };
+    this.replaceGeometry(this.frame, screenSurface(rect, -0.06, true));
+    this.replaceGeometry(
+      this.panel,
+      screenSurface(
+        { x: rect.x + 0.12, y: 0.08, width: rect.width - 0.24, height: rect.height - 0.16 },
+        0,
+        true,
+      ),
+    );
+  }
+  reshape() {
+    this.buildWall();
+    this.layout();
+    if (this.media) this.setMedia(this.media, true);
+  }
+  shareAspect() {
+    const image = this.media?.share?.image;
+    return image?.videoWidth / image?.videoHeight || 16 / 9;
+  }
+  // The featured picture: during a share it leaves columns on both sides for the participants.
+  featuredRect(aspect) {
+    const width = ROOM.wallWidth - 0.6,
+      height = ROOM.wallHeight - 0.5;
+    const maxWidth = this.media?.share && this.count ? width * 0.66 : width;
+    const w = Math.min(maxWidth, height * aspect),
+      h = w / aspect;
+    return { x: -w / 2, y: (ROOM.wallHeight - h) / 2, width: w, height: h };
+  }
   layout() {
     const sharing = !!this.media?.share;
+    this.layoutAspect = sharing ? this.shareAspect() : null;
+    const gap = 0.16;
     const rects = participantGrid(
       this.count,
       ROOM.wallWidth - 0.5,
       ROOM.wallHeight - 0.4,
-      0.16,
+      gap,
     );
+    const share = sharing ? this.featuredRect(this.layoutAspect) : null;
+    const leftCount = Math.ceil(this.count / 2),
+      column = share ? (ROOM.wallWidth - 0.6 - share.width) / 2 - 0.3 : 0,
+      size = share
+        ? Math.max(0.3, Math.min(column, (ROOM.wallHeight - 0.5 - gap * (leftCount - 1)) / leftCount))
+        : 0;
     this.tiles.forEach((tile, i) => {
       tile.position.set(0, 0, 0);
       tile.quaternion.identity();
       tile.visible = i < this.count && (!this.media?.pinned || sharing);
       if (i >= this.count) return;
+      let rect;
       if (sharing) {
-        const leftCount = Math.ceil(this.count / 2),
-          left = i < leftCount;
-        const row = left ? i : i - leftCount;
-        const rows = left ? leftCount : this.count - leftCount;
-        const size = Math.min(2.35, 7.2 / leftCount - 0.18);
-        this.replaceGeometry(tile, new T.PlaneGeometry(size, size));
-        tile.position.set(left ? -12.55 : 12.55, ROOM.wallHeight / 2, -7.5);
-        tile.userData.rowOffset = ((rows - 1) / 2 - row) * (size + 0.18);
+        const left = i < leftCount,
+          row = left ? i : i - leftCount,
+          rows = left ? leftCount : this.count - leftCount;
+        const centerX = (left ? -1 : 1) * (share.width / 2 + 0.3 + column / 2),
+          total = rows * size + (rows - 1) * gap,
+          top = (ROOM.wallHeight + total) / 2;
+        rect = { x: centerX - size / 2, y: top - (row + 1) * size - row * gap, width: size, height: size };
         tile.userData.side = left ? "left" : "right";
-        if (this.camera) tile.quaternion.copy(this.camera.quaternion);
       } else {
         const r = rects[i];
-        this.replaceGeometry(
-          tile,
-          screenSurface(
-            {
-              x: r.x - ROOM.wallWidth / 2 + 0.25,
-              y: ROOM.wallHeight - 0.2 - r.y - r.height,
-              width: r.width,
-              height: r.height,
-            },
-            0.035,
-            true,
-          ),
-        );
+        rect = {
+          x: r.x - ROOM.wallWidth / 2 + 0.25,
+          y: ROOM.wallHeight - 0.2 - r.y - r.height,
+          width: r.width,
+          height: r.height,
+        };
         tile.userData.side = null;
       }
+      this.replaceGeometry(tile, screenSurface(rect, 0.035, true));
     });
-    if (this.camera) this.updateCamera(this.camera);
   }
   updateCamera(camera) {
     this.camera = camera;
-    if (this.media?.share) {
-      const up = new T.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
-      this.tiles.forEach((tile) => {
-        if (!tile.visible) return;
-        tile.quaternion.copy(camera.quaternion);
-        tile.position.set(
-          tile.userData.side === "left" ? -12.55 : 12.55,
-          ROOM.wallHeight / 2,
-          -7.5,
-        );
-        tile.position.addScaledVector(up, tile.userData.rowOffset);
-      });
-    }
   }
   setCount(count) {
     this.count = Math.max(1, Math.min(this.players.length, count));
@@ -182,7 +191,7 @@ export class CinemaScreen {
     const modeChanged =
       force || !!this.media?.share !== !!share || this.media?.pinned !== pinned;
     this.media = { cameras, pinned, share };
-    if (modeChanged) this.layout();
+    if (modeChanged || (share && this.shareAspect() !== this.layoutAspect)) this.layout();
     this.tiles.forEach((tile, i) => {
       tile.visible = i < this.count && (!pinned || !!share);
       const original =
@@ -223,20 +232,10 @@ export class CinemaScreen {
         this.portraits.get(pinned)?.target.texture;
       this.featured.material.map = this.shareMap || texture;
       this.featured.material.needsUpdate = true;
-      const aspect =
-        texture?.image?.videoWidth / texture?.image?.videoHeight || 1;
-      const width = Math.min(
-        ROOM.wallWidth - 0.4,
-        (ROOM.wallHeight - 0.3) * aspect,
-      );
-      const height = width / aspect;
-      this.replaceGeometry(
-        this.featured,
-        screenSurface(
-          { x: -width / 2, y: (ROOM.wallHeight - height) / 2, width, height },
-          0.05,
-        ),
-      );
+      const aspect = share
+        ? this.shareAspect()
+        : texture?.image?.videoWidth / texture?.image?.videoHeight || 1;
+      this.replaceGeometry(this.featured, screenSurface(this.featuredRect(aspect), 0.05));
       this.updateShareCrop();
     }
   }

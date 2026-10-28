@@ -24,6 +24,10 @@
         <span class="loading-mark">k</span><span>Открываем пространство…</span>
       </div>
     </main>
+    <button id="settingsBtn" class="settings-button" data-action="settings" title="Настройки: комната, карта, ракурс, аватар" aria-expanded="false" aria-controls="settings">
+      <span data-icon="settings"></span>
+    </button>
+    <aside id="settings" class="settings-panel" hidden aria-label="Настройки"></aside>
     <button id="netStatus" class="net-status" data-action="room" data-state="connecting">
       <i class="net-dot"></i><span class="net-text">Подключаемся…</span>
     </button>
@@ -52,13 +56,6 @@
       ><button data-action="timerClose" title="Скрыть">×</button>
     </div>
     <nav class="island" aria-label="Инструменты комнаты">
-      <button class="logo-button" data-action="room" title="Комната, участники, итоги">
-        k<span class="tip">Комната</span>
-      </button>
-      <button class="tool" data-action="invite" title="Скопировать ссылку-приглашение">
-        <span data-icon="invite"></span><span class="tip">Пригласить</span>
-      </button>
-      <div class="divider"></div>
       <button class="tool active" data-tool="snow" title="Снежок — левый клик">
         <span data-icon="snow"></span
         ><span class="tip">Снежок · клик</span></button
@@ -70,9 +67,7 @@
         ><span class="tip">Стикер · N</span></button
       ><button class="tool" data-tool="cube" title="Поставить кубик (C)">
         <span data-icon="cube"></span><span class="tip">Кубик · C</span></button
-      ><button class="tool" data-action="avatar" title="Мой аватар">
-        <span data-icon="person"></span><span class="tip">Мой аватар</span>
-      </button>
+      >
       <div class="divider"></div>
       <button class="tool" data-action="board" title="Доска ретро">
         <span data-icon="board"></span
@@ -98,9 +93,7 @@
         <span data-icon="screen"></span><span class="tip">Показать экран</span>
       </button>
       <div class="divider"></div>
-      <button class="tool" data-action="view" title="Угол к полу: 30–80°">
-        <span data-icon="orbit"></span><span class="tip">Ракурс</span></button
-      ><button class="tool" data-action="help" title="Управление">
+      <button class="tool" data-action="help" title="Управление">
         <span data-icon="help"></span><span class="tip">Управление</span>
       </button>
     </nav>
@@ -113,6 +106,8 @@
       </div>
       <button id="touchJump" aria-label="Прыжок">↟</button>
     </div>
+    <div id="weaponPicker" class="weapon-picker" hidden aria-label="Чем бросаться"></div>
+    <div id="chargeRing" class="charge-ring" hidden aria-hidden="true"></div>
     <div id="toast" role="status"></div>
     <dialog id="modal"><div id="modalContent"></div></dialog>
     <div id="srStatus" class="sr-only" role="status"></div>

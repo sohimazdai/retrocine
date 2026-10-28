@@ -116,6 +116,12 @@ export function animateRig(rig, state, dt) {
     );
     rig.knees.forEach((knee) => (knee.rotation.x += compression * 2.5));
   }
+  if (state.ride) applyRide(rig, state.ride, t, dt);
+  if (state.climb) applyClimb(rig, state.climb, t);
+  if (state.kart) applyKart(rig, state.kart, t);
+  if (state.tumble) applyTumble(rig, state.tumble, t);
+  if (state.sled) applySled(rig, t);
+  else if (state.skate > 0.05 && state.grounded !== false) applySkate(rig, state.skate, motion.phase);
   const action = state.action;
   if (action) {
     const age = t - action.started,
@@ -143,6 +149,36 @@ export function animateRig(rig, state, dt) {
       rig.arms[1].rotation.z = 0.6 * end;
     }
   }
+  // Holding the right button winds the throwing arm back; Shift against a prop leans in with both
+  // arms forward; lifting together raises both arms overhead.
+  if (state.charge > 0 && !action) {
+    const c = ease(state.charge);
+    rig.torso.rotation.y -= 0.6 * c;
+    rig.arms[1].rotation.x = 1.0 * c;
+    rig.arms[1].rotation.z = -0.35 * c;
+    rig.elbows[1].rotation.x = -1.9 * c;
+    rig.arms[0].rotation.x = -0.55 * c;
+    rig.head.rotation.y += 0.3 * c;
+  }
+  if (state.pushing) {
+    const p = state.pushing === 2 ? 0 : 1;
+    if (p) {
+      rig.torso.rotation.x += 0.32;
+      rig.model.rotation.x += 0.14;
+      rig.arms.forEach((arm) => {
+        arm.rotation.x = -1.45;
+        arm.rotation.z *= 0.2;
+      });
+      rig.elbows.forEach((elbow) => (elbow.rotation.x = -0.4));
+    } else {
+      rig.arms.forEach((arm, i) => {
+        arm.rotation.x = -2.85;
+        arm.rotation.z = (i ? -1 : 1) * 0.18;
+      });
+      rig.elbows.forEach((elbow) => (elbow.rotation.x = -0.35));
+      rig.torso.rotation.x -= 0.05;
+    }
+  }
   const blinkTime = (t + (state.seed || 0)) % 4.6;
   const blink =
     blinkTime > 4.43 ? Math.max(0.07, Math.abs(blinkTime - 4.515) / 0.085) : 1;
@@ -160,6 +196,195 @@ export function animateRig(rig, state, dt) {
   }
   if (state.hit > 0) rig.model.rotation.z += Math.sin(state.hit * 40) * 0.13;
   tickAccessories(rig, t);
+}
+
+// Riding: a sideways stance on a skateboard, standing with both hands on a scooter's bar, seated
+// and pedalling on a bike. Crouched in the air, leaning into turns, pushing off when speeding up.
+function applyRide(rig, ride, t, dt) {
+  const motion = rig.motion;
+  motion.pedal = (motion.pedal || 0) + dt * Math.min(14, Math.abs(ride.speed || 0) * 2.2);
+  const crouch = ride.air ? 1 : 0,
+    lean = ride.lean || 0,
+    push = ride.push ? Math.sin(t * 9) : 0;
+  rig.model.rotation.order = "YXZ";
+  rig.model.position.x = 0;
+  for (let i = 0; i < 2; i++) {
+    rig.feet[i].rotation.set(0, 0, 0);
+    rig.legs[i].rotation.set(0, 0, 0);
+    rig.knees[i].rotation.set(0, 0, 0);
+  }
+  if (ride.kind === "skateboard") {
+    rig.model.rotation.y = -1.35;
+    rig.model.rotation.x = lean * 0.3;
+    rig.model.position.y = 0.14 - crouch * 0.1;
+    for (let i = 0; i < 2; i++) {
+      const s = i ? -1 : 1;
+      rig.legs[i].rotation.set(-0.25 - crouch * 0.35, 0, s * 0.3);
+      rig.knees[i].rotation.x = 0.45 + crouch * 0.7;
+      rig.arms[i].rotation.set(-0.15, 0, s * -(0.9 + crouch * 0.3));
+      rig.elbows[i].rotation.x = -0.3;
+    }
+    if (push) {
+      rig.legs[1].rotation.set(push * 0.7, 0, -0.5);
+      rig.knees[1].rotation.x = 0.3 + Math.max(0, push) * 0.5;
+    }
+    rig.torso.rotation.set(0.12 + crouch * 0.2, 0.25, lean * 0.1);
+  } else if (ride.kind === "scooter") {
+    rig.model.rotation.y = 0;
+    rig.model.rotation.z = -lean * 0.18;
+    rig.model.position.y = 0.13 - crouch * 0.08;
+    rig.legs[0].rotation.set(-0.08 - crouch * 0.4, 0, 0.04);
+    rig.knees[0].rotation.x = 0.15 + crouch * 0.8;
+    rig.legs[1].rotation.set(push ? push * 0.8 : 0.35 - crouch * 0.6, 0, -0.06);
+    rig.knees[1].rotation.x = 0.25 + crouch * 0.8;
+    for (let i = 0; i < 2; i++) {
+      rig.arms[i].rotation.set(-1.15, 0, (i ? -1 : 1) * -0.12);
+      rig.elbows[i].rotation.x = -0.35;
+    }
+    rig.torso.rotation.set(0.16 + crouch * 0.15, 0, -lean * 0.08);
+  } else {
+    rig.model.rotation.y = 0;
+    rig.model.rotation.z = -lean * 0.22;
+    rig.model.position.y = 0.2 - crouch * 0.04;
+    for (let i = 0; i < 2; i++) {
+      const p = motion.pedal + i * Math.PI;
+      rig.legs[i].rotation.set(-1.0 + Math.sin(p) * 0.45 - crouch * 0.2, 0, (i ? -1 : 1) * 0.06);
+      rig.knees[i].rotation.x = 1.3 + Math.cos(p) * 0.45;
+      rig.feet[i].rotation.x = -0.2;
+      rig.arms[i].rotation.set(-1.25, 0, (i ? -1 : 1) * -0.18);
+      rig.elbows[i].rotation.x = -0.25;
+    }
+    rig.torso.rotation.set(0.35 + crouch * 0.1, 0, -lean * 0.1);
+  }
+  if (ride.grind) rig.model.rotation.z += Math.sin(t * 20) * 0.03;
+}
+
+// In a kart: sitting low, legs stretched to the pedals, hands on the wheel turning with it.
+function applyKart(rig, kart, t) {
+  const steer = kart.steer || 0;
+  rig.model.position.set(0, -0.42, -0.12);
+  rig.model.rotation.set(-0.08, 0, steer * 0.08 + Math.sin(t * 31) * 0.006);
+  rig.torso.rotation.set(-0.12, -steer * 0.12, 0);
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1;
+    rig.legs[i].rotation.set(-1.4, 0, s * 0.12);
+    rig.knees[i].rotation.x = 0.45;
+    rig.feet[i].rotation.x = -0.2;
+    rig.arms[i].rotation.set(-1.15 + s * steer * 0.3, 0, -s * 0.22);
+    rig.elbows[i].rotation.x = -0.75;
+  }
+  rig.head.rotation.y = steer * 0.25;
+}
+// Knocked over: arms and legs flailing in the air; lying limp the way you came down; sitting dazed.
+function applyTumble(rig, tb, t) {
+  rig.model.position.set(0, 0, 0);
+  rig.model.rotation.set(0, 0, 0);
+  rig.model.scale.set(1, 1, 1);
+  if (tb.phase === 1) {
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1,
+        w = Math.sin(t * 17 + i * 2);
+      rig.arms[i].rotation.set(-1.6 + w * 0.9, 0, s * (1.1 + w * 0.3));
+      rig.elbows[i].rotation.x = -0.4 - Math.max(0, w) * 0.6;
+      rig.legs[i].rotation.set(-0.6 + Math.sin(t * 13 + i * 3) * 0.7, 0, s * 0.35);
+      rig.knees[i].rotation.x = 0.6 + Math.max(0, Math.sin(t * 11 + i)) * 0.6;
+    }
+    rig.head.rotation.set(Math.sin(t * 9) * 0.3, 0, Math.cos(t * 7) * 0.2);
+    return;
+  }
+  const k = tb.phase === 3 ? Math.max(0, 1 - tb.t / 0.55) : 1;
+  if (tb.kind === "sit") {
+    // On your bottom: legs out in front, hands behind you, head lolling.
+    rig.model.position.y = -0.42 * k;
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1;
+      rig.legs[i].rotation.set(-1.45 * k, 0, s * 0.25 * k);
+      rig.knees[i].rotation.x = 0.2 * k;
+      rig.arms[i].rotation.set(0.7 * k, 0, s * 0.35 * k);
+      rig.elbows[i].rotation.x = -0.1;
+    }
+    rig.head.rotation.set(0.2 * k, Math.sin(t * 2.5) * 0.35 * k, Math.sin(t * 3) * 0.15 * k);
+    return;
+  }
+  // Lying: limbs spread and still; on the front the arms reach forward, on a side you curl up.
+  const side = tb.kind === "left" || tb.kind === "right";
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1;
+    rig.arms[i].rotation.set((tb.kind === "front" ? -2.6 : side ? -1.2 : -0.3) * k, 0, s * (side ? 0.3 : 1.2) * k);
+    rig.elbows[i].rotation.x = (side ? -1.1 : -0.25) * k;
+    rig.legs[i].rotation.set((side ? -0.9 : 0.05) * k, 0, s * (side ? 0.05 : 0.28) * k);
+    rig.knees[i].rotation.x = (side ? 1.2 : 0.15) * k;
+  }
+  rig.head.rotation.set((tb.kind === "back" ? -0.2 : 0.15) * k, 0, 0);
+  rig.eyes.forEach((eye) => eye.scale.set(1, tb.phase === 2 ? 0.15 : 1, 1));
+}
+// Sitting on a sled: legs out in front, hands on the rope.
+function applySled(rig, t) {
+  rig.model.position.set(0, -0.36, -0.12);
+  rig.model.rotation.set(-0.12, 0, Math.sin(t * 9) * 0.015);
+  rig.torso.rotation.x = -0.1;
+  for (let i = 0; i < 2; i++) {
+    rig.legs[i].rotation.set(-1.45, 0, (i ? -1 : 1) * 0.1);
+    rig.knees[i].rotation.x = 0.35;
+    rig.feet[i].rotation.x = -0.3;
+    rig.arms[i].rotation.set(-0.9, 0, (i ? -1 : 1) * 0.25);
+    rig.elbows[i].rotation.x = -0.5;
+  }
+}
+// Skating: long sideways pushes, a forward lean, arms swinging across.
+function applySkate(rig, k, phase) {
+  rig.model.rotation.x += 0.12 * k;
+  rig.torso.rotation.x += 0.18 * k;
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1,
+      push = Math.max(0, Math.sin(phase * 0.6 + i * Math.PI));
+    rig.legs[i].rotation.x *= 0.35;
+    rig.legs[i].rotation.z = s * (0.06 + push * 0.42 * k);
+    rig.knees[i].rotation.x = 0.35 + (1 - push) * 0.3 * k;
+    rig.arms[i].rotation.x = Math.sin(phase * 0.6 + i * Math.PI) * 0.55 * k;
+    rig.arms[i].rotation.z = s * -0.25 * k;
+  }
+}
+// Hands over hands up a rope, a trunk or a wall; hanging from a zip line's handle.
+function applyClimb(rig, climb, t) {
+  rig.model.position.set(0, 0, 0);
+  rig.model.rotation.set(0, 0, 0);
+  rig.model.scale.set(1, 1, 1);
+  if (climb.bar) {
+    // Hanging from a bar: arms up, elbows bending as you pull up; hand over hand on monkey bars.
+    const pull = climb.pull || 0,
+      reach = Math.sin(climb.phase || 0);
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1;
+      rig.arms[i].rotation.set(-3.0 + pull * 0.9 + reach * s * 0.25, 0, s * (0.16 + pull * 0.25));
+      rig.elbows[i].rotation.x = -0.08 - pull * 1.7;
+      rig.legs[i].rotation.set(-0.2 - pull * 0.35 + reach * s * 0.3, 0, -s * 0.05);
+      rig.knees[i].rotation.x = 0.25 + pull * 0.5;
+    }
+    rig.head.rotation.x = -0.15 + pull * 0.25;
+    return;
+  }
+  if (climb.zip) {
+    const swing = Math.sin(t * 3) * 0.12;
+    for (let i = 0; i < 2; i++) {
+      rig.arms[i].rotation.set(-3.0, 0, (i ? 1 : -1) * 0.12);
+      rig.elbows[i].rotation.x = -0.1;
+      rig.legs[i].rotation.set(-0.35 + swing, 0, (i ? -1 : 1) * 0.08);
+      rig.knees[i].rotation.x = 0.35;
+    }
+    rig.model.rotation.x = swing * 0.5;
+    return;
+  }
+  const phase = climb.phase || 0;
+  for (let i = 0; i < 2; i++) {
+    const s = Math.sin(phase + i * Math.PI);
+    rig.arms[i].rotation.set(-2.55 + s * 0.45, 0, (i ? 1 : -1) * 0.18);
+    rig.elbows[i].rotation.x = -0.55 - Math.max(0, s) * 0.5;
+    rig.legs[i].rotation.set(-0.7 - s * 0.45, 0, (i ? -1 : 1) * 0.12);
+    rig.knees[i].rotation.x = 0.9 + Math.max(0, s) * 0.6;
+    rig.feet[i].rotation.x = 0.2;
+  }
+  rig.torso.rotation.set(-0.05, Math.sin(phase) * 0.08, 0);
 }
 
 function applyEmote(rig, type, t, s) {

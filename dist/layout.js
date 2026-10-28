@@ -1,28 +1,76 @@
-// Every point of the back wall is equally distant from a standing viewer.
+// The back wall is a cylinder around a viewer standing just in front of the floor: every column of
+// the wall is equally distant from them, and its edges are vertical, so a tall wall never leans over
+// the room. Its bottom edge is the far edge of the floor, from corner to corner.
+// A map can be bigger than the standard room (map.scale): the floor, the wall and the camera grow
+// together, so the picture keeps its proportions and people and things look smaller on a bigger
+// field. ROOM is one shared object; whoever works on a room sets its scale first (setRoomScale) —
+// the server does so for every room before touching it.
+const BASE = { halfWidth: 14.7, front: 10.3, back: -12, radius: 26, eyeY: 1.6 };
 export const ROOM = {
-  halfWidth: 14.7,
-  front: 10.3,
-  wallWidth: 21,
-  wallHeight: 7.8,
-  radius: 19.2,
-  eyeY: 1.6,
-  eyeZ: 7.1,
+  scale: 1,
+  halfWidth: BASE.halfWidth,
+  front: BASE.front,
+  back: BASE.back,
+  radius: BASE.radius,
+  eyeY: BASE.eyeY,
+  eyeZ: BASE.back + Math.sqrt(BASE.radius ** 2 - BASE.eyeY ** 2),
+  wallWidth: BASE.halfWidth * 2,
+  // Height and side edges follow the camera (see fitWall in room.js) so the screen reaches the top
+  // of the viewport and its sides look vertical; this is only the starting value.
+  wallHeight: 10,
 };
+// Returns true when the size changed (the floor, wall and camera then need refitting).
+export function setRoomScale(scale = 1) {
+  const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  if (s === ROOM.scale) return false;
+  const k = s / ROOM.scale;
+  Object.assign(ROOM, {
+    scale: s,
+    halfWidth: BASE.halfWidth * s,
+    front: BASE.front * s,
+    back: BASE.back * s,
+    radius: BASE.radius * s,
+    eyeY: BASE.eyeY * s,
+    eyeZ: (BASE.back + Math.sqrt(BASE.radius ** 2 - BASE.eyeY ** 2)) * s,
+    wallWidth: BASE.halfWidth * 2 * s,
+    wallHeight: ROOM.wallHeight * k,
+  });
+  edges = edges?.map(([y, w]) => [y * k, w * k]) || null;
+  return true;
+}
+// Half-width of the wall at each height, in the camera's current view: [[y, halfWidth], …].
+let edges = null;
+export function setWallShape(height, profile) {
+  ROOM.wallHeight = height;
+  edges = profile;
+}
+function halfWidthAt(y) {
+  if (!edges || y <= 0) return ROOM.halfWidth;
+  for (let i = 1; i < edges.length; i++) {
+    const [y1, w1] = edges[i];
+    if (y <= y1) {
+      const [y0, w0] = edges[i - 1];
+      return w0 + ((w1 - w0) * (y - y0)) / (y1 - y0 || 1);
+    }
+  }
+  return edges[edges.length - 1][1];
+}
+export function wallZ(x) {
+  return ROOM.eyeZ - Math.sqrt(ROOM.radius ** 2 - x * x);
+}
+// Wall coordinates (x across the bottom edge, -wallWidth/2…wallWidth/2; y up) → a point in the room.
+// inset moves the point toward the viewer, so tiles and pictures sit just in front of the wall.
 export function screenPoint(x, y, inset = 0) {
-  const z =
-    ROOM.eyeZ - Math.sqrt(ROOM.radius ** 2 - x * x - (y - ROOM.eyeY) ** 2);
-  const scale = (ROOM.radius - inset) / ROOM.radius;
+  const wx = (x * halfWidthAt(y)) / ROOM.halfWidth,
+    scale = (ROOM.radius - inset) / ROOM.radius;
   return {
-    x: x * scale,
-    y: ROOM.eyeY + (y - ROOM.eyeY) * scale,
-    z: ROOM.eyeZ + (z - ROOM.eyeZ) * scale,
+    x: wx * scale,
+    y,
+    z: ROOM.eyeZ + (wallZ(wx) - ROOM.eyeZ) * scale,
   };
 }
 export function floorBack(x) {
-  return screenPoint(
-    Math.max(-ROOM.wallWidth / 2, Math.min(ROOM.wallWidth / 2, x)),
-    0,
-  ).z;
+  return wallZ(Math.max(-ROOM.halfWidth, Math.min(ROOM.halfWidth, x)));
 }
 
 export function participantGrid(count, width, height, gap = 10) {

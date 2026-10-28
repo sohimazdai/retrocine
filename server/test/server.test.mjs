@@ -33,7 +33,7 @@ function client(port, origin) {
       return new Promise((resolve, reject) => {
         const w = { pred, resolve };
         waiters.push(w);
-        setTimeout(() => reject(new Error("timeout waiting for message")), ms);
+        setTimeout(() => reject(new Error("timeout waiting for message: " + pred.toString().slice(0, 120))), ms);
       });
     },
     next(t, ms) {
@@ -187,10 +187,11 @@ test("goals are detected on the server and announced with the score", async () =
   const a = client(port);
   await a.join("football");
   const room = app.rooms.get("football");
-  Object.assign(room.state.ball, { x: 8.1, z: -4.3, y: 0.42, vx: 0, vz: -6, vy: 0 });
+  Object.assign(room.state.balls[0], { x: 8.1, z: -4.3, y: 0.42, vx: 0, vz: -6, vy: 0 });
   room.startPhysics();
   const goal = await a.wait((m) => m.t === "goal");
   assert.equal(goal.score, 1);
+  assert.equal(goal.goal, "goal");
   a.close();
   await app.close();
 });
@@ -290,5 +291,317 @@ test("LiveKit tokens are valid HS256 JWTs bound to the room and the peer", async
   assert.equal(payload.video.roomJoin, true);
   assert(livekitToken({ ...lk, room: "r", identity: "i", name: "n" }).split(".").length === 3);
   a.close();
+  await app.close();
+});
+
+test("Shift pushes: a light prop moves for one avatar, a heavy one needs several on its side", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port),
+    c = client(port);
+  await a.join("push");
+  await b.join("push");
+  await c.join("push");
+  const room = app.rooms.get("push");
+  const spool = { ...room.state.structures["spool-b"] }; // x 6.2, z 5.8, r 1.25
+  // A stands just right of the spool and pushes left (−x).
+  a.send({ t: "pose", x: spool.x + 1.5, y: 0, z: spool.z, a: 0, vy: 0, g: 1, sh: 1, m: [-1, 0] });
+  await b.wait((m) => m.t === "struct" && m.id === "spool-b" && m.x < spool.x - 0.2, 3000);
+  a.send({ t: "pose", x: spool.x + 1.5, y: 0, z: spool.z, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 120));
+  const pyramid = { ...room.state.structures.pyramid }; // 4.4 × 4.4, weight 3
+  const pushRight = (cl, dz) => cl.send({ t: "pose", x: pyramid.x - 2.5, y: 0, z: pyramid.z + dz, a: 0, vy: 0, g: 1, sh: 1, m: [1, 0] });
+  pushRight(a, 0);
+  pushRight(b, 1);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(room.state.structures.pyramid.x, pyramid.x, "two avatars are not enough for the pyramid");
+  pushRight(c, -1);
+  await a.wait((m) => m.t === "struct" && m.id === "pyramid" && m.x > pyramid.x + 0.1, 3000);
+  for (const cl of [a, b, c]) cl.close();
+  await app.close();
+});
+
+test("Shift lift: avatars on opposite sides lift a prop, carry it together and drop it on release", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("lift");
+  await b.join("lift");
+  const room = app.rooms.get("lift");
+  const s = { ...room.state.structures["spool-a"] }; // x −8.3, z 3.7, r 1.25, lift 2
+  const pose = (cl, x, z, extra) => cl.send({ t: "pose", x, y: 0, z, a: 0, vy: 0, g: 1, sh: 1, ...extra });
+  pose(a, s.x - 1.5, s.z, { m: [1, 0] });
+  pose(b, s.x + 1.5, s.z, { m: [-1, 0] });
+  const up = await a.wait((m) => m.t === "struct" && m.id === "spool-a" && m.y > 1, 3000);
+  assert.equal(up.by.length, 2);
+  // Both walk +z by 2 units: the spool follows their midpoint.
+  pose(a, s.x - 1.5, s.z + 2, { m: [0, 1] });
+  pose(b, s.x + 1.5, s.z + 2, { m: [0, 1] });
+  await a.wait((m) => m.t === "struct" && m.id === "spool-a" && Math.abs(m.z - (s.z + 2)) < 0.05, 3000);
+  a.send({ t: "pose", x: s.x - 1.5, y: 0, z: s.z + 2, a: 0, vy: 0, g: 1 });
+  const down = await b.wait((m) => m.t === "struct" && m.id === "spool-a" && m.y === 0, 3000);
+  assert.equal(down.by.length, 0);
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("grenades explode only when thrown, respect the cooldown and blast objects away", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("boom");
+  await b.join("boom");
+  const room = app.rooms.get("boom");
+  const ball = room.state.balls[0];
+  a.send({ t: "boom", kind: "grenade", pid: "fake", x: ball.x, y: 0.3, z: ball.z });
+  a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g1", pw: 1.3 });
+  a.send({ t: "act", k: "throw", w: "grenade", to: [ball.x, 0, ball.z], pid: "g2" });
+  const thrown = await b.wait((m) => m.t === "act" && m.k === "throw");
+  assert.equal(thrown.w, "grenade");
+  assert.equal(thrown.pw, 1.3);
+  a.send({ t: "boom", kind: "grenade", pid: "g2", x: ball.x - 1, y: 0.3, z: ball.z });
+  a.send({ t: "boom", kind: "grenade", pid: "g1", x: ball.x - 1, y: 0.3, z: ball.z });
+  const boom = await b.wait((m) => m.t === "boom");
+  assert.equal(boom.pid, "g1");
+  assert.equal(boom.by, a.welcome.id);
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(b.inbox.filter((m) => m.t === "act").length, 1, "second grenade within 10 s is refused");
+  assert.equal(b.inbox.filter((m) => m.t === "boom").length, 1, "fake and refused grenades do not explode");
+  const flying = await b.wait((m) => m.t === "objs" && m.o.some((o) => o[0] === "football" && o[4] > 1));
+  assert(flying);
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("a map switch resets the room for everyone; the river keeps flowing while people are in", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("map-room", { name: "Аня" });
+  await b.join("map-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "river" });
+  const reset = await b.wait((m) => m.t === "reset");
+  assert.equal(reset.state.map, "river");
+  assert.equal(reset.by, a.welcome.id);
+  assert(reset.objs.length >= 10, "stones of the river");
+  // The current moves the stones without anyone touching them.
+  const first = await b.next("objs", 3000);
+  await new Promise((r) => setTimeout(r, 600));
+  const later = await b.next("objs", 3000);
+  assert(first.s < later.s);
+  // A newcomer appears on one of the beaches, not in the water.
+  const c = client(port);
+  const wc = await c.join("map-room", { name: "Вера" });
+  assert(Math.abs(wc.you.pose.x) > 5 && Math.abs(wc.you.pose.x) < 7.2, `spawned at ${wc.you.pose.x}`);
+  assert.equal(wc.state.map, "river");
+  // Unknown maps are refused.
+  a.send({ t: "map.set", id: "nowhere" });
+  a.send({ t: "map.set", id: "saloon" });
+  const back = await c.wait((m) => m.t === "reset" && m.state.map === "saloon");
+  assert.equal(back.state.balls.filter((x) => x.kind === "mug").length, 5);
+  for (const x of [a, b, c]) x.close();
+  await app.close();
+});
+
+test("rides: one rider per board, taken only from next to it, left where you step off or leave", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("park", { name: "Аня" });
+  await b.join("park", { name: "Борис" });
+  a.send({ t: "map.set", id: "skatepark" });
+  const reset = await b.wait((m) => m.t === "reset");
+  const board = reset.state.rides.find((r) => r.id === "board-1");
+  assert.equal(board.by, null);
+  // Too far away: nothing happens. Next to it: it is yours.
+  a.send({ t: "pose", x: 0, y: 0, z: -5, a: 0, vy: 0, g: 1 });
+  a.send({ t: "ride.take", id: "board-1" });
+  a.send({ t: "pose", x: board.x + 0.5, y: 0, z: board.z, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  a.send({ t: "ride.take", id: "board-1" });
+  const taken = await b.wait((m) => m.t === "ride" && m.ride.by === a.welcome.id);
+  assert.equal(taken.ride.id, "board-1");
+  assert.equal(b.inbox.filter((m) => m.t === "ride").length, 1, "the far attempt was refused");
+  // Someone else cannot take it from under you, nor leave it for you.
+  b.send({ t: "pose", x: board.x, y: 0, z: board.z, a: 0, vy: 0, g: 1 });
+  b.send({ t: "ride.take", id: "board-1" });
+  b.send({ t: "ride.leave", id: "board-1", x: 0, z: 0 });
+  // Riding poses carry the board and the flip.
+  a.send({ t: "pose", x: 1, y: 0.4, z: 2, a: 3.1, vy: 2, g: 0, rd: "board-1", fl: 0.5 });
+  const pose = await b.wait((m) => m.t === "pose" && m.rd === "board-1");
+  assert.equal(pose.fl, 0.5);
+  a.send({ t: "ride.leave", id: "board-1", x: 1, z: 2, a: 3.1 });
+  const left = await b.wait((m) => m.t === "ride" && m.ride.by === null);
+  assert.deepEqual([left.ride.x, left.ride.z], [1, 2]);
+  // Leaving the room on a board leaves the board where you were.
+  b.send({ t: "pose", x: 1.5, y: 0, z: 2, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  b.send({ t: "ride.take", id: "board-1" });
+  await a.wait((m) => m.t === "ride" && m.ride.by === b.welcome.id);
+  b.send({ t: "pose", x: -3, y: 0, z: 4, a: 0, vy: 0, g: 1, rd: "board-1" });
+  await new Promise((r) => setTimeout(r, 50));
+  b.close();
+  const freed = await a.wait((m) => m.t === "ride" && m.ride.by === null && m.ride.x === -3);
+  assert.equal(freed.ride.z, 4);
+  a.close();
+  await app.close();
+});
+
+test("karts: only a driver can knock someone over, the throw is limited; laps and tumbling poses are relayed", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("race", { name: "Аня" });
+  await b.join("race", { name: "Борис" });
+  a.send({ t: "map.set", id: "race" });
+  await b.wait((m) => m.t === "reset");
+  // On foot: no hits.
+  a.send({ t: "pose", x: 0, y: 0, z: 6.7, a: 1.57, vy: 0, g: 1 });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [8, 9, 0] });
+  // Driving: a hit on someone who is not here, a malformed one, then a real one far too hard.
+  a.send({ t: "pose", x: 0, y: 0, z: 6.7, a: 1.57, vy: 0, g: 1, kt: 1, ks: 0.4 });
+  const driving = await b.wait((m) => m.t === "pose" && m.kt === 1);
+  assert.equal(driving.ks, 0.4);
+  a.send({ t: "act", k: "hit", target: "nobody", v: [8, 9, 0] });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [8, "up", 0] });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [80, 90, -3] });
+  const hit = await b.wait((m) => m.t === "act" && m.k === "hit");
+  assert.equal(hit.target, b.welcome.id);
+  assert.deepEqual(hit.v, [14, 14, -3]);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "hit").length, 1, "only the valid hit got through");
+  // Laps: a sensible time only.
+  a.send({ t: "act", k: "lap", ms: 200 });
+  a.send({ t: "act", k: "lap", ms: 12345.6 });
+  const lap = await b.wait((m) => m.t === "act" && m.k === "lap");
+  assert.equal(lap.ms, 12346);
+  // Борис flies and lands: his pose carries the turn of the body, the phase and how he lies.
+  b.send({ t: "pose", x: 3, y: 1, z: 6.7, a: 0, vy: 2, g: 0, tq: [0.5123, 0, 0, 0.8588], tb: 2, tk: 1 });
+  const tumbling = await a.wait((m) => m.t === "pose" && m.tb === 2);
+  assert.deepEqual(tumbling.tq, [0.51, 0, 0, 0.86]);
+  assert.equal(tumbling.tk, 1);
+  b.send({ t: "pose", x: 3, y: 1, z: 6.7, a: 0, vy: 2, g: 0, tq: [1, 2], tb: 9, tk: 7 });
+  const bad = await a.wait((m) => m.t === "pose" && m.x === 3 && m.tb !== 2);
+  assert(bad.tq === undefined && bad.tb === undefined && bad.tk === undefined, "nonsense is dropped");
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("team match: everyone readying up starts the countdown for all; melee reaches a real player only; a throw carries the thrower's speed", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("paintball-room", { name: "Аня" });
+  await b.join("paintball-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "paintball" });
+  await b.wait((m) => m.t === "reset");
+  // Damage before a round is live counts for nothing.
+  a.send({ t: "match.dmg", by: b.welcome.id, amount: 5 });
+  a.send({ t: "match.ready" });
+  const one = await b.wait((m) => m.t === "match" && m.match.phase === "idle");
+  assert.equal(one.match.phase, "idle", "one of two ready: still waiting");
+  b.send({ t: "match.ready" });
+  const go = await a.wait((m) => m.t === "match" && m.match.phase === "countdown");
+  assert(go.match.until > Date.now() + 8000, "a 10 s countdown");
+  // Melee: relayed to the target, refused for someone not in the room.
+  a.send({ t: "act", k: "melee", target: "ghost" });
+  a.send({ t: "act", k: "melee", target: b.welcome.id });
+  const hit = await b.wait((m) => m.t === "act" && m.k === "melee");
+  assert.equal(hit.target, b.welcome.id);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "melee").length, 1);
+  a.send({ t: "act", k: "throw", to: [1, 0.2, 1], w: "snow", pw: 1, vel: [40, -3] });
+  const thrown = await b.wait((m) => m.t === "act" && m.k === "throw");
+  assert.deepEqual(thrown.vel, [12, -3], "speed is clamped");
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("icicle frost only from a real icicle throw; a mine is set near you, armed, stepped on and goes off for everyone", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("mines-room", { name: "Аня" });
+  await b.join("mines-room", { name: "Борис" });
+  // Frost without having thrown an icicle is refused; after one, accepted once.
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  a.send({ t: "act", k: "throw", to: [1, 0.2, 1], w: "icicle", pw: 1, pid: "i1" });
+  await b.wait((m) => m.t === "act" && m.k === "throw" && m.w === "icicle");
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  await b.wait((m) => m.t === "act" && m.k === "frost");
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "frost").length, 1);
+  // A mine at Anya's feet.
+  a.send({ t: "pose", x: 2, y: 0, z: 2, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  a.send({ t: "mine.place", x: 2.2, z: 2.1 });
+  const placed = await b.wait((m) => m.t === "mines" && m.mines.length === 1);
+  const mine = placed.mines[0];
+  assert.equal(mine.by, a.welcome.id);
+  // Stepping on it before it is armed does nothing; after, the fuse starts.
+  b.send({ t: "mine.step", id: mine.id });
+  await new Promise((r) => setTimeout(r, 1300));
+  b.send({ t: "mine.step", id: mine.id });
+  const lit = await a.wait((m) => m.t === "mines" && m.mines[0]?.triggerAt);
+  assert(lit.mines[0].triggerAt > Date.now() + 2000);
+  const boom = await b.wait((m) => m.t === "boom" && m.kind === "mine", 5000);
+  assert.equal(boom.by, a.welcome.id);
+  await b.wait((m) => m.t === "mines" && m.mines.length === 0);
+  a.close();
+  b.close();
+  await app.close();
+});
+
+test("rooms on maps of different sizes stay apart: a bigger field lets you further out, the standard room still stops you at its edge", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port),
+    c = client(port),
+    d = client(port);
+  await a.join("big-field", { name: "Аня" });
+  await b.join("big-field", { name: "Борис" });
+  await c.join("small-room", { name: "Вера" });
+  await d.join("small-room", { name: "Гоша" });
+  a.send({ t: "map.set", id: "paintball" });
+  await b.wait((m) => m.t === "reset" && m.state.map === "paintball");
+  // Poses interleaved between the two rooms: each is limited by its own room's floor.
+  a.send({ t: "pose", x: 18.2, y: 0, z: 11.5, a: 0, vy: 0, g: 1 });
+  c.send({ t: "pose", x: 18.2, y: 0, z: 11.5, a: 0, vy: 0, g: 1 });
+  const far = await b.wait((m) => m.t === "pose" && m.x > 1);
+  const near = await d.wait((m) => m.t === "pose" && m.x > 1);
+  assert.equal(far.x, 18.2, "on the 1.3× paintball field you can stand at x 18.2");
+  assert.equal(far.z, 11.5);
+  assert(near.x < 14.4 && near.z < 10, `the standard room keeps you on its floor: ${near.x}, ${near.z}`);
+  // A sticker can go further out on the big field too.
+  a.send({ t: "note.add", text: "далеко", type: "idea", x: 16, z: 0 });
+  const { note } = await b.wait((m) => m.t === "note");
+  assert(note.x > 15, `sticker at ${note.x}`);
+  for (const x of [a, b, c, d]) x.close();
+  await app.close();
+});
+
+test("a blast knocks props about on the server: everyone sees them move and come to rest", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("props-room", { name: "Аня" });
+  await b.join("props-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "paintball" });
+  const reset = await b.wait((m) => m.t === "reset" && m.state.map === "paintball");
+  const can = reset.state.structures["can-a"];
+  a.send({ t: "act", k: "throw", w: "grenade", to: [can.x - 1, 0, can.z], pid: "g1" });
+  await b.wait((m) => m.t === "act" && m.k === "throw");
+  a.send({ t: "boom", kind: "grenade", x: can.x - 1, y: 0.4, z: can.z, pid: "g1" });
+  const first = await b.wait((m) => m.t === "struct" && m.id === "can-a");
+  assert(first.x !== can.x || first.ta, "it moves");
+  const rest = await b.wait((m) => m.t === "struct" && m.id === "can-a" && Math.abs((m.ta || 0) - Math.PI / 2) < 1e-6 && !(m.y > 0), 6000);
+  assert(rest.x > can.x + 1, `knocked over and away: ${rest.x}`);
+  a.close();
+  b.close();
   await app.close();
 });

@@ -7,9 +7,10 @@ import { animateRig } from "../dist/animation.js";
 import { EMOTIONS } from "../dist/emotions.js";
 import { framePortrait } from "../dist/room.js";
 
-test("all 19 characters keep identity across selecting, saving and returning to a basic avatar", () => {
+test("all 34 characters keep identity across selecting, saving and returning to a basic avatar", () => {
   let profile = { id: "self", name: "Саша", x: 2, z: 3 };
-  assert.equal(CHARACTERS.length, 19);
+  assert.equal(CHARACTERS.length, 34);
+  assert.equal(new Set(CHARACTERS.map((p) => p.id)).size, CHARACTERS.length);
   for (const preset of CHARACTERS) {
     profile = applyLook(profile, preset.id);
     assert.equal(profile.id, "self");
@@ -29,6 +30,49 @@ test("all 19 characters keep identity across selecting, saving and returning to 
   assert.equal(rig.features, undefined);
   assert.equal(profile.headwear, "headphones");
   disposeAvatar(rig);
+});
+
+test("new characters can replace signature clothing without losing their identity", () => {
+  const signatureParts = {
+    six: ["raincoat-hood", "costume"],
+    "little-sister": ["sister-hair", "sister-dress"],
+    ciri: ["ashen-hair", "witcher-outfit", "witcher-sword"],
+    "anton-chigurh": ["chigurh-bob", "chigurh-jacket", "coin"],
+    elastigirl: ["hero-mask", "incredibles-suit"],
+    "scarlet-witch": ["scarlet-crown", "scarlet-costume", "chaos-magic-1", "cape"],
+    eleven: ["buzz-cut", "eleven-dress", "waffle"],
+    alf: ["costume", "tail"],
+    "winnie-pooh": ["costume", "honey-pot"],
+    carlson: ["ginger-hair", "costume", "propeller"],
+    spongebob: ["square-pants"],
+    cheburashka: ["costume"],
+  };
+  for (const [id, names] of Object.entries(signatureParts)) {
+    const profile = applyLook({ id: "self", name: "Игрок" }, id);
+    const original = avatar(profile);
+    const custom = avatar({ ...profile, headwear: "none", outfit: "tshirt", footwear: "sneakers" });
+    assert.equal(custom.root.userData.character, id);
+    for (const name of names) {
+      assert(original.features[name], `${id}: missing ${name}`);
+      assert.equal(custom.features[name], undefined, `${id}: retained ${name}`);
+    }
+    disposeAvatar(original);
+    disposeAvatar(custom);
+  }
+});
+
+test("Carlson's propeller and Scarlet Witch's magic animate on their joints", () => {
+  for (const [id, feature] of [["carlson", "propeller"], ["scarlet-witch", "chaos-magic-1"]]) {
+    const rig = avatar(applyLook({ id: "self", name: "Игрок" }, id));
+    const part = rig.features[feature];
+    assert.equal(part.parent, id === "carlson" ? rig.torso : rig.elbows[1]);
+    const value = () => id === "carlson" ? part.rotation.z : part.children[0].material.emissiveIntensity;
+    animateRig(rig, { time: 0.1, grounded: true }, 0.1);
+    const before = value();
+    animateRig(rig, { time: 0.5, speed: 5, grounded: true }, 0.1);
+    assert.notEqual(value(), before);
+    disposeAvatar(rig);
+  }
 });
 
 test("every character supports locomotion, jumps, throws, kicks and all nine emotions without invalid geometry", () => {
@@ -107,27 +151,29 @@ test("signature accessories are volumetric, animated and removable independently
   });
   assert.equal(teeth, 9);
   disposeAvatar(labubu);
-  const reg = avatar(applyLook({ id: "p", name: "Игрок" }, "reg"));
-  const before = reg.features.cape.rotation.x;
-  animateRig(reg, { time: 1, speed: 5, grounded: true }, 0.1);
-  assert.notEqual(reg.features.cape.rotation.x, before);
+  const bat = avatar(applyLook({ id: "p", name: "Игрок" }, "batman"));
+  const before = bat.features.cape.rotation.x;
+  animateRig(bat, { time: 1, speed: 5, grounded: true }, 0.1);
+  assert.notEqual(bat.features.cape.rotation.x, before);
   const profile = {
-    ...reg.profile,
+    ...bat.profile,
     headwear: "none",
     outfit: "tshirt",
     footwear: "sneakers",
   };
   const custom = avatar(profile);
-  assert.equal(custom.features["relic-helmet"], undefined);
+  assert.equal(custom.features["bat-cowl"], undefined);
   assert.equal(custom.features.cape, undefined);
-  assert.equal(custom.root.userData.character, "reg");
-  disposeAvatar(reg);
+  assert.equal(custom.root.userData.character, "batman");
+  disposeAvatar(bat);
   disposeAvatar(custom);
   const fire = avatar(applyLook({ id: "p", name: "Игрок" }, "flame-princess"));
+  assert(fire.fireHair?.isMesh, "the fire hair is a shader mesh");
+  assert(fire.fireHair.geometry.getAttribute("aT"), "lock-length attribute for the shader");
   animateRig(fire, { time: 0.2, grounded: true }, 0.1);
-  const shape = fire.flames[0].scale.y;
+  const t0 = fire.fireMaterial.uniforms.uTime.value;
   animateRig(fire, { time: 0.7, grounded: true }, 0.1);
-  assert.notEqual(fire.flames[0].scale.y, shape);
+  assert.notEqual(fire.fireMaterial.uniforms.uTime.value, t0, "the fire shader advances in time");
   disposeAvatar(fire);
 });
 

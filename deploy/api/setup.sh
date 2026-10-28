@@ -26,6 +26,8 @@ net.ipv4.tcp_congestion_control=bbr
 net.ipv4.tcp_notsent_lowat=16384
 net.ipv4.tcp_slow_start_after_idle=0
 SYS
+modprobe tcp_bbr 2>/dev/null || true
+grep -q '^tcp_bbr' /etc/modules-load.d/retrocine.conf 2>/dev/null || echo tcp_bbr > /etc/modules-load.d/retrocine.conf
 sysctl -q -p /etc/sysctl.d/90-retrocine.conf || true
 
 step "Firewall: SSH, HTTPS, медиа LiveKit (TCP 7881, UDP 7882, TURN 3478 и 30000–30999)"

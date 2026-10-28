@@ -26,6 +26,9 @@ import * as hitboxesModule from "../dist/hitboxes.js";
 import * as ridingModule from "../dist/riding.js";
 import * as ridesModule from "../dist/rides.js";
 import * as climbingModule from "../dist/climbing.js";
+import * as kartingModule from "../dist/karting.js";
+import * as kartsModule from "../dist/karts.js";
+import * as tumbleModule from "../dist/tumble.js";
 import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
@@ -213,6 +216,9 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...ridingModule,
     ...ridesModule,
     ...climbingModule,
+    ...kartingModule,
+    ...kartsModule,
+    ...tumbleModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -955,7 +961,7 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
 test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
-  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "rink", "cinema"]) {
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "rink", "race", "cinema"]) {
     a.run(`op({ t: "map.set", id: "${id}" })`);
     a.tick(0.3);
     assert.equal(a.run("mapScene.map.id"), id);
@@ -1022,8 +1028,9 @@ test("skatepark: E gets you on a board, you ride and land tricks, E leaves it wh
   assert(a.run("active.ride.speed") > 5);
   // The board is drawn under you, facing where you ride.
   assert(a.run("rideMeshes.get('board-1').position.distanceTo(new T.Vector3(active.x, active.y, active.z))") < 0.01);
-  // Ollie with Space.
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+  // Ollie with Shift.
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "ShiftLeft", key: "Shift", bubbles: true }));
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { code: "ShiftLeft", key: "Shift", bubbles: true }));
   a.tick(0.1);
   assert.equal(a.run("active.grounded"), false);
   let landed = false;
@@ -1032,6 +1039,12 @@ test("skatepark: E gets you on a board, you ride and land tricks, E leaves it wh
     landed = a.run("active.grounded");
   }
   assert(landed && a.run("!!active.ride"), "landed the ollie and still riding");
+  // Space held: full brake.
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+  a.tick(0.8);
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { code: "Space", key: " ", bubbles: true }));
+  assert(Math.abs(a.run("active.ride.speed")) < 0.01, "stopped with Space");
+  assert(a.run("active.grounded"), "Space does not jump on a board");
   // E: off the board; it stays where you got off.
   a.run("kickNearest()");
   a.tick(0.05);
@@ -1133,4 +1146,115 @@ test("playground sides: E under a pull-up bar hangs you from it; W pulls up and 
   assert(a.run("active.grounded"));
   // The fence, the monkey bars and the climbing cube are built.
   assert(a.run("mapScene.decorRoot.children.length") > 20);
+});
+
+test("race: E at the dispenser puts you in a kart; W drives, A turns left, Space stops; E out and the kart is gone", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "race" })');
+  a.tick(0.2);
+  a.run("Object.assign(active, { x: 0.5, z: 8.7, y: 0, vy: 0, grounded: true })");
+  a.run("kickNearest()");
+  assert(a.run("!!active.kart"), "in a kart");
+  a.tick(0.1);
+  assert.equal(a.run("kartMeshes.size"), 1);
+  assert.equal(a.run("currentPose().kt"), 1);
+  const x0 = a.run("active.x");
+  a.run("keys.add('up')");
+  a.tick(1);
+  assert(a.run("active.x") > x0 + 2.5, "drove along the straight");
+  const angle = a.run("active.angle");
+  a.run("keys.add('left')");
+  a.tick(0.4);
+  a.run("keys.delete('left')");
+  assert(a.run("active.angle") > angle + 0.6, `turned left: ${a.run("active.angle")} from ${angle}`);
+  a.run("keys.clear()");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
+  a.tick(1.2);
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { code: "Space", key: " ", bubbles: true }));
+  assert(a.run("Math.hypot(active.kart.vx, active.kart.vz)") < 0.05, "stopped");
+  // A on its own turns on the spot.
+  const at = a.run("[active.x, active.z]");
+  a.run("keys.add('left')");
+  a.tick(0.5);
+  a.run("keys.clear()");
+  assert(a.run(`Math.hypot(active.x - ${at[0]}, active.z - ${at[1]})`) < 0.01);
+  a.run("kickNearest()");
+  assert(!a.run("!!active.kart"));
+  a.tick(0.1);
+  assert.equal(a.run("kartMeshes.size"), 0, "the kart is gone");
+});
+
+test("race: run over, you fly tumbling, lie down and get back up; your pose shows it to others", () => {
+  const a = boot();
+  a.tick(0.1);
+  a.server.emit({ t: "reset", by: "anya", name: "Аня", state: { ...stateModule.serializeState(a.server.state), map: "race" }, objs: [] });
+  a.tick(0.1);
+  a.run("Object.assign(active, { x: -4, z: 6, y: 0, vy: 0, grounded: true })");
+  a.tick(0.1);
+  const x0 = a.run("active.x");
+  // Someone else's hit does nothing to you.
+  a.server.emit({ t: "act", id: "anya", s: a.run("net.serverNow()"), k: "hit", target: "max", v: [8, 9, 0] });
+  assert(!a.run("active.tumble"));
+  a.server.emit({ t: "act", id: "anya", s: a.run("net.serverNow()"), k: "hit", target: "me", v: [8, 9, 0] });
+  assert.equal(a.run("active.tumble.phase"), "air");
+  a.server.sent.length = 0;
+  a.run("keys.add('left')");
+  const seen = new Set();
+  let top = 0,
+    tilted = false;
+  for (let i = 0; i < 240 && a.run("!!active.tumble"); i++) {
+    a.tick(1 / 60);
+    top = Math.max(top, a.run("active.y"));
+    if (a.run("active.tumble && active.tumble.phase === 'air'")) tilted ||= a.run("Math.abs(active.root.quaternion.w) < 0.9");
+    for (const m of a.server.of("pose")) seen.add(m.tb || 0);
+    a.server.sent.length = 0;
+  }
+  a.run("keys.clear()");
+  assert(top > 1, `thrown up: ${top}`);
+  assert(tilted, "the body turns over in the air");
+  assert(a.run("active.x") > x0 + 2, "carried along the hit, the arrow keys do nothing meanwhile");
+  assert(seen.has(1) && seen.has(2) && seen.has(3), `the pose shows flying, lying and getting up: ${[...seen]}`);
+  assert(!a.run("active.tumble"), "standing again");
+  a.tick(0.2);
+  assert(a.run("Math.abs(active.root.quaternion.x) + Math.abs(active.root.quaternion.z)") < 1e-6, "upright");
+  assert.equal(a.run("currentPose().tb"), undefined);
+});
+
+test("race: driving into someone online tells everyone who was hit; their pose turns them over", () => {
+  const a = boot({ peers: [] });
+  a.tick(0.1);
+  a.server.emit({ t: "reset", by: "anya", name: "Аня", state: { ...stateModule.serializeState(a.server.state), map: "race" }, objs: [] });
+  a.tick(0.1);
+  a.server.emit({ t: "join", id: "oleg", profile: { name: "Олег", color: "#88aacc" }, pose: { x: 2.5, y: 0, z: 6.7, a: 0, vy: 0, g: 1 } });
+  a.tick(0.1);
+  a.run("Object.assign(active, { x: 0.5, z: 8.7, y: 0, vy: 0, grounded: true })");
+  a.run("kickNearest()");
+  assert(a.run("!!active.kart"));
+  a.server.sent.length = 0;
+  a.run("keys.add('up')");
+  a.tick(1);
+  a.run("keys.clear()");
+  const hit = a.server.of("act").find((m) => m.k === "hit");
+  assert(hit && hit.target === "oleg", "the server hears who was hit");
+  assert(hit.v[0] > 2 && hit.v[1] > 3, `thrown forward and up: ${hit.v}`);
+  assert(a.server.of("pose").every((m) => m.kt === 1), "the pose says you are driving");
+  // Олег's own client knocks him over and streams the tumble.
+  const now = a.run("net.serverNow()"),
+    q = [0.5, 0, 0, Math.sqrt(0.75)];
+  for (let i = 0; i < 6; i++) a.server.emit({ t: "pose", id: "oleg", s: now + i * 33, x: 4 + i * 0.2, y: 1, z: 6.7, a: 0, vy: 2, g: 0, tq: q, tb: 1 });
+  a.tick(0.4);
+  const oleg = a.run("(() => { const p = players.find((p) => p.profile.id === 'oleg'); return { qx: p.root.quaternion.x, tb: p.flags.tb }; })()");
+  assert.equal(oleg.tb, 1);
+  assert(Math.abs(oleg.qx - 0.5) < 0.05, `his body turns as his pose says: ${oleg.qx}`);
+  // Back on his feet he takes a kart: it is drawn under him with the wheels turned as he steers.
+  const t1 = a.run("net.serverNow()");
+  for (let i = 0; i < 6; i++) a.server.emit({ t: "pose", id: "oleg", s: t1 + i * 33, x: 4, y: 0, z: 6.7, a: 0, vy: 0, g: 1, kt: 1, ks: 0.5 });
+  a.tick(0.4);
+  const kart = a.run("(() => { const p = players.find((p) => p.profile.id === 'oleg'); const g = kartMeshes.get(p); return g && { d: Math.hypot(g.position.x - p.x, g.position.z - p.z), steer: g.userData.steer[0].rotation.y, upright: Math.abs(p.root.quaternion.x) }; })()");
+  assert(kart && kart.d < 0.01, "his kart is where he is");
+  assert(kart.steer > 0.2, "front wheels turned");
+  assert(kart.upright < 1e-6, "sitting upright again");
+  for (let i = 6; i < 12; i++) a.server.emit({ t: "pose", id: "oleg", s: t1 + i * 33, x: 4, y: 0, z: 6.7, a: 0, vy: 0, g: 1 });
+  a.tick(0.4);
+  assert.equal(a.run("kartMeshes.size"), 1, "out of it, his kart is gone; yours stays");
 });

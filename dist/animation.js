@@ -118,6 +118,8 @@ export function animateRig(rig, state, dt) {
   }
   if (state.ride) applyRide(rig, state.ride, t, dt);
   if (state.climb) applyClimb(rig, state.climb, t);
+  if (state.kart) applyKart(rig, state.kart, t);
+  if (state.tumble) applyTumble(rig, state.tumble, t);
   if (state.sled) applySled(rig, t);
   else if (state.skate > 0.05 && state.grounded !== false) applySkate(rig, state.skate, motion.phase);
   const action = state.action;
@@ -257,6 +259,65 @@ function applyRide(rig, ride, t, dt) {
   if (ride.grind) rig.model.rotation.z += Math.sin(t * 20) * 0.03;
 }
 
+// In a kart: sitting low, legs stretched to the pedals, hands on the wheel turning with it.
+function applyKart(rig, kart, t) {
+  const steer = kart.steer || 0;
+  rig.model.position.set(0, -0.42, -0.12);
+  rig.model.rotation.set(-0.08, 0, steer * 0.08 + Math.sin(t * 31) * 0.006);
+  rig.torso.rotation.set(-0.12, -steer * 0.12, 0);
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1;
+    rig.legs[i].rotation.set(-1.4, 0, s * 0.12);
+    rig.knees[i].rotation.x = 0.45;
+    rig.feet[i].rotation.x = -0.2;
+    rig.arms[i].rotation.set(-1.15 + s * steer * 0.3, 0, -s * 0.22);
+    rig.elbows[i].rotation.x = -0.75;
+  }
+  rig.head.rotation.y = steer * 0.25;
+}
+// Knocked over: arms and legs flailing in the air; lying limp the way you came down; sitting dazed.
+function applyTumble(rig, tb, t) {
+  rig.model.position.set(0, 0, 0);
+  rig.model.rotation.set(0, 0, 0);
+  rig.model.scale.set(1, 1, 1);
+  if (tb.phase === 1) {
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1,
+        w = Math.sin(t * 17 + i * 2);
+      rig.arms[i].rotation.set(-1.6 + w * 0.9, 0, s * (1.1 + w * 0.3));
+      rig.elbows[i].rotation.x = -0.4 - Math.max(0, w) * 0.6;
+      rig.legs[i].rotation.set(-0.6 + Math.sin(t * 13 + i * 3) * 0.7, 0, s * 0.35);
+      rig.knees[i].rotation.x = 0.6 + Math.max(0, Math.sin(t * 11 + i)) * 0.6;
+    }
+    rig.head.rotation.set(Math.sin(t * 9) * 0.3, 0, Math.cos(t * 7) * 0.2);
+    return;
+  }
+  const k = tb.phase === 3 ? Math.max(0, 1 - tb.t / 0.55) : 1;
+  if (tb.kind === "sit") {
+    // On your bottom: legs out in front, hands behind you, head lolling.
+    rig.model.position.y = -0.42 * k;
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1;
+      rig.legs[i].rotation.set(-1.45 * k, 0, s * 0.25 * k);
+      rig.knees[i].rotation.x = 0.2 * k;
+      rig.arms[i].rotation.set(0.7 * k, 0, s * 0.35 * k);
+      rig.elbows[i].rotation.x = -0.1;
+    }
+    rig.head.rotation.set(0.2 * k, Math.sin(t * 2.5) * 0.35 * k, Math.sin(t * 3) * 0.15 * k);
+    return;
+  }
+  // Lying: limbs spread and still; on the front the arms reach forward, on a side you curl up.
+  const side = tb.kind === "left" || tb.kind === "right";
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1;
+    rig.arms[i].rotation.set((tb.kind === "front" ? -2.6 : side ? -1.2 : -0.3) * k, 0, s * (side ? 0.3 : 1.2) * k);
+    rig.elbows[i].rotation.x = (side ? -1.1 : -0.25) * k;
+    rig.legs[i].rotation.set((side ? -0.9 : 0.05) * k, 0, s * (side ? 0.05 : 0.28) * k);
+    rig.knees[i].rotation.x = (side ? 1.2 : 0.15) * k;
+  }
+  rig.head.rotation.set((tb.kind === "back" ? -0.2 : 0.15) * k, 0, 0);
+  rig.eyes.forEach((eye) => eye.scale.set(1, tb.phase === 2 ? 0.15 : 1, 1));
+}
 // Sitting on a sled: legs out in front, hands on the rope.
 function applySled(rig, t) {
   rig.model.position.set(0, -0.36, -0.12);

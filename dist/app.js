@@ -33,6 +33,9 @@ import { MapScene } from "./mapscene.js";
 import { HitboxView } from "./hitboxes.js";
 import { stepRide, mountRide, rideInfo, surfaceUnder, gradient } from "./riding.js";
 import { buildRide, poseRide, disposeRide } from "./rides.js";
+import { stepKart, enterKart, lapStep, KART } from "./karting.js";
+import { buildKart, poseKart, disposeKart } from "./karts.js";
+import { startTumble, stepTumble, centerHeight, qrot, qslerp, CENTER, PHASES } from "./tumble.js";
 import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG, findBar, startBar, isTurnik } from "./climbing.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
@@ -369,9 +372,88 @@ function updateTrolleys() {
       trolleys.delete(p);
     }
 }
+// ——— Karts ———
+const kartMeshes = new Map();
+const inKart = (p) => (p.remote ? !!p.flags?.kt : !!p.kart);
+const TUMBLE_KINDS = ["back", "front", "left", "right", "sit"];
+function updateKarts(dt) {
+  const on = new Set();
+  for (const p of players) {
+    if (!inKart(p)) continue;
+    on.add(p);
+    let g = kartMeshes.get(p);
+    if (!g) {
+      g = buildKart(p.profile.color || "#e4573f", players.indexOf(p) + 1);
+      scene.add(g);
+      kartMeshes.set(p, g);
+    }
+    const own = !p.remote,
+      speed = own ? p.kart.vx * Math.sin(p.angle) + p.kart.vz * Math.cos(p.angle) : Math.hypot(p.velocityX || 0, p.velocityZ || 0);
+    g.userData.roll = (g.userData.roll || 0) + (speed * dt) / 0.14;
+    poseKart(g, p.x, p.y, p.z, p.angle, own ? p.kart.pitch || 0 : 0, own ? p.kart.steer : p.flags?.ks || 0, g.userData.roll);
+  }
+  for (const [p, g] of kartMeshes)
+    if (!on.has(p)) {
+      scene.remove(g);
+      disposeKart(g);
+      kartMeshes.delete(p);
+    }
+}
+const nearDispenser = () => (mapScene.map?.dispensers || []).find((d) => Math.hypot(d.x - active.x, d.z - active.z) < 2.6);
+// A kart appears in front of the dispenser and you are in it; if another kart stands there, a bit further on.
+function takeKart(d) {
+  let spot = { ...d.spawn };
+  for (let i = 1; i < 6 && players.some((p) => p !== active && inKart(p) && Math.hypot(p.x - spot.x, p.z - spot.z) < 1.9); i++)
+    spot = { ...d.spawn, x: d.spawn.x - Math.sin(d.spawn.a) * 2.1 * i, z: d.spawn.z - Math.cos(d.spawn.a) * 2.1 * i };
+  if (active.ride) leaveRide();
+  enterKart(active, spot, active.profile.color || "#e4573f");
+  pending = null;
+  sprinting = false;
+  toast("Карт: W — газ, A/D — руль, S — тормоз и назад, Space — стоп. E — выйти (карт исчезнет)", 6500);
+}
+// Out of the kart: you step out to the side and the kart is gone.
+function leaveKart() {
+  const l = { x: Math.cos(active.angle), z: -Math.sin(active.angle) };
+  const boxes = mapScene.colliders().filter((b) => !b.y && b.h > 0.3);
+  const spot = [1, -1].map((s) => ({ x: active.x + l.x * s * 1.05, z: active.z + l.z * s * 1.05 })).find((p) => !boxes.some((b) => inside(p.x, p.z, b, 0.3))) || { x: active.x, z: active.z };
+  delete active.kart;
+  Object.assign(active, spot, { vy: 0, grounded: true, kx: 0, kz: 0 });
+  active.x = clamp(active.x, -LIMITS.x, LIMITS.x);
+  active.z = clamp(active.z, floorBack(active.x) + 0.3, LIMITS.z);
+}
+const bestLaps = new Map();
+const lapTime = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, "0")}` : s.toFixed(2)) + " с";
+function recordLap(name, seconds) {
+  if (!(seconds < (bestLaps.get(name) ?? Infinity))) return false;
+  bestLaps.set(name, seconds);
+  mapScene.decor?.setBoard?.([...bestLaps].sort((a, b) => a[1] - b[1]).slice(0, 6).map(([n, s]) => [n, lapTime(s)]));
+  return true;
+}
+function kartEvents(events) {
+  for (const e of events) {
+    if (e.t === "hit") {
+      const victim = players.find((p) => p.profile.id === e.id);
+      if (victim) effects.puff(new T.Vector3(victim.x, victim.y + 0.8, victim.z), "#ffffff", 8, 3, 0.04);
+      net.send({ t: "act", k: "hit", target: e.id, v: e.v.map(r3) });
+      // Without a server nobody else runs their own avatar: knock them over here.
+      if (victim && !net.connected) startTumble(victim, e.v);
+    }
+    if (e.t === "wall" && e.speed > 4) effects.puff(new T.Vector3(active.x + Math.sin(active.angle) * 0.8, 0.3, active.z + Math.cos(active.angle) * 0.8), "#d9d4cc", 6, 2.6, 0.035);
+    if (e.t === "land") active.land = 0.15;
+  }
+}
+// Knocked over by a kart or a blast: you fly and tumble; riding or climbing stops.
+function knockOver(v) {
+  if (active.kart) return;
+  if (active.ride) leaveRide();
+  active.climb = null;
+  pending = null;
+  startTumble(active, v);
+}
 function updateRides(dt) {
   updateTrolleys();
   updateSleds();
+  updateKarts(dt);
   for (const r of world.rides || []) {
     const g = rideMeshes.get(r.id);
     if (!g) continue;
@@ -437,7 +519,7 @@ function onRide(r) {
     mountRide(active, r);
     active.y = surfaceUnder(mapScene.colliders(), r.x, r.z, active.y + 0.3).h;
     const R = rideInfo(r.kind);
-    toast(`${R.label}: W A S D — ехать и рулить, Space — ${R.jump.toLowerCase()}, в воздухе A/D — вращение, Shift — ${R.flip.toLowerCase()}; рельсы — запрыгнуть вдоль. E — слезть`, 6000);
+    toast(`${R.label}: W — разгон, A/D — поворот, S — притормозить, Space — стоп. Shift — ${R.jump.toLowerCase()}, в воздухе A/D — вращение, Shift — ${R.flip.toLowerCase()}; на перила — запрыгнуть вдоль. E — слезть`, 7000);
   } else if (active.ride?.id === r.id && r.by !== myRider()) delete active.ride;
 }
 function rideEvents(events) {
@@ -1173,10 +1255,14 @@ function onBoom(m) {
       dir = new T.Vector3(active.x - m.x, 0, active.z - m.z);
     if (dir.lengthSq() < 1e-4) dir.set(Math.sin(active.angle), 0, Math.cos(active.angle));
     dir.normalize();
-    active.kx = (active.kx || 0) + dir.x * k * 0.85;
-    active.kz = (active.kz || 0) + dir.z * k * 0.85;
-    active.vy = Math.max(active.vy, 3 + k * 0.6);
-    active.grounded = false;
+    // A close blast knocks you head over heels; a farther one just shoves you.
+    if (k > 7 && !active.kart) knockOver([dir.x * k * 0.85, 3 + k * 0.6, dir.z * k * 0.85]);
+    else {
+      active.kx = (active.kx || 0) + dir.x * k * 0.85;
+      active.kz = (active.kz || 0) + dir.z * k * 0.85;
+      active.vy = Math.max(active.vy, 3 + k * 0.6);
+      active.grounded = false;
+    }
     active.hit = 0.9;
     pending = null;
   }
@@ -1199,15 +1285,19 @@ function onBoom(m) {
     }
 }
 let climbJump = false;
+let spaceHeld = false;
+// Vehicles are driven relative to themselves: W gas, S half brake, Space full brake, A/D turn.
+function driveInput() {
+  if ($("#modal").open) return {};
+  return { gas: keys.has("up") ? 1 : 0, brake: keys.has("down") ? 1 : 0, stop: spaceHeld ? 1 : 0, turn: (keys.has("left") ? 1 : 0) - (keys.has("right") ? 1 : 0) };
+}
 function doJump() {
   if (active.climb) {
     climbJump = true;
     return;
   }
-  if (active.ride) {
-    active.ride.ollie = true;
-    return;
-  }
+  // In a vehicle Space is the brake (held), not a jump.
+  if (active.ride || active.kart) return;
   if (jump(active)) {
     active.land = 0;
     status();
@@ -1221,11 +1311,22 @@ function hangFromBar(bar) {
 // Within reach of your feet or hands: lets you knock a mug off the bar, too.
 const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y - p.y < 1.45 && c.y - p.y > -0.9;
 function kickNearest() {
+  if (active.tumble) return;
+  if (active.kart) {
+    leaveKart();
+    return;
+  }
   if (active.ride) {
     leaveRide();
     return;
   }
   if (active.climb) return;
+  // At a kart dispenser: a kart of your own, and you are in it.
+  const dispenser = nearDispenser();
+  if (dispenser) {
+    takeKart(dispenser);
+    return;
+  }
   // A bar above your head: hang from it.
   const bar = findBar(mapScene.map?.climbs, active, true);
   if (bar) {
@@ -1395,7 +1496,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>7</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с). Тяжёлое летит ближе.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 15–45°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — притормозить, <kbd>Space</kbd> — стоп. На доске <kbd>Shift</kbd> — прыжок, в воздухе — трюк. Карт выдаёт автомат на картинге; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>7</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с). Тяжёлое летит ближе.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 15–45°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -1985,14 +2086,19 @@ document.addEventListener("keydown", (e) => {
     pending = null;
   }
   if (e.key === "Shift") {
+    // On a board, scooter or bike Shift is the trick key: an ollie on the ground, a flip in the air.
     if (active.ride) {
-      if (!e.repeat) active.ride.trick = true;
+      if (!e.repeat) {
+        if (active.grounded || active.ride.grind) active.ride.ollie = true;
+        else active.ride.trick = true;
+      }
     } else sprinting = true;
   }
   const digit = /^Digit([1-7])$/.exec(e.code);
   if (digit && !e.repeat) setWeapon(PROJECTILES[+digit[1] - 1].id);
   if (e.code === "Space") {
     e.preventDefault();
+    spaceHeld = true;
     if (!e.repeat) doJump();
   }
   if (e.code === "KeyE" && !e.repeat) kickNearest();
@@ -2012,10 +2118,12 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => {
   if (keyMap[e.code]) keys.delete(keyMap[e.code]);
   if (e.key === "Shift") sprinting = false;
+  if (e.code === "Space") spaceHeld = false;
 });
 window.addEventListener("blur", () => {
   keys.clear();
   sprinting = false;
+  spaceHeld = false;
   cancelCharge();
   endDrag();
 });
@@ -2118,7 +2226,7 @@ function physics(dt) {
       oldX = p.x,
       oldZ = p.z;
     let grab = null;
-    if (!p.remote && !p.climb && !p.ride) {
+    if (!p.remote && !p.climb && !p.ride && !p.kart && !p.tumble) {
       p.climbCooldown = Math.max(0, (p.climbCooldown || 0) - dt);
       grab = findClimb(mapScene.map?.climbs, p, move);
       // Jumping up into a bar catches it.
@@ -2130,7 +2238,42 @@ function physics(dt) {
         }
       }
     }
-    if (!p.remote && p.climb) {
+    if (p.tumble && (!p.remote || !net.connected)) {
+      // Knocked over: flying, lying there, getting up (offline, others too).
+      const was = { x: p.x, z: p.z };
+      const result = stepTumble(p, obstacles, dt);
+      p.velocityX = (p.x - was.x) / dt;
+      p.velocityZ = (p.z - was.z) / dt;
+      if (result === "down") effects.puff(new T.Vector3(p.x, 0.15, p.z), "#cfc6b8", 10, 2.4, 0.045);
+    } else if (!p.remote && p.kart) {
+      // Driving: other karts to bump, people on foot to knock over, laps to time.
+      const was = { x: p.x, z: p.z };
+      const others = [];
+      for (const o of players) {
+        if (o === p) continue;
+        if (inKart(o)) others.push({ kind: "kart", id: o.profile.id, x: o.x, z: o.z, vx: o.velocityX || 0, vz: o.velocityZ || 0 });
+        else if (!o.tumble && !o.flags?.tb) others.push({ kind: "avatar", id: o.profile.id, x: o.x, z: o.z, y: o.y });
+      }
+      kartEvents(stepKart(p, driveInput(), { boxes: obstacles, track: mapScene.map?.track, others, now: worldTime }, dt));
+      const lap = lapStep(p.kart.lap, mapScene.map?.track, was, p, worldTime);
+      if (lap?.start) toast("Круг пошёл!", 1500);
+      if (lap?.lap) {
+        const best = recordLap(p.profile.name || "Вы", lap.lap);
+        toast(`Круг: ${lapTime(lap.lap)}${best ? " — лучший!" : ""}`, 2500);
+        net.send({ t: "act", k: "lap", ms: Math.round(lap.lap * 1000) });
+      }
+      p.velocityX = (p.x - was.x) / dt;
+      p.velocityZ = (p.z - was.z) / dt;
+      // Karts shove balls, cones and cubes out of the way.
+      for (const c of loose) {
+        const d = Math.hypot(c.x - p.x, c.z - p.z),
+          v = Math.hypot(p.kart.vx, p.kart.vz);
+        if (d < KART.reach + c.size / 2 && v > 1 && c.y < 1 && worldTime - (c.kartKick || -9) > 0.3) {
+          c.kartKick = worldTime;
+          kickObject(c, { x: p.x - p.kart.vx / v, z: p.z - p.kart.vz / v, angle: p.angle }, Math.min(9, 1.5 + v));
+        }
+      }
+    } else if (!p.remote && p.climb) {
       // Ropes, trunks, walls, nets and zip lines.
       const was = { x: p.x, z: p.z };
       const result = stepClimb(p, move, obstacles, dt, climbJump);
@@ -2145,7 +2288,7 @@ function physics(dt) {
       }
     } else if (!p.remote && p.ride) {
       const was = { x: p.x, z: p.z };
-      rideEvents(stepRide(p, move, obstacles, dt));
+      rideEvents(stepRide(p, driveInput(), obstacles, dt));
       p.velocityX = (p.x - was.x) / dt;
       p.velocityZ = (p.z - was.z) / dt;
       if (p.ride?.grind && Math.random() < dt * 30) effects.puff(new T.Vector3(p.x, p.y, p.z), "#ffcf6b", 2, 2.4, 0.015);
@@ -2320,7 +2463,7 @@ function visual(dt) {
         desired = Math.atan2(-d.x, -d.z),
         delta = Math.atan2(Math.sin(desired - p.angle), Math.cos(desired - p.angle));
       p.angle += delta * (1 - Math.exp(-12 * dt));
-    } else if (!p.remote && !p.ride && !p.climb) {
+    } else if (!p.remote && !p.ride && !p.climb && !p.kart && !p.tumble) {
       // You face your cursor; others face where their owners look (sent with their pose).
       const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
         delta = Math.atan2(
@@ -2334,7 +2477,20 @@ function visual(dt) {
     // Riders lean with the slope they roll on.
     const riding = p.ride || (p.remote && p.flags?.rd);
     p.root.rotation.order = "YXZ";
-    p.root.rotation.x = riding ? -(p.ride ? p.ride.pitch : p.pitch || 0) : sledding(p) ? -slopePitch(p) : 0;
+    p.root.rotation.x = riding ? -(p.ride ? p.ride.pitch : p.pitch || 0) : sledding(p) ? -slopePitch(p) : p.kart ? -(p.kart.pitch || 0) : 0;
+    p.root.rotation.z = 0;
+    // Tumbling: the whole body turns about its middle; lying down, the middle sinks to the ground.
+    const tq = p.tumble ? p.tumble.q : p.remote && p.flags?.tq ? p.flags.tq : null;
+    if (tq) {
+      if (p.remote && !p.tumble) p.tq = p.tq ? qslerp(p.tq, tq, 1 - Math.exp(-18 * dt)) : tq;
+      const q = p.remote && !p.tumble ? p.tq : tq,
+        kind = p.tumble ? p.tumble.rest?.kind : TUMBLE_KINDS[p.flags?.tk],
+        lying = p.tumble ? p.tumble.phase !== "air" : (p.flags?.tb || 1) > 1,
+        off = qrot(q, [0, CENTER, 0]),
+        hc = centerHeight(q, lying ? kind : null);
+      p.root.quaternion.set(q[0], q[1], q[2], q[3]);
+      p.root.position.set(p.x - off[0], p.y + hc - off[1], p.z - off[2]);
+    } else if (p.tq) p.tq = null;
     const vx = p.velocityX || 0,
       vz = p.velocityZ || 0,
       speed = Math.hypot(vx, vz);
@@ -2356,6 +2512,8 @@ function visual(dt) {
         pushing: p === active ? pushState : p.flags?.ps || 0,
         ride: riding ? rideState(p) : null,
         sled: sledding(p),
+        kart: inKart(p) ? { steer: p.remote ? p.flags?.ks || 0 : p.kart.steer } : null,
+        tumble: p.tumble ? { phase: PHASES[p.tumble.phase], kind: p.tumble.rest?.kind, t: p.tumble.t } : p.remote && p.flags?.tb ? { phase: p.flags.tb, kind: TUMBLE_KINDS[p.flags.tk], t: 1 } : null,
         skate: skating(p) ? Math.min(1, speed / 5) : 0,
         climb: p.climb
           ? p.climb.c.kind === "bar"
@@ -2575,6 +2733,8 @@ function updatePushing(move, dt) {
 function updateRemote(p, dt) {
   const renderAt = clockNow() - p.buffer.delay();
   while (p.events.length && p.events[0].s <= renderAt) remoteEvent(p, p.events.shift());
+  // Without a server, someone you knocked over flies here, not by their pose.
+  if (p.tumble) return;
   const s = p.buffer.sample(renderAt);
   if (!s) return;
   if (!(dt > 0)) return;
@@ -2625,6 +2785,15 @@ function currentPose() {
     if (active.climb.pull > 0.05) pose.pu = Math.round(active.climb.pull * 10) / 10;
   } else if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
   if (sledding(active)) pose.sd = 1;
+  if (active.kart) {
+    pose.kt = 1;
+    if (Math.abs(active.kart.steer) > 0.05) pose.ks = Math.round(active.kart.steer * 10) / 10;
+  }
+  if (active.tumble) {
+    pose.tq = active.tumble.q.map((v) => Math.round(v * 100) / 100);
+    pose.tb = PHASES[active.tumble.phase];
+    if (active.tumble.rest) pose.tk = TUMBLE_KINDS.indexOf(active.tumble.rest.kind);
+  }
   if (active.ride) {
     pose.rd = active.ride.id;
     if (active.ride.flip >= 0) pose.fl = Math.round(active.ride.flip * 100) / 100;
@@ -2791,13 +2960,23 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0, hb: m.hb || 0, pu: m.pu || 0 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0, hb: m.hb || 0, pu: m.pu || 0, kt: m.kt || 0, ks: m.ks || 0, tq: m.tq || null, tb: m.tb || 0, tk: m.tk ?? -1 };
       break;
     }
     case "profile":
       updateRemoteProfile(m.id, m.profile);
       break;
     case "act":
+      // Run over: you are thrown at once, as the driver saw it.
+      if (m.k === "hit") {
+        if (m.target === net.id) knockOver(m.v);
+        break;
+      }
+      if (m.k === "lap") {
+        const p = remotes.get(m.id);
+        if (p && recordLap(p.profile.name, m.ms / 1000)) toast(`${p.profile.name}: лучший круг ${lapTime(m.ms / 1000)}`, 2500);
+        break;
+      }
       remotes.get(m.id)?.events.push(m);
       break;
     case "note":
@@ -2855,6 +3034,8 @@ function onServer(m, at) {
       break;
     case "reset": {
       delete active.ride;
+      delete active.kart;
+      active.tumble = null;
       active.climb = null;
       loadState(createState(m.state, uid), m.objs);
       // Everyone starts the new map at its entrance.
@@ -3043,7 +3224,7 @@ function startNetwork() {
   net.pose = () => (placedOnce ? currentPose() : undefined);
   // ?debug exposes internals for end-to-end checks and troubleshooting in the console.
   if (/[?&]debug\b/.test(location.search))
-    window.kino = { players, world, remotes, net, mediaClient, op, notes: () => notes, active: () => active };
+    window.kino = { players, world, remotes, net, mediaClient, op, camera, notes: () => notes, active: () => active };
   setInterval(renderPresence, 2000);
   // Browsers only play sound after a gesture: the first click in the room unlocks it.
   window.addEventListener("pointerdown", () => mediaClient.startAudio(), true);

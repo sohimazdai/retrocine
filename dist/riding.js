@@ -87,7 +87,8 @@ function trickName(R, st, fakie) {
   return parts.length ? { name: parts.join(" "), score } : null;
 }
 
-// input: { x, z } camera-relative stick (like walking), ollie / trick: pressed this frame.
+// input: { gas, brake, stop, turn } — W, S, Space held; turn +1 is left (A), −1 right (D).
+// st.ollie / st.trick: Shift pressed this frame (on the ground an ollie, in the air a flip).
 // Returns events: { t: "land", name, score } | { t: "grind" } | { t: "bail", reason }.
 export function stepRide(b, input, boxes, dt) {
   const st = b.ride,
@@ -104,22 +105,18 @@ export function stepRide(b, input, boxes, dt) {
     const th = Math.atan(s),
       cos = Math.cos(th),
       sin = Math.sin(th);
-    // Steering toward where you point; pushing when you point roughly the way you go.
-    const len = Math.hypot(input.x, input.z);
-    let lean = 0;
-    if (len > 0.1) {
-      const want = Math.atan2(input.x, input.z),
-        fakie = st.speed < -0.3,
-        travel = fakie ? b.angle + Math.PI : b.angle,
-        diff = wrap(want - travel),
-        turn = R.turn * dt * (0.55 + 0.45 * Math.min(1, Math.abs(st.speed) / 4));
-      if (Math.abs(diff) < 1.9) {
-        b.angle = wrap(b.angle + clamp(diff, -turn, turn));
-        lean = clamp(diff * 2, -1, 1);
-        if (Math.abs(st.speed) < R.max) st.speed += (fakie ? -1 : 1) * R.accel * dt * Math.max(0.2, Math.cos(diff));
-      } else if (Math.abs(st.speed) > 0.6) st.speed -= Math.sign(st.speed) * R.brake * dt;
-      else b.angle = wrap(b.angle + clamp(wrap(want - b.angle), -turn * 2.5, turn * 2.5));
+    // Controls relative to the rider: A/D turn (on the spot too, a little slower at full speed),
+    // W pushes the way you face (rolling backwards it first slows you), S is a half brake,
+    // Space a full one.
+    const turn = clamp(input.turn || 0, -1, 1);
+    b.angle = wrap(b.angle + turn * R.turn * (1 - 0.35 * Math.min(1, Math.abs(st.speed) / R.max)) * dt);
+    if (input.gas) {
+      if (st.speed < -0.2) st.speed += R.brake * dt;
+      else if (st.speed < R.max) st.speed = Math.min(R.max, st.speed + R.accel * dt);
     }
+    const brake = (input.stop ? 1.6 : input.brake ? 0.55 : 0) * R.brake;
+    if (brake) st.speed -= Math.sign(st.speed) * Math.min(Math.abs(st.speed), brake * dt);
+    const lean = turn * Math.min(1, Math.abs(st.speed) / 4);
     st.lean += (lean - st.lean) * Math.min(1, dt * 8);
     st.speed -= Math.sign(st.speed) * Math.min(Math.abs(st.speed), R.roll * dt);
     st.speed -= SLOPE_GRAVITY * sin * dt;
@@ -173,7 +170,8 @@ export function stepRide(b, input, boxes, dt) {
   }
   // ——— In the air ———
   b.vy -= RIDE_GRAVITY * dt;
-  const spinIn = -clamp(input.x, -1, 1);
+  // A/D spin you in the air, the same way they turn you on the ground.
+  const spinIn = clamp(input.turn || 0, -1, 1);
   b.angle = wrap(b.angle + spinIn * R.spin * dt);
   st.spin += spinIn * R.spin * dt;
   st.lean += (spinIn * 0.6 - st.lean) * Math.min(1, dt * 6);

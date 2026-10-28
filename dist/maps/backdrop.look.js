@@ -238,6 +238,39 @@ const STYLES = {
     }
     mesh(group, merge(hills), mat("#f1f5fa", { roughness: 1 }), 0, 0, 0, false);
   },
+  // Grandstands full of spectators on both sides, floodlights over them.
+  speedway(group, map, sky) {
+    verge(group, "#4d5a3c");
+    const r = rng(101),
+      seats = [],
+      crowd = new Map(),
+      colors = ["#e4573f", "#2f6fd8", "#f2c14e", "#69b35a", "#f2f2ee", "#9b6ad6", "#1d1f24"];
+    for (const side of [-1, 1])
+      for (let row = 0; row < 6; row++) {
+        const x = side * (EDGE + 1.0 + row * 0.75),
+          y = 0.4 + row * 0.45;
+        seats.push(placed(new T.BoxGeometry(0.75, y + 0.2, 22), x, (y + 0.2) / 2, -3.5));
+        for (let z = -14.2; z < 7; z += 0.55) {
+          if (r() < 0.25) continue;
+          const c = colors[Math.floor(r() * colors.length)];
+          if (!crowd.has(c)) crowd.set(c, []);
+          crowd.get(c).push(placed(new T.BoxGeometry(0.34, 0.42, 0.3), x, y + 0.42, z + (r() - 0.5) * 0.15));
+          crowd.get("#e8c3a0") || crowd.set("#e8c3a0", []);
+          crowd.get("#e8c3a0").push(placed(new T.SphereGeometry(0.12, 8, 6), x, y + 0.75, z));
+        }
+      }
+    mesh(group, merge(seats), mat("#8a8f98", { roughness: 0.9 }), 0, 0, 0, false);
+    for (const [c, parts] of crowd) mesh(group, merge(parts), mat(c, { roughness: 0.8 }), 0, 0, 0, false);
+    // Roofs over the stands and floodlight towers.
+    for (const side of [-1, 1]) {
+      mesh(group, new T.BoxGeometry(5.2, 0.15, 22.5), mat("#c9ccd2", { roughness: 0.5, metal: 0.4 }), side * (EDGE + 3.2), 4.6, -3.5, false);
+      for (const z of [-13.5, -3.5, 6.5]) {
+        mesh(group, new T.CylinderGeometry(0.12, 0.18, 9, 8), mat("#3a3d44"), side * (EDGE + 6.2), 4.5, z, false);
+        mesh(group, new T.BoxGeometry(0.3, 1.0, 1.6), mat("#3a3d44"), side * (EDGE + 6.1), 9.2, z, false);
+        mesh(group, new T.PlaneGeometry(1.4, 0.8), mat("#fff8e0", { emissive: "#fff2c8", glow: 1.4, side: T.DoubleSide }), side * (EDGE + 5.94), 9.2, z, false).rotation.y = Math.PI / 2;
+      }
+    }
+  },
   // The hall: dark walls with gold pilasters rising behind the curtains, up to the screen's height.
   theater(group, map, sky) {
     for (const side of [-1, 1]) {

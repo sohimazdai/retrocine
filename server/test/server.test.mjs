@@ -448,3 +448,44 @@ test("rides: one rider per board, taken only from next to it, left where you ste
   a.close();
   await app.close();
 });
+
+test("karts: only a driver can knock someone over, the throw is limited; laps and tumbling poses are relayed", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("race", { name: "Аня" });
+  await b.join("race", { name: "Борис" });
+  a.send({ t: "map.set", id: "race" });
+  await b.wait((m) => m.t === "reset");
+  // On foot: no hits.
+  a.send({ t: "pose", x: 0, y: 0, z: 6.7, a: 1.57, vy: 0, g: 1 });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [8, 9, 0] });
+  // Driving: a hit on someone who is not here, a malformed one, then a real one far too hard.
+  a.send({ t: "pose", x: 0, y: 0, z: 6.7, a: 1.57, vy: 0, g: 1, kt: 1, ks: 0.4 });
+  const driving = await b.wait((m) => m.t === "pose" && m.kt === 1);
+  assert.equal(driving.ks, 0.4);
+  a.send({ t: "act", k: "hit", target: "nobody", v: [8, 9, 0] });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [8, "up", 0] });
+  a.send({ t: "act", k: "hit", target: b.welcome.id, v: [80, 90, -3] });
+  const hit = await b.wait((m) => m.t === "act" && m.k === "hit");
+  assert.equal(hit.target, b.welcome.id);
+  assert.deepEqual(hit.v, [14, 14, -3]);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "hit").length, 1, "only the valid hit got through");
+  // Laps: a sensible time only.
+  a.send({ t: "act", k: "lap", ms: 200 });
+  a.send({ t: "act", k: "lap", ms: 12345.6 });
+  const lap = await b.wait((m) => m.t === "act" && m.k === "lap");
+  assert.equal(lap.ms, 12346);
+  // Борис flies and lands: his pose carries the turn of the body, the phase and how he lies.
+  b.send({ t: "pose", x: 3, y: 1, z: 6.7, a: 0, vy: 2, g: 0, tq: [0.5123, 0, 0, 0.8588], tb: 2, tk: 1 });
+  const tumbling = await a.wait((m) => m.t === "pose" && m.tb === 2);
+  assert.deepEqual(tumbling.tq, [0.51, 0, 0, 0.86]);
+  assert.equal(tumbling.tk, 1);
+  b.send({ t: "pose", x: 3, y: 1, z: 6.7, a: 0, vy: 2, g: 0, tq: [1, 2], tb: 9, tk: 7 });
+  const bad = await a.wait((m) => m.t === "pose" && m.x === 3 && m.tb !== 2);
+  assert(bad.tq === undefined && bad.tb === undefined && bad.tk === undefined, "nonsense is dropped");
+  a.close();
+  b.close();
+  await app.close();
+});

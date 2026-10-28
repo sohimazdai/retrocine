@@ -20,7 +20,7 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -77,6 +77,13 @@ export function sanitizePose(p) {
   // Hanging from a bar, and how far pulled up.
   if (p.hb === 1) pose.hb = 1;
   if (Number.isFinite(p.pu) && p.pu > 0) pose.pu = Math.round(clamp(p.pu, 0, 1) * 10) / 10;
+  // Driving a kart (and how the front wheels are turned).
+  if (p.kt === 1) pose.kt = 1;
+  if (Number.isFinite(p.ks) && p.ks !== 0) pose.ks = Math.round(clamp(p.ks, -1, 1) * 10) / 10;
+  // Knocked over: orientation of the body and the phase (1 flying, 2 down, 3 getting up).
+  if (Array.isArray(p.tq) && p.tq.length === 4 && p.tq.every(Number.isFinite)) pose.tq = p.tq.map((v) => Math.round(clamp(v, -1, 1) * 100) / 100);
+  if (p.tb === 1 || p.tb === 2 || p.tb === 3) pose.tb = p.tb;
+  if (Number.isInteger(p.tk) && p.tk >= 0 && p.tk <= 4) pose.tk = p.tk;
   return pose;
 }
 function spawnPose(state) {
@@ -254,6 +261,17 @@ export class Room {
         if (msg.k === "emote") {
           if (typeof msg.e !== "string") return;
           out.e = msg.e.slice(0, 16);
+        }
+        // A kart ran someone over: only a driver can, and the throw is limited.
+        if (msg.k === "hit") {
+          if (!peer.pose.kt || typeof msg.target !== "string" || !this.peers.has(msg.target)) return;
+          if (!Array.isArray(msg.v) || msg.v.length !== 3 || !msg.v.every(Number.isFinite)) return;
+          out.target = msg.target;
+          out.v = [clamp(msg.v[0], -14, 14), clamp(msg.v[1], 0, 14), clamp(msg.v[2], -14, 14)].map(r3);
+        }
+        if (msg.k === "lap") {
+          if (!Number.isFinite(msg.ms) || msg.ms < 1500 || msg.ms > 600000) return;
+          out.ms = Math.round(msg.ms);
         }
         this.broadcast(out, peer);
         return;

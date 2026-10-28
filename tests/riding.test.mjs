@@ -12,7 +12,9 @@ function rider(kind, x, z, angle) {
   mountRide(b, { id: "r", kind, a: angle });
   return b;
 }
-function run(b, seconds, input = { x: 0, z: 0 }, each, until = (e) => e.t === "bail") {
+const GAS = { gas: 1 },
+  NONE = {};
+function run(b, seconds, input = NONE, each, until = (e) => e.t === "bail") {
   const events = [];
   for (let i = 0; i < seconds * 120; i++) {
     const ev = stepRide(b, typeof input === "function" ? input(i * DT, b) : input, boxes, DT);
@@ -23,17 +25,30 @@ function run(b, seconds, input = { x: 0, z: 0 }, each, until = (e) => e.t === "b
   return events;
 }
 
-test("pushing speeds you up to the board's top speed along where you point; letting go you coast", () => {
+test("W pushes you up to the board's top speed the way you face; letting go you coast; S slows, Space stops; A/D turn on the spot", () => {
   const b = rider("skateboard", -10, 7.4, Math.PI / 2);
-  run(b, 2, { x: 1, z: 0 });
+  run(b, 2, GAS);
   assert(b.ride.speed > RIDES.skateboard.max * 0.85, `speed ${b.ride.speed}`);
   assert(b.x > -1 && Math.abs(b.z - 7.4) < 0.2, `rode to ${b.x}, ${b.z}`);
   const v = b.ride.speed;
   run(b, 0.3);
   assert(b.ride.speed < v && b.ride.speed > v - 0.5, "coasting slows a little");
-  // Pointing the other way brakes, then turns you round.
-  run(b, 2.4, { x: -1, z: 0 });
-  assert(Math.cos(b.angle) < 0.2 && Math.sin(b.angle) < 0, `turned to ${b.angle}`);
+  // S is half a brake, Space a full one.
+  const half = { ...b, ride: { ...b.ride } },
+    full = { ...b, ride: { ...b.ride } };
+  run(half, 0.3, { brake: 1 });
+  run(full, 0.3, { stop: 1 });
+  assert(full.ride.speed < half.ride.speed - 1 && half.ride.speed < b.ride.speed - 1, `half ${half.ride.speed}, full ${full.ride.speed}`);
+  run(full, 1, { stop: 1 });
+  assert(Math.abs(full.ride.speed) < 1e-9, "stopped");
+  // A turns you left on the spot without rolling anywhere.
+  const at = { x: full.x, z: full.z },
+    angle = full.angle;
+  run(full, 0.5, { turn: 1 });
+  assert(full.angle > angle + 1 && Math.hypot(full.x - at.x, full.z - at.z) < 1e-9, `turned to ${full.angle}`);
+  // W and A together: forward and round to the left.
+  run(full, 1, { gas: 1, turn: 1 });
+  assert(full.ride.speed > 3 && Math.hypot(full.x - at.x, full.z - at.z) > 1);
 });
 
 test("a kicker throws you into the air and you land rolling", () => {
@@ -42,7 +57,7 @@ test("a kicker throws you into the air and you land rolling", () => {
   b.ride.speed = 9.5;
   let peak = 0,
     flew = false;
-  const events = run(b, 2.5, { x: 0, z: -1 }, (b) => {
+  const events = run(b, 2.5, GAS, (b) => {
     if (!b.grounded) flew = true;
     peak = Math.max(peak, b.y);
   });
@@ -61,7 +76,7 @@ test("quarter pipe: up the wall, straight into the air and back down; spin 180 t
   let events = run(
     a,
     3,
-    (t, b) => (b.grounded ? { x: 1, z: 0 } : { x: 0, z: 0 }),
+    (t, b) => (b.grounded ? GAS : NONE),
     (b) => {
       if (b.ride.vert) vert = true;
       peak = Math.max(peak, b.y);
@@ -74,7 +89,7 @@ test("quarter pipe: up the wall, straight into the air and back down; spin 180 t
   // Spinning half a turn in the air lands you facing down the pipe.
   const b = rider("skateboard", 4, pipe.z, Math.PI / 2);
   b.ride.speed = 10.5;
-  events = run(b, 3, (t, b) => (b.grounded ? { x: 1, z: 0 } : Math.abs(b.ride.spin) < Math.PI - 0.08 ? { x: -1, z: 0 } : { x: 0, z: 0 }), null, (e) => e.t !== "grind");
+  events = run(b, 3, (t, b) => (b.grounded ? GAS : Math.abs(b.ride.spin) < Math.PI - 0.08 ? { turn: 1 } : NONE), null, (e) => e.t !== "grind");
   const landed = events.find((e) => e.t === "land");
   assert(landed && /180/.test(landed.name), JSON.stringify(events));
   assert(b.ride.speed > 0 && Math.sin(b.angle) < 0, "rolling forward, away from the pipe");
@@ -85,13 +100,13 @@ test("landing sideways or mid-flip throws you off; a full kickflip lands clean",
   const a = rider("skateboard", -4, pipe.z, -Math.PI / 2);
   a.ride.speed = 10.5;
   // A quarter turn in the air: you come down sideways.
-  let events = run(a, 3, (t, b) => (b.grounded ? { x: -1, z: 0 } : Math.abs(b.ride.spin) < Math.PI / 2 ? { x: 1, z: 0 } : { x: 0, z: 0 }));
+  let events = run(a, 3, (t, b) => (b.grounded ? GAS : Math.abs(b.ride.spin) < Math.PI / 2 ? { turn: -1 } : NONE));
   assert(events.some((e) => e.t === "bail" && e.reason === "sideways"), JSON.stringify(events));
   // Ollie and kickflip on the flat.
   const b = rider("skateboard", -4, 8.6, Math.PI / 2);
   b.ride.speed = 6;
   b.ride.ollie = true;
-  stepRide(b, { x: 0, z: 0 }, boxes, DT);
+  stepRide(b, NONE, boxes, DT);
   b.ride.trick = true;
   events = run(b, 1.5);
   const land = events.find((e) => e.t === "land");
@@ -100,10 +115,10 @@ test("landing sideways or mid-flip throws you off; a full kickflip lands clean",
   const c = rider("skateboard", -4, 8.6, Math.PI / 2);
   c.ride.speed = 6;
   c.ride.ollie = true;
-  stepRide(c, { x: 0, z: 0 }, boxes, DT);
+  stepRide(c, NONE, boxes, DT);
   events = run(c, 1.5, (t, b) => {
     if (t > 0.45 && b.ride.flip < 0 && !b.ride.flips) b.ride.trick = true;
-    return { x: 0, z: 0 };
+    return NONE;
   });
   assert(events.some((e) => e.t === "bail" && e.reason === "flip"), JSON.stringify(events));
 });
@@ -114,7 +129,7 @@ test("jumping onto a rail along it grinds to its end", () => {
   b.ride.speed = 7;
   b.ride.ollie = true;
   let ground = false;
-  const events = run(b, 2, { x: 0, z: 0 }, (b) => {
+  const events = run(b, 2, NONE, (b) => {
     if (b.ride.grind) ground = true;
   });
   assert(ground, "grinding");

@@ -11,3 +11,4 @@ import "./saloon.look.js";
 import "./skatepark.look.js";
 import "./ropepark.look.js";
 import "./rink.look.js";
+import "./race.look.js";

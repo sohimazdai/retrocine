@@ -1022,12 +1022,13 @@ test("river: the current carries you and slows you down", () => {
   assert(wet < dry * 0.75, `in water ${wet} vs on the beach ${dry}`);
 });
 
-test("skatepark: E gets you on a board, you ride and land tricks, E leaves it where you stopped", () => {
+test("skatepark: E gets you on a board; W rides, Space ollies, Shift kickflips, S brakes; a bad landing throws you and you tumble; E leaves the board where you stopped", () => {
   const a = boot({ offline: true });
   a.run('op({ t: "map.set", id: "skatepark" })');
   a.tick(0.2);
-  assert.equal(a.run("rideMeshes.size"), 6);
-  a.run("const r = world.rides.find((r) => r.id === 'board-1'); Object.assign(active, { x: r.x + 0.6, z: r.z, y: 0 })");
+  assert.equal(a.run("ROOM.scale"), 1.5, "a big park");
+  assert.equal(a.run("rideMeshes.size"), 7);
+  a.run("const r = world.rides.find((r) => r.id === 'board-1'); Object.assign(active, { x: r.x - 0.5, z: r.z + 0.3, y: 0 })");
   a.run("kickNearest()");
   a.tick(0.05);
   assert.equal(a.run("active.ride?.kind"), "skateboard");
@@ -1041,36 +1042,59 @@ test("skatepark: E gets you on a board, you ride and land tricks, E leaves it wh
   assert(a.run("active.ride.speed") > 5);
   // The board is drawn under you, facing where you ride.
   assert(a.run("rideMeshes.get('board-1').position.distanceTo(new T.Vector3(active.x, active.y, active.z))") < 0.01);
-  // Ollie with Shift.
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "ShiftLeft", key: "Shift", bubbles: true }));
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { code: "ShiftLeft", key: "Shift", bubbles: true }));
+  const key = (code, k, type = "keydown") => a.w.document.dispatchEvent(new a.w.KeyboardEvent(type, { code, key: k, bubbles: true }));
+  const flight = () => {
+    let landed = false;
+    for (let i = 0; i < 14 && !landed; i++) {
+      a.tick(0.1);
+      landed = a.run("active.grounded");
+    }
+    return landed;
+  };
+  // Space: an ollie.
+  key("Space", " ");
+  key("Space", " ", "keyup");
+  a.tick(0.1);
+  assert.equal(a.run("active.grounded"), false, "Space pops an ollie");
+  assert(flight() && a.run("!!active.ride"), "landed the ollie and still riding");
+  // Shift on the ground: straight into a kickflip.
+  key("ShiftLeft", "Shift");
+  key("ShiftLeft", "Shift", "keyup");
   a.tick(0.1);
   assert.equal(a.run("active.grounded"), false);
-  let landed = false;
-  for (let i = 0; i < 12 && !landed; i++) {
-    a.tick(0.1);
-    landed = a.run("active.grounded");
-  }
-  assert(landed && a.run("!!active.ride"), "landed the ollie and still riding");
-  // Space held: full brake.
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Space", key: " ", bubbles: true }));
-  a.tick(0.8);
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { code: "Space", key: " ", bubbles: true }));
-  assert(Math.abs(a.run("active.ride.speed")) < 0.01, "stopped with Space");
-  assert(a.run("active.grounded"), "Space does not jump on a board");
+  assert(a.run("active.ride.flip >= 0 || active.ride.flips > 0"), "the board is flipping");
+  assert(flight() && a.run("!!active.ride"), "landed the kickflip");
+  // S held: the brake.
+  a.run("keys.add('down')");
+  a.tick(2);
+  a.run("keys.clear()");
+  assert(Math.abs(a.run("active.ride.speed")) < 0.01, "stopped with S");
   // E: off the board; it stays where you got off.
   a.run("kickNearest()");
   a.tick(0.05);
   assert.equal(a.run("active.ride"), undefined);
-  const r = a.run("JSON.stringify(world.rides.find((r) => r.id === 'board-1'))");
-  const ride = JSON.parse(r);
+  const ride = JSON.parse(a.run("JSON.stringify(world.rides.find((r) => r.id === 'board-1'))"));
   assert.equal(ride.by, null);
   assert(ride.z < z0 - 4);
+  // Back on, full speed head-on into the mini ramp's deck: thrown off, you tumble, then get up.
+  const deck = a.run("JSON.stringify(mapScene.map.statics.find((s) => s.kind === 'deck' && s.h < 2 && s.x > 0))");
+  const d = JSON.parse(deck);
+  a.run(`Object.assign(active, { x: ${ride.x + 0.5}, z: ${ride.z}, y: 0 })`);
+  a.run("kickNearest()");
+  a.tick(0.05);
+  assert(a.run("!!active.ride"));
+  a.run(`Object.assign(active, { x: ${d.x + d.w / 2 + 2.2}, z: ${d.z}, y: 0, angle: -Math.PI / 2, grounded: true }); active.ride.speed = 11`);
+  a.tick(0.4);
+  assert.equal(a.run("active.ride"), undefined, "thrown off");
+  assert(a.run("!!active.tumble"), "tumbling");
+  a.tick(3);
+  assert.equal(a.run("active.tumble"), null, "back on your feet");
   // Walking up the top of a quarter pipe is not possible.
-  a.run("Object.assign(active, { x: 11, z: 0, y: 0, grounded: true }); keys.add('right')");
+  const pipe = JSON.parse(a.run("JSON.stringify(mapScene.map.statics.find((s) => s.shape === 'qpipe' && s.dir > 0 && !s.small))"));
+  a.run(`Object.assign(active, { x: ${pipe.x - pipe.w / 2 - 1}, z: 0, y: 0, grounded: true }); keys.add('right')`);
   a.tick(2);
   a.run("keys.clear()");
-  assert(a.run("active.y") < 1.2, `walked up to ${a.run("active.y")}`);
+  assert(a.run("active.y") < pipe.h * 0.5, `walked up to ${a.run("active.y")}`);
 });
 
 test("remote riders: the board follows them and flips with their kickflip", () => {

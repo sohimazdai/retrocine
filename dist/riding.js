@@ -74,6 +74,7 @@ function airborne(b, st, vy) {
   st.spin = 0;
   st.flips = 0;
   st.flip = -1;
+  st.bumped = false;
 }
 function trickName(R, st, fakie) {
   const half = Math.round(Math.abs(st.spin) / Math.PI);
@@ -87,9 +88,16 @@ function trickName(R, st, fakie) {
   return parts.length ? { name: parts.join(" "), score } : null;
 }
 
-// input: { gas, brake, stop, turn } — W, S, Space held; turn +1 is left (A), −1 right (D).
-// st.ollie / st.trick: Shift pressed this frame (on the ground an ollie, in the air a flip).
+// input: { gas, brake, turn } — W, S held; turn +1 is left (A), −1 right (D).
+// st.ollie: Space pressed this frame — an ollie on the ground or off a rail.
+// st.trick: Shift pressed this frame — in the air a flip; on the ground an ollie straight into one.
 // Returns events: { t: "land", name, score } | { t: "grind" } | { t: "bail", reason }.
+// How forgiving it is: you only come off for a landing more than ~55° off your line (on a ramp's
+// face, off the fall line), a flip far from done, a really hard drop, or a hard head-on hit.
+const LAND_MISALIGN = 0.95,
+  FLIP_DONE = 0.72,
+  HARD_DROP = -24,
+  HEAD_ON = 8.5;
 export function stepRide(b, input, boxes, dt) {
   const st = b.ride,
     R = rideInfo(st.kind),
@@ -97,7 +105,7 @@ export function stepRide(b, input, boxes, dt) {
   const ollie = st.ollie,
     trick = st.trick;
   st.ollie = st.trick = false;
-  if (st.grind) return grind(b, st, R, input, ollie, dt, events);
+  if (st.grind) return grind(b, st, R, input, ollie, trick, dt, events);
   if (b.grounded) {
     const ground = surfaceUnder(boxes, b.x, b.z, b.y + 0.05);
     const s = slopeAlong(ground.support, b.x, b.z, b.angle);
@@ -106,15 +114,25 @@ export function stepRide(b, input, boxes, dt) {
       cos = Math.cos(th),
       sin = Math.sin(th);
     // Controls relative to the rider: A/D turn (on the spot too, a little slower at full speed),
-    // W pushes the way you face (rolling backwards it first slows you), S is a half brake,
-    // Space a full one.
+    // W pushes the way you face (rolling backwards it first slows you), S brakes.
     const turn = clamp(input.turn || 0, -1, 1);
-    b.angle = wrap(b.angle + turn * R.turn * (1 - 0.35 * Math.min(1, Math.abs(st.speed) / R.max)) * dt);
+    // On a steep face (up a quarter pipe) you can hardly turn. Across a slope gravity pulls you round
+    // downhill — you carve back down, the harder the steeper and the slower — as on a real board;
+    // nobody rides sideways along a wall.
+    const gr = gradient(ground.support, b.x, b.z),
+      steep = Math.hypot(gr.x, gr.z);
+    b.angle = wrap(b.angle + turn * R.turn * (1 - 0.35 * Math.min(1, Math.abs(st.speed) / R.max)) * Math.max(0.3, 1 - steep * 0.5) * dt);
+    if (steep > 0.15) {
+      const back = st.speed < 0 ? Math.PI : 0,
+        diff = wrap(Math.atan2(-gr.x, -gr.z) - (b.angle + back)),
+        rate = (SLOPE_GRAVITY * (steep / Math.hypot(1, steep)) * Math.abs(Math.sin(diff))) / Math.max(2.5, Math.abs(st.speed));
+      b.angle = wrap(b.angle + Math.sign(diff) * Math.min(Math.abs(diff), rate * dt));
+    }
     if (input.gas) {
       if (st.speed < -0.2) st.speed += R.brake * dt;
       else if (st.speed < R.max) st.speed = Math.min(R.max, st.speed + R.accel * dt);
     }
-    const brake = (input.stop ? 1.6 : input.brake ? 0.55 : 0) * R.brake;
+    const brake = (input.brake ? 1.2 : 0) * R.brake;
     if (brake) st.speed -= Math.sign(st.speed) * Math.min(Math.abs(st.speed), brake * dt);
     const lean = turn * Math.min(1, Math.abs(st.speed) / 4);
     st.lean += (lean - st.lean) * Math.min(1, dt * 8);
@@ -134,28 +152,52 @@ export function stepRide(b, input, boxes, dt) {
       nz = cz;
     }
     // On a slope your feet are on the surface: only what is right under them can stop you.
-    const wall = wallAt(boxes, nx, nz, b.y, sloped(ground.support || {}) ? 0 : RADIUS * 0.9);
-    if (wall) {
-      if (Math.abs(st.speed) > 7.5) {
+    const pad = sloped(ground.support || {}) ? 0 : RADIUS * 0.9;
+    if (wallAt(boxes, nx, nz, b.y, pad)) {
+      // Glancing off a side: slide along it, losing the part of the speed that went into it, the
+      // board turned along it. Only a hard hit head-on throws you off; a slow one bounces you back.
+      const freeX = !wallAt(boxes, nx, b.z, b.y, pad),
+        freeZ = !wallAt(boxes, b.x, nz, b.y, pad),
+        into = freeX && !freeZ ? Math.abs(f.z) : freeZ && !freeX ? Math.abs(f.x) : 1;
+      if (Math.abs(st.speed) * into > HEAD_ON) {
         events.push({ t: "bail", reason: "wall" });
         return events;
       }
-      st.speed *= -0.35;
-      nx = b.x;
-      nz = b.z;
+      if (freeX !== freeZ && into < 0.8) {
+        const along = freeX ? f.x : f.z;
+        if (freeX) nz = b.z;
+        else nx = b.x;
+        const move = Math.sign(st.speed * along) || 1,
+          dir = freeX ? (move > 0 ? Math.PI / 2 : -Math.PI / 2) : move > 0 ? 0 : Math.PI,
+          face = wrap(dir + (st.speed < 0 ? Math.PI : 0));
+        st.speed *= Math.abs(along);
+        b.angle = face;
+      } else {
+        st.speed *= -0.35;
+        nx = b.x;
+        nz = b.z;
+      }
     }
     b.x = nx;
     b.z = nz;
     const vyGround = st.speed * sin;
-    // Going up the near-vertical top of a quarter pipe sends you straight up into the air.
-    if (ground.support?.shape === "qpipe" && Math.abs(s) > 2.6 && vyGround > 1) {
+    // Going up the near-vertical top of a quarter pipe sends you straight up into the air (carving
+    // up it at an angle, you keep some of the speed along the coping).
+    const pipe = ground.support?.shape === "qpipe" ? ground.support : null;
+    if (pipe && Math.abs(gradient(pipe, b.x, b.z)[pipe.axis]) > 2.6 && vyGround > 1) {
+      const along = pipe.axis === "x" ? "z" : "x";
       airborne(b, st, vyGround);
-      st.vert = ground.support;
-      st.vx = st.vz = 0;
+      const carry = (along === "x" ? f.x : f.z) * st.speed * 0.8;
+      st.vert = pipe;
+      st.vx = along === "x" ? carry : 0;
+      st.vz = along === "z" ? carry : 0;
+      // Over the lip you turn to face straight up the pipe (a carve), so you come back down on it.
+      b.angle = pipe.axis === "x" ? (pipe.dir > 0 ? Math.PI / 2 : -Math.PI / 2) : pipe.dir > 0 ? 0 : Math.PI;
       return events;
     }
-    if (ollie) {
+    if (ollie || trick) {
       airborne(b, st, Math.max(0, vyGround) + R.ollie);
+      if (trick) st.flip = 0;
       return events;
     }
     const next = surfaceUnder(boxes, b.x, b.z, b.y + Math.max(0, vyGround * dt) + 0.02);
@@ -170,7 +212,7 @@ export function stepRide(b, input, boxes, dt) {
   }
   // ——— In the air ———
   b.vy -= RIDE_GRAVITY * dt;
-  // A/D spin you in the air, the same way they turn you on the ground.
+  // A/D spin you in the air, the same way they turn you on the ground; Shift flips the board.
   const spinIn = clamp(input.turn || 0, -1, 1);
   b.angle = wrap(b.angle + spinIn * R.spin * dt);
   st.spin += spinIn * R.spin * dt;
@@ -193,15 +235,19 @@ export function stepRide(b, input, boxes, dt) {
     nz = b.z;
     st.vx = st.vz = 0;
   }
+  // The edge of the floor stops you in the air (no bounce back: that would land you sideways);
+  // so does something you fly into — you then come down the way you face.
   const cx = clamp(nx, -LIMITS.x, LIMITS.x),
     cz = clamp(nz, floorBack(cx) + RADIUS, LIMITS.z);
-  if (cx !== nx) st.vx *= -0.3;
-  if (cz !== nz) st.vz *= -0.3;
+  if (cx !== nx) st.vx = 0;
+  if (cz !== nz) st.vz = 0;
+  if (cx !== nx || cz !== nz) st.bumped = true;
   nx = cx;
   nz = cz;
   if (wallAt(boxes, nx, nz, b.y, st.vert ? 0 : RADIUS * 0.9)) {
     st.vx *= -0.3;
     st.vz *= -0.3;
+    st.bumped = true;
     nx = b.x;
     nz = b.z;
   }
@@ -220,10 +266,8 @@ export function stepRide(b, input, boxes, dt) {
       const axis = along === "x" ? Math.PI / 2 : 0,
         off = Math.abs(wrap(b.angle - axis)),
         misalign = Math.min(off, Math.PI - off);
-      if (misalign > 0.6 || (st.flip >= 0 && st.flip < 0.8)) {
-        events.push({ t: "bail", reason: "rail" });
-        return events;
-      }
+      // Not lined up with it, or mid-flip: no grind — you just come down past it.
+      if (misalign > 0.6 || (st.flip >= 0 && st.flip < 0.8)) continue;
       const dir = forward(off < Math.PI / 2 ? axis : axis + Math.PI);
       b.angle = Math.atan2(dir.x, dir.z);
       const v = st.vx * dir.x + st.vz * dir.z;
@@ -244,29 +288,38 @@ export function stepRide(b, input, boxes, dt) {
   if (b.vy > 0 || b.y > ground.h) return events;
   // ——— Landing ———
   const g = gradient(ground.support, b.x, b.z),
-    f = forward(b.angle),
-    s = g.x * f.x + g.z * f.z,
-    th = Math.atan(s);
-  const vh = Math.hypot(st.vx, st.vz);
-  let misalign = 0;
-  if (vh > 1.5) {
-    const off = Math.abs(wrap(Math.atan2(st.vx, st.vz) - b.angle));
+    vh = Math.hypot(st.vx, st.vz);
+  // Dropping back into a quarter pipe, or onto a ramp's face with hardly any speed across it, it is
+  // the fall line that matters; otherwise the way you are flying (across a face is fine too).
+  const steep = Math.hypot(g.x, g.z) > 0.4 && (st.vert || vh < 1.2);
+  let misalign = 0,
+    line = null;
+  if (steep) {
+    line = Math.atan2(-g.x, -g.z);
+    const off = Math.abs(wrap(line - b.angle));
     misalign = Math.min(off, Math.PI - off);
-  } else if (Math.hypot(g.x, g.z) > 0.4) {
-    const off = Math.abs(wrap(Math.atan2(-g.x, -g.z) - b.angle));
+  } else if (vh > 1.5 && !st.bumped) {
+    const off = Math.abs(wrap(Math.atan2(st.vx, st.vz) - b.angle));
     misalign = Math.min(off, Math.PI - off);
   }
   const vyLand = b.vy;
   b.y = ground.h;
   b.vy = 0;
   b.grounded = true;
-  if ((st.flip >= 0 && st.flip < 0.82) || misalign > 0.7 || vyLand < -21) {
-    events.push({ t: "bail", reason: st.flip >= 0 ? "flip" : misalign > 0.7 ? "sideways" : "hard" });
+  const unfinished = st.flip >= 0 && st.flip < FLIP_DONE;
+  if (unfinished || misalign > LAND_MISALIGN || vyLand < HARD_DROP) {
+    events.push({ t: "bail", reason: unfinished ? "flip" : misalign > LAND_MISALIGN ? "sideways" : "hard" });
     return events;
   }
+  // Close enough: the board settles onto the fall line (forwards or fakie, whichever is nearer).
+  if (line !== null) b.angle = Math.abs(wrap(line - b.angle)) < Math.PI / 2 ? line : wrap(line + Math.PI);
+  const f = forward(b.angle),
+    s = g.x * f.x + g.z * f.z,
+    th = Math.atan(s);
   st.speed = clamp((st.vx * f.x + st.vz * f.z) * Math.cos(th) + vyLand * Math.sin(th), -R.max * 1.7, R.max * 1.7);
   // Small misalignments are forgiven: you roll off the way you were going.
-  if (vh > 1.5) b.angle = wrap(Math.atan2(st.vx, st.vz) + (st.speed < 0 ? Math.PI : 0));
+  if (vh > 1.5 && line === null && !st.bumped) b.angle = wrap(Math.atan2(st.vx, st.vz) + (st.speed < 0 ? Math.PI : 0));
+  st.bumped = false;
   const trickDone = trickName(R, st, st.speed < -0.3);
   if (trickDone) events.push({ t: "land", ...trickDone });
   st.vx = st.vz = 0;
@@ -279,7 +332,7 @@ export function stepRide(b, input, boxes, dt) {
   st.groundSlope = s;
   return events;
 }
-function grind(b, st, R, input, ollie, dt, events) {
+function grind(b, st, R, input, ollie, trick, dt, events) {
   const r = st.grind,
     f = forward(b.angle);
   st.grindTime += dt;
@@ -289,10 +342,11 @@ function grind(b, st, R, input, ollie, dt, events) {
   b.y = r.h;
   st.lean = Math.sin(st.grindTime * 9) * 0.25;
   const off = !inside(b.x, b.z, r, 0.02);
-  if (ollie || off || st.speed < 0.8) {
+  if (ollie || trick || off || st.speed < 0.8) {
     st.grind = null;
     st.groundSlope = 0;
-    airborne(b, st, ollie ? R.ollie * 0.9 : 1.2);
+    airborne(b, st, ollie || trick ? R.ollie * 0.9 : 1.2);
+    if (trick) st.flip = 0;
     const score = Math.round(150 + st.grindTime * 220);
     events.push({ t: "land", name: (st.landed?.name ? st.landed.name + " + " : "") + "Слайд по перилам", score: score + (st.landed?.score || 0) });
     st.landed = null;

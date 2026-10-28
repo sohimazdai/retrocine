@@ -1,5 +1,6 @@
-// How the skatepark looks: concrete quarter pipes with steel coping, a funbox, kickers, rails,
-// a bank, graffiti, light poles and traffic cones.
+// How the skatepark looks: concrete quarter pipes with steel coping, a mini ramp, funboxes, a bank
+// up to a platform, rails and ledges, graffiti walls, light poles, planters with trees, a rack for
+// the boards and traffic cones.
 import * as T from "three";
 import { registerDecor } from "../mapscene.js";
 import { BALL_BUILDERS } from "../props.js";
@@ -77,7 +78,7 @@ registerDecor("skatepark", (group, map) => {
     steel = mat(STEEL, { roughness: 0.25, metal: 0.85 });
   for (const s of map.statics || []) {
     if (s.shape === "qpipe" || s.shape === "ramp") {
-      const tex = s.kind === "pipe" ? graffiti(s.dir > 0 ? "right" : "left", s.dir > 0 ? ["KINO", "SKATE"] : ["RETRO", "RIDE"]) : null;
+      const tex = s.kind === "pipe" && !s.small ? graffiti(s.dir > 0 ? "right" : "left", s.dir > 0 ? ["KINO", "SKATE"] : ["RETRO", "RIDE"]) : null;
       mesh(group, slopeSolid(s), s.kind === "pipe" ? concrete : dark);
       if (tex) {
         // Graffiti on the pipe's side wall.
@@ -115,24 +116,69 @@ registerDecor("skatepark", (group, map) => {
       }
     }
   }
-  // Painted lines and light poles.
   const r = rng(17);
+  const pole = mat("#3a3d45", { metal: 0.6, roughness: 0.4 }),
+    lamp = mat("#fff6d8", { emissive: "#ffe9a8", glow: 1.8 }),
+    soil = mat("#4a3a2c", { roughness: 1 }),
+    leaves = ["#4c8a3f", "#5a9a49", "#437c38"].map((c) => mat(c, { roughness: 0.9, flat: true }));
+  for (const s of map.statics || []) {
+    if (s.kind === "pole") {
+      // A light pole with two lamps leaning over the park.
+      mesh(group, new T.CylinderGeometry(0.08, 0.13, s.h, 10), pole, s.x, s.h / 2, s.z);
+      const toward = -Math.sign(s.x) || 1;
+      for (const dz of [-0.5, 0.5]) {
+        mesh(group, new T.BoxGeometry(0.9, 0.08, 0.08), pole, s.x + toward * 0.4, s.h - 0.2, s.z + dz);
+        mesh(group, new T.BoxGeometry(0.6, 0.12, 0.35), mat("#2a2c33"), s.x + toward * 0.8, s.h - 0.25, s.z + dz);
+        mesh(group, new T.BoxGeometry(0.5, 0.03, 0.28), lamp, s.x + toward * 0.8, s.h - 0.32, s.z + dz, false);
+      }
+    } else if (s.kind === "planter") {
+      // A round concrete planter with a small tree.
+      mesh(group, new T.CylinderGeometry(s.radius, s.radius * 0.92, s.h, 20), concrete, s.x, s.h / 2, s.z);
+      mesh(group, new T.CylinderGeometry(s.radius * 0.86, s.radius * 0.86, 0.04, 20), soil, s.x, s.h + 0.01, s.z, false);
+      mesh(group, new T.CylinderGeometry(0.07, 0.1, 1.6, 8), mat("#5a3a22"), s.x, s.h + 0.8, s.z);
+      for (let i = 0; i < 3; i++) mesh(group, new T.IcosahedronGeometry(0.62 - i * 0.1, 1), leaves[i], s.x + Math.sin(i * 2.1) * 0.25, s.h + 1.7 + i * 0.35, s.z + Math.cos(i * 2.1) * 0.25);
+    } else if (s.kind === "graffiti-wall") {
+      // A free-standing concrete wall, painted on both faces.
+      mesh(group, new T.BoxGeometry(s.w, s.h, s.d), concrete, s.x, s.h / 2, s.z);
+      const tex = graffiti("wall" + s.side, s.side < 0 ? ["SKATE", "OR DIE"] : ["KINO", "PARK"]);
+      for (const face of [-1, 1]) {
+        const p = mesh(group, new T.PlaneGeometry(s.w * 0.96, s.h * 0.92), mat("#ffffff", { map: tex, roughness: 0.9 }), s.x, s.h / 2, s.z + face * (s.d / 2 + 0.01), false);
+        if (face < 0) p.rotation.y = Math.PI;
+      }
+      mesh(group, new T.BoxGeometry(s.w + 0.06, 0.08, s.d + 0.06), dark, s.x, s.h + 0.04, s.z);
+    } else if (s.kind === "rack") {
+      // A low steel rack where the boards, scooters and bikes wait.
+      mesh(group, new T.BoxGeometry(s.w, 0.04, 0.05), steel, s.x, s.h, s.z - s.d / 2 + 0.03);
+      for (let i = 0; i <= 8; i++) mesh(group, new T.CylinderGeometry(0.025, 0.025, s.h, 6), steel, s.x - s.w / 2 + (i * s.w) / 8, s.h / 2, s.z - s.d / 2 + 0.03);
+    }
+  }
+  // Painted bays by the rack, a bin, and skid marks all over the flat.
   const paint = mat("#f2c14e", { roughness: 0.8, opacity: 0.7 });
-  for (let i = 0; i < 6; i++) {
-    const stripe = mesh(group, new T.PlaneGeometry(0.15, 1.4), paint, -1.4 + i * 0.56, 0.012, 9.6, false);
-    stripe.rotation.x = -Math.PI / 2;
+  const rack = (map.statics || []).find((s) => s.kind === "rack");
+  if (rack)
+    for (let i = 0; i <= 8; i++) {
+      const stripe = mesh(group, new T.PlaneGeometry(0.12, 1.4), paint, rack.x - rack.w / 2 + (i * rack.w) / 8, 0.012, rack.z + 0.85, false);
+      stripe.rotation.x = -Math.PI / 2;
+    }
+  const k = map.scale || 1;
+  mesh(group, new T.CylinderGeometry(0.3, 0.26, 0.85, 14), mat("#3f6f4a", { roughness: 0.6 }), 6.4, 0.43, 14.4);
+  // The line between the pipes: smoother, darker concrete with painted edges and a logo in the middle.
+  const pipes = (map.statics || []).filter((s) => s.shape === "qpipe" && !s.small);
+  if (pipes.length === 2) {
+    const x0 = Math.min(...pipes.map((s) => s.x + s.w / 2 * -Math.sign(s.x))),
+      len = 2 * Math.abs(x0),
+      lane = mesh(group, new T.PlaneGeometry(len, 10.4), mat("#9c978f", { roughness: 0.8 }), 0, 0.006, 0, false);
+    lane.rotation.x = -Math.PI / 2;
+    lane.receiveShadow = true;
+    for (const z of [-5.2, 5.2]) {
+      const edge = mesh(group, new T.PlaneGeometry(len, 0.2), mat("#f2c14e", { roughness: 0.8, opacity: 0.8 }), 0, 0.009, z, false);
+      edge.rotation.x = -Math.PI / 2;
+    }
+    const logo = mesh(group, new T.CircleGeometry(2.6, 48), mat("#ffffff", { map: graffiti("floor", ["KINO"]), roughness: 0.85, opacity: 0.4 }), 0, 0.01, 0, false);
+    logo.rotation.x = -Math.PI / 2;
   }
-  for (const [x, z] of [
-    [-10.6, -8.6],
-    [10.6, -8.2],
-  ]) {
-    mesh(group, new T.CylinderGeometry(0.07, 0.1, 5, 10), mat("#3a3d45", { metal: 0.6, roughness: 0.4 }), x, 2.5, z);
-    mesh(group, new T.BoxGeometry(0.6, 0.12, 0.35), mat("#2a2c33"), x, 5.0, z + 0.15);
-    mesh(group, new T.BoxGeometry(0.5, 0.03, 0.28), mat("#fff6d8", { emissive: "#ffe9a8", glow: 1.8 }), x, 4.93, z + 0.15, false);
-  }
-  // Skid marks.
-  for (let i = 0; i < 18; i++) {
-    const mark = mesh(group, new T.PlaneGeometry(0.06, 1 + r() * 2), mat("#3a3a3e", { opacity: 0.25, roughness: 1 }), (r() - 0.5) * 18, 0.011, -6 + r() * 14, false);
+  for (let i = 0; i < 30; i++) {
+    const mark = mesh(group, new T.PlaneGeometry(0.06, 1 + r() * 2.4), mat("#3a3a3e", { opacity: 0.25, roughness: 1 }), (r() - 0.5) * 30 * k, 0.011, (-5 + r() * 10) * k, false);
     mark.rotation.set(-Math.PI / 2, 0, r() * Math.PI);
   }
 });

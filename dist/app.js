@@ -948,12 +948,9 @@ function leaveRide(bail = false) {
   active.root.rotation.x = 0;
   active.y = Math.max(active.y, 0);
   if (bail) {
-    active.kx = Math.sin(a) * speed * 0.6;
-    active.kz = Math.cos(a) * speed * 0.6;
-    active.vy = Math.max(active.vy, 4);
-    active.grounded = false;
-    active.hit = 0.6;
-    toast("Падение! Подойдите и нажмите E, чтобы встать обратно", 2200);
+    // Thrown off: you fly on the way you were going, tumble, land and get up again.
+    startTumble(active, [Math.sin(a) * speed * 0.7, Math.max(active.vy || 0, 0) + 3 + Math.abs(speed) * 0.15, Math.cos(a) * speed * 0.7]);
+    toast("Падение! Подойдите к доске и нажмите E, чтобы встать обратно", 2200);
   } else {
     active.x += Math.cos(a) * 0.5;
     active.z -= Math.sin(a) * 0.5;
@@ -969,7 +966,7 @@ function onRide(r) {
     mountRide(active, r);
     active.y = surfaceUnder(mapScene.colliders(), r.x, r.z, active.y + 0.3).h;
     const R = rideInfo(r.kind);
-    toast(`${R.label}: W — разгон, A/D — поворот, S — притормозить, Space — стоп. Shift — ${R.jump.toLowerCase()}, в воздухе A/D — вращение, Shift — ${R.flip.toLowerCase()}; на перила — запрыгнуть вдоль. E — слезть`, 7000);
+    toast(`${R.label}: W — разгон, A/D — поворот, S — тормоз. Space — ${R.jump.toLowerCase()}, Shift — ${R.flip.toLowerCase()} (с земли — сразу с прыжком), в воздухе A/D — вращение; на перила — запрыгнуть вдоль. E — слезть`, 7000);
   } else if (active.ride?.id === r.id && r.by !== myRider()) delete active.ride;
 }
 function rideEvents(events) {
@@ -1759,18 +1756,23 @@ function onBoom(m) {
 }
 let climbJump = false;
 let spaceHeld = false;
-// Vehicles are driven relative to themselves: W gas, S half brake, Space full brake, A/D turn.
+// Vehicles are driven relative to themselves: W gas, S brake, A/D turn; in a kart Space is the full
+// brake, on a board, scooter or bike it is the jump.
 function driveInput() {
   if ($("#modal").open) return {};
-  return { gas: keys.has("up") ? 1 : 0, brake: keys.has("down") ? 1 : 0, stop: spaceHeld ? 1 : 0, turn: (keys.has("left") ? 1 : 0) - (keys.has("right") ? 1 : 0) };
+  return { gas: keys.has("up") ? 1 : 0, brake: keys.has("down") ? 1 : 0, stop: spaceHeld && active.kart ? 1 : 0, turn: (keys.has("left") ? 1 : 0) - (keys.has("right") ? 1 : 0) };
 }
 function doJump() {
   if (active.climb) {
     climbJump = true;
     return;
   }
-  // In a vehicle Space is the brake (held), not a jump.
-  if (active.ride || active.kart) return;
+  // On a board, scooter or bike Space is the ollie (on the ground or off a rail).
+  if (active.ride) {
+    if (active.grounded || active.ride.grind) active.ride.ollie = true;
+    return;
+  }
+  if (active.kart) return;
   if (jump(active)) {
     active.land = 0;
     status();
@@ -1980,7 +1982,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — притормозить, <kbd>Space</kbd> — стоп. На доске <kbd>Shift</kbd> — прыжок, в воздухе — трюк. Карт выдаёт автомат на картинге; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>9</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — тормоз. На доске, самокате, BMX <kbd>Space</kbd> — прыжок, <kbd>Shift</kbd> — флип (с земли — с прыжком), в воздухе <kbd>A</kbd>/<kbd>D</kbd> — вращение. В карте <kbd>Space</kbd> — стоп; карт выдаёт автомат на картинге, рядом — автомат выбора трассы; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>9</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -2570,12 +2572,10 @@ document.addEventListener("keydown", (e) => {
     pending = null;
   }
   if (e.key === "Shift") {
-    // On a board, scooter or bike Shift is the trick key: an ollie on the ground, a flip in the air.
+    // On a board, scooter or bike Shift is the trick: a flip in the air, from the ground an ollie
+    // straight into one.
     if (active.ride) {
-      if (!e.repeat) {
-        if (active.grounded || active.ride.grind) active.ride.ollie = true;
-        else active.ride.trick = true;
-      }
+      if (!e.repeat) active.ride.trick = true;
     } else sprinting = !(active.slow > 0);
     shiftHeld = true;
   }

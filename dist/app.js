@@ -210,8 +210,9 @@ let cinema = null,
   avatarEditor = null;
 // The near corners of the floor stay in the bottom corners of the viewport at every angle; the wall
 // is refitted so it spans the far edge of the floor and reaches the top of the viewport.
+let camZoom = 1;
 function updateCamera() {
-  fitRoomCamera(camera, camElevation);
+  fitRoomCamera(camera, camElevation, ROOM.halfWidth * camZoom);
   const wall = fitWall(camera);
   setWallShape(wall.height, wall.edges);
   cinema?.reshape();
@@ -2900,7 +2901,15 @@ function loadState(fresh, objs) {
     if (o) Object.assign(o, unpackObject(packed), { ox: 0, oy: 0, oz: 0 });
   }
   const old = new Set(mapScene.pickables);
-  if (mapChanged) mapScene.build(mapDef(world.map), world.structures, world.balls);
+  if (mapChanged) {
+    // Bigger maps pull the camera back (keeping the screen-to-floor ratio); people can still re-tilt.
+    const z = mapDef(world.map).camZoom || 1;
+    if (z !== camZoom) {
+      camZoom = z;
+      updateCamera();
+    }
+    mapScene.build(mapDef(world.map), world.structures, world.balls);
+  }
   else {
     for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0, pos.ta ? pos : null);
     mapScene.setBalls(world.balls);

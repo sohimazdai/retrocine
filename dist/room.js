@@ -6,12 +6,14 @@ export const ELEVATION = { min: 0, max: 80, initial: 25 };
 // The camera looks down at the given angle to the floor and is placed so the near corners of the
 // floor sit exactly in the bottom corners of the viewport. On portrait screens the floor is framed
 // as for a square one, so it stays large and its near corners run past the sides.
-export function fitRoomCamera(camera, degrees) {
+export function fitRoomCamera(camera, degrees, frameHalf = ROOM.halfWidth) {
   const aspect = Math.max(1, camera.aspect),
     tilt = T.MathUtils.degToRad(degrees),
     tan = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
-  const depth = ROOM.halfWidth / (tan * aspect),
-    rise = ROOM.halfWidth / aspect;
+  // frameHalf is the half-width the camera frames; larger than the floor (zoom > 1) pulls the camera
+  // back so a bigger map fits, the screen and floor shrinking together.
+  const depth = frameHalf / (tan * aspect),
+    rise = frameHalf / aspect;
   camera.position.set(
     0,
     depth * Math.sin(tilt) + rise * Math.cos(tilt),

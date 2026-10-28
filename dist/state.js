@@ -40,6 +40,7 @@ const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallbac
 // Furniture topples when the force on it exceeds this times its weight; it ends up lying this far over.
 const TOPPLE_FORCE = 3.5,
   TOPPLE_LIE = 1.45;
+const MAX_MINES = 16;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
 export function createState(saved = {}, newId) {
@@ -78,6 +79,8 @@ export function createState(saved = {}, newId) {
     structures,
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
+    mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, -14, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
+    mineAt: {},
     flags: {},
     lifts: {},
     v: 0,
@@ -121,6 +124,7 @@ export function serializeState(s) {
     structures: s.structures,
     scores: s.scores,
     match: s.match ? match.serializeMatch(s.match) : undefined,
+    mines: (s.mines || []).map(({ id, x, z, by, armAt, triggerAt }) => ({ id, x, z, by, armAt, triggerAt })),
     timer: s.timer,
   };
 }
@@ -467,6 +471,29 @@ export function applyOp(s, op, ctx) {
       all({ t: "timer", timer: s.timer });
       break;
     }
+    // ——— Mines: set down at your feet; anyone stepping on an armed one starts a 3 s fuse ———
+    case "mine.place": {
+      const M = projectile("mine").mine,
+        cool = projectile("mine").cooldown * 1000;
+      if (![op.x, op.z].every(finite)) return null;
+      if (ctx.pose && Math.hypot(ctx.pose.x - op.x, ctx.pose.z - op.z) > 1.8) return null;
+      s.mines = s.mines || [];
+      s.mineAt = s.mineAt || {};
+      if (s.mines.some((m) => m.by === ctx.peer) || s.mines.length >= MAX_MINES) return null;
+      if (ctx.now - (s.mineAt[ctx.peer] || -Infinity) < cool - 150) return null;
+      s.mineAt[ctx.peer] = ctx.now;
+      s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, -14, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
+      all({ t: "mines", mines: serializeState(s).mines });
+      break;
+    }
+    case "mine.step": {
+      const mine = (s.mines || []).find((m) => m.id === op.id);
+      if (!mine || mine.triggerAt != null || ctx.now < mine.armAt) return null;
+      mine.triggerAt = ctx.now + projectile("mine").mine.fuse;
+      all({ t: "mines", mines: serializeState(s).mines });
+      physics = true;
+      break;
+    }
     // ——— Team match (paintball) ———
     case "match.ready": {
       if (!match.matchEnabled(stateMap(s))) return null;
@@ -513,6 +540,8 @@ export const STATE_OPS = new Set([
   "timer.start",
   "timer.toggle",
   "timer.hide",
+  "mine.place",
+  "mine.step",
   "match.ready",
   "match.unready",
   "match.dmg",
@@ -526,6 +555,23 @@ export function runMatchStep(s, now, peerIds, rand = Math.random) {
   if (!s.match || !match.matchEnabled(stateMap(s))) return [];
   return match.stepMatch(s.match, now, peerIds, stateMap(s), rand).map((patch) => ({ t: "match", match: match.serializeMatch(s.match), spawns: patch.spawns }));
 }
+// Mines whose fuse has run out go off: the same blast as a grenade (props topple, objects fly, people
+// are hurt on their own screens). Returns broadcast messages and whether physics must wake up.
+export function runMines(s, now) {
+  const out = [],
+    gone = (s.mines || []).filter((m) => m.triggerAt != null && now >= m.triggerAt);
+  if (!gone.length) return out;
+  const M = projectile("mine").mine;
+  s.mines = s.mines.filter((m) => !gone.includes(m));
+  for (const m of gone) {
+    const props = applyBlast(s, m.x, 0.3, m.z, M.radius, M.power);
+    out.push({ t: "boom", by: m.by, kind: "mine", pid: null, x: m.x, y: 0.3, z: m.z, r: M.radius, power: M.power });
+    for (const p of props) out.push({ t: "struct", ...p });
+  }
+  out.push({ t: "mines", mines: serializeState(s).mines });
+  return out;
+}
+export const minesPending = (s) => (s.mines || []).some((m) => m.triggerAt != null);
 export function matchActive(s) {
   return s.match && s.match.phase !== "idle";
 }

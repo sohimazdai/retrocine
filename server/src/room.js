@@ -13,6 +13,8 @@ import {
   releaseRides,
   runMatchStep,
   matchActive,
+  runMines,
+  minesPending,
 } from "../../dist/state.js";
 import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
@@ -23,7 +25,7 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap", "melee"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap", "melee", "frost"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -77,6 +79,8 @@ export function sanitizePose(p) {
   if (p.zp === 1) pose.zp = 1;
   // Sledding down a snow slope.
   if (p.sd === 1) pose.sd = 1;
+  // Slowed by an icicle.
+  if (p.fr === 1) pose.fr = 1;
   // Hanging from a bar, and how far pulled up.
   if (p.hb === 1) pose.hb = 1;
   if (Number.isFinite(p.pu) && p.pu > 0) pose.pu = Math.round(clamp(p.pu, 0, 1) * 10) / 10;
@@ -258,7 +262,7 @@ export class Room {
           if (Array.isArray(msg.vel) && msg.vel.length === 2 && msg.vel.every(Number.isFinite)) out.vel = msg.vel.map((v) => r3(clamp(v, -12, 12)));
           if (typeof msg.pid === "string") {
             out.pid = msg.pid.slice(0, 24);
-            if (kind.explosion) {
+            if (kind.explosion || kind.frost) {
               peer.thrown.set(out.pid, { kind: kind.id, at: t });
               for (const [pid, v] of peer.thrown) if (t - v.at > 15000) peer.thrown.delete(pid);
             }
@@ -283,6 +287,15 @@ export class Room {
         if (msg.k === "lap") {
           if (!Number.isFinite(msg.ms) || msg.ms < 1500 || msg.ms > 600000) return;
           out.ms = Math.round(msg.ms);
+        }
+        // An icicle shattered: only one that was really thrown, once.
+        if (msg.k === "frost") {
+          const thrown = typeof msg.pid === "string" && peer.thrown.get(msg.pid);
+          if (!thrown || thrown.kind !== "icicle" || !Number.isFinite(msg.x) || !Number.isFinite(msg.z)) return;
+          peer.thrown.delete(msg.pid);
+          out.pid = msg.pid.slice(0, 24);
+          out.x = r3(clamp(msg.x, -40, 40));
+          out.z = r3(clamp(msg.z, -40, 40));
         }
         // A melee hit on another player (the victim applies the damage on their own client).
         if (msg.k === "melee") {
@@ -352,12 +365,17 @@ export class Room {
       this.acc -= PHYS_DT;
       steps++;
     }
+    // Mines whose fuse ran out go off.
+    for (const m of runMines(this.state, nowMs)) {
+      this.broadcast(m);
+      this.markDirty();
+    }
     // Advance the team match (countdown, round ends, respawns) and tell everyone.
     for (const m of runMatchStep(this.state, nowMs, [...this.peers.values()].map((p) => p.id))) {
       this.broadcast(m);
       this.markDirty();
     }
-    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state));
+    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || minesPending(this.state);
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;

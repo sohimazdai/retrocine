@@ -12,6 +12,10 @@ export const PROJECTILES = [
   { id: "brick", key: "5", emoji: "🧱", label: "Кирпич", mass: 2.5, radius: 0.13, maxSpeed: 9, impact: 9, cooldown: 1, color: "#a8543b" },
   { id: "grenade", key: "6", emoji: "💣", label: "Граната", mass: 0.6, radius: 0.1, maxSpeed: 14, impact: 3, cooldown: 10, bounce: 0.35, fuse: 3, life: 3, explosion: { radius: 4.6, power: 15 }, color: "#4e5b3a" },
   { id: "fireball", key: "7", emoji: "🔥", label: "Фаербол", mass: 0.3, radius: 0.17, maxSpeed: 17, gravity: 0.45, impact: 4, cooldown: 5, explodeOnContact: true, life: 5, explosion: { radius: 3.8, power: 12 }, color: "#ff8a2a" },
+  // Shatters where it lands: everyone within the radius is slowed by half and cannot sprint or push.
+  { id: "icicle", key: "8", emoji: "🧊", label: "Сосулька", mass: 0.4, radius: 0.1, maxSpeed: 16, impact: 2, cooldown: 6, frostOnContact: true, life: 4, frost: { radius: 2.8, seconds: 3 }, color: "#bfe8ff" },
+  // Not thrown but set down at your feet; stepped on by anyone, it blinks and goes off 3 s later.
+  { id: "mine", key: "9", emoji: "🧨", label: "Мина", place: true, cooldown: 10, mine: { radius: 3.8, power: 14, fuse: 3000, arm: 1200, trigger: 0.6 }, color: "#3d4a32" },
 ];
 export const projectile = (id) => PROJECTILES.find((p) => p.id === id) || PROJECTILES[0];
 

@@ -62,10 +62,40 @@ export function projectileMesh(kind) {
     g.add(core, flame, glow);
     g.userData.flame = flame;
     g.userData.trail = true;
+  } else if (kind.id === "icicle") {
+    // A sharp shard of clear ice.
+    const ice = mat("#cfefff", { roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.85, emissive: "#6fc8ff", emissiveIntensity: 0.35 });
+    const shard = new T.Mesh(new T.ConeGeometry(0.06, 0.34, 6), ice);
+    shard.rotation.x = Math.PI / 2;
+    const back = new T.Mesh(new T.ConeGeometry(0.06, 0.08, 6), ice);
+    back.rotation.x = -Math.PI / 2;
+    back.position.z = -0.2;
+    g.add(shard, back);
+  } else if (kind.id === "mine") {
+    g.add(mineModel());
   }
   g.traverse((o) => {
     if (o.isMesh) o.castShadow = true;
   });
+  return g;
+}
+
+// A flat land mine: an olive disc with a ribbed rim, a pressure plate and a red lamp (userData.lamp).
+export function mineModel() {
+  const g = new T.Group();
+  const body = new T.Mesh(new T.CylinderGeometry(0.28, 0.32, 0.09, 20), mat("#4a5636", { roughness: 0.65, metalness: 0.25 }));
+  body.position.y = 0.045;
+  const rim = new T.Mesh(new T.TorusGeometry(0.29, 0.025, 6, 24), mat("#323b25", { roughness: 0.6, metalness: 0.3 }));
+  rim.rotation.x = Math.PI / 2;
+  rim.position.y = 0.07;
+  const plate = new T.Mesh(new T.CylinderGeometry(0.13, 0.15, 0.04, 16), mat("#6b7556", { roughness: 0.5, metalness: 0.4 }));
+  plate.position.y = 0.11;
+  const lamp = new T.Mesh(lowSphere, new T.MeshStandardMaterial({ color: "#5a1410", emissive: "#ff2a14", emissiveIntensity: 0.25, roughness: 0.3 }));
+  lamp.scale.setScalar(0.035);
+  lamp.position.set(0.19, 0.1, 0);
+  g.add(body, rim, plate, lamp);
+  g.userData.lamp = lamp;
+  g.userData.body = body;
   return g;
 }
 

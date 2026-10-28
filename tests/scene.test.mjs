@@ -1320,3 +1320,64 @@ test("throwing on the run: only your speed along the throw adds to the shot, not
   assert(Math.abs(Math.atan2(forward.x, forward.z) - Math.atan2(still.x, still.z)) < 1e-6, "same direction");
   assert(Math.abs(side.x - still.x) < 1e-6 && Math.abs(side.z - still.z) < 1e-6, "sideways speed does not bend the shot");
 });
+
+test("icicle: everyone in the zone is slowed by half for 3 s and Shift does nothing; others see the frost", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "paintball" })');
+  a.tick(0.2);
+  const walk = (s) => {
+    a.run("Object.assign(active, { x: 0, z: 9.6, y: 0, vy: 0, grounded: true, kx: 0, kz: 0 })");
+    const x0 = a.run("active.x");
+    a.run("keys.add('right')");
+    a.tick(s);
+    a.run("keys.delete('right')");
+    return a.run("active.x") - x0;
+  };
+  const normal = walk(0.4);
+  a.run("applyFrost(active.x + 1, active.z, 'ice-1')");
+  assert.equal(a.run("active.slow"), 3);
+  assert.equal(a.run("currentPose().fr"), 1, "others see you frozen");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+  const slowed = walk(0.4);
+  assert.equal(a.run("sprinting"), false, "no sprint while frozen");
+  assert(slowed < normal * 0.62 && slowed > normal * 0.35, `half speed: ${slowed} vs ${normal}`);
+  assert.equal(a.run("active.frostFx.visible"), true, "ice round your feet");
+  a.tick(2.8);
+  assert.equal(a.run("active.slow"), 0, "it wears off");
+  assert.equal(a.run("sprinting"), true, "Shift held: sprinting again");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keyup", { key: "Shift", code: "ShiftLeft", bubbles: true }));
+  // Out of the zone: nothing.
+  a.run("applyFrost(active.x + 6, active.z, 'ice-2')");
+  assert.equal(a.run("active.slow"), 0);
+});
+
+test("mine: key 9 sets it at your feet; stepped on, it blinks with a light and blows 3 s later, hurting whoever is close in a match", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "paintball" })');
+  a.tick(0.2);
+  a.run("Object.assign(active, { x: 0, z: 7.5, y: 0, vy: 0, grounded: true })");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit9", bubbles: true }));
+  assert.equal(a.run("weapon"), "mine");
+  a.run("throwSnow(null)");
+  assert.equal(a.run("world.mines.length"), 1);
+  assert.equal(a.run("mineMeshes.size"), 1, "everyone sees it");
+  // Standing on it while it arms does nothing.
+  a.tick(0.3);
+  assert.equal(a.run("world.mines[0].triggerAt"), null);
+  // Armed (skip the wait on the wall clock), then step on it.
+  a.run("world.mines[0].armAt = Date.now() - 1; steppedMines.clear()");
+  a.tick(0.1);
+  assert.ok(a.run("world.mines[0].triggerAt"), "the fuse is lit");
+  assert.ok(a.run("[...mineMeshes.values()][0].userData.light"), "a light spills onto the floor around it");
+  // A round is on: still standing right on it when it goes off costs you all your health.
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "KeyR", bubbles: true }));
+  a.run("world.match.until = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("world.match.phase"), "live");
+  a.run("Object.assign(active, { x: world.mines[0].x, z: world.mines[0].z, y: 0, vy: 0, grounded: true, kx: 0, kz: 0 })");
+  a.run("world.mines[0].triggerAt = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("world.mines.length"), 0);
+  assert.equal(a.run("mineMeshes.size"), 0);
+  assert.equal(a.run("active.dead"), true, "the blast at point-blank range is lethal");
+});

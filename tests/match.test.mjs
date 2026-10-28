@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createMatch, assignTeams, ready, damage, died, stepMatch, spawnFor, teamSpawns, projectileDamage, blastDamage, serializeMatch, loadMatch, removePlayer, COUNTDOWN_MS, ROUND_BREAK_MS, MAX_HP } from "../dist/match.js";
 import { mapDef } from "../dist/maps/index.js";
+import { createState, applyOp, runMines, serializeState } from "../dist/state.js";
 
 const pb = mapDef("paintball");
 const seq = (vals) => {
@@ -110,4 +111,35 @@ test("a match serializes and reloads", () => {
   assert.equal(back.phase, "live");
   assert.deepEqual(back.teams, m.teams);
   assert.equal(back.stats.p2.p, m.stats.p2.p);
+});
+
+let ids = 0;
+const nid = () => "m" + ++ids;
+const at = (x, z) => ({ x, z, y: 0 });
+
+test("mines: set down at your feet, one each with a cooldown; armed after a moment; a step starts a 3 s fuse; then a blast", () => {
+  const s = createState({ map: "paintball" }, nid);
+  const ctx = (peer, now, pose) => ({ peer, now, pose, newId: nid });
+  assert.equal(applyOp(s, { t: "mine.place", x: 3, z: 3 }, ctx("a", 1000, at(0, 0))), null, "too far from you");
+  assert(applyOp(s, { t: "mine.place", x: 0.3, z: 0.2 }, ctx("a", 1000, at(0, 0))));
+  assert.equal(s.mines.length, 1);
+  assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 20000, at(0, 0))), null, "one mine each");
+  assert.equal(applyOp(s, { t: "mine.place", x: 5, z: 5 }, ctx("b", 1000, at(5, 5))) && s.mines.length, 2, "someone else may");
+  const mine = s.mines[0];
+  assert.equal(applyOp(s, { t: "mine.step", id: mine.id }, ctx("b", 1500, at(0, 0))), null, "not armed yet");
+  assert(applyOp(s, { t: "mine.step", id: mine.id }, ctx("b", 2300, at(0, 0))), "armed: the step counts");
+  assert.equal(mine.triggerAt, 2300 + 3000);
+  assert.equal(applyOp(s, { t: "mine.step", id: mine.id }, ctx("c", 2400, at(0, 0))), null, "already ticking");
+  assert.deepEqual(runMines(s, 5299), [], "not yet");
+  const out = runMines(s, 5300);
+  const boom = out.find((m) => m.t === "boom");
+  assert.equal(boom.kind, "mine");
+  assert.equal(boom.by, "a", "the blast is credited to whoever set the mine");
+  assert(boom.r > 3 && boom.power > 10);
+  assert.equal(s.mines.length, 1, "gone; the other one stays");
+  assert.equal(out.at(-1).t, "mines");
+  assert.equal(serializeState(s).mines.length, 1);
+  // The cooldown: a new mine for 'a' only after 10 s from the last.
+  assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 9000, at(0, 0))), null);
+  assert(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 11000, at(0, 0))));
 });

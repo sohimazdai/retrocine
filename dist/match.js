@@ -175,7 +175,9 @@ export function loadMatch(data) {
 // Damage tiers by weapon (light = 2, so 5 hits; heavy = 5, so 2; instant = 10). Melee is half (5).
 export const DMG = { light: 2, heavy: 5, instant: MAX_HP, melee: 5 };
 export function projectileDamage(kindId) {
-  if (["brick", "grenade", "fireball", "mine", "icicle"].includes(kindId)) return DMG.instant;
+  // An icicle only slows; grenades, fireballs and mines hurt through their blast.
+  if (kindId === "icicle") return 0;
+  if (["brick", "grenade", "fireball", "mine"].includes(kindId)) return DMG.instant;
   if (kindId === "rock") return DMG.heavy;
   return DMG.light; // snow, tomato, tennis
 }

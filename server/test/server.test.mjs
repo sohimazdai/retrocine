@@ -520,3 +520,39 @@ test("team match: everyone readying up starts the countdown for all; melee reach
   b.close();
   await app.close();
 });
+
+test("icicle frost only from a real icicle throw; a mine is set near you, armed, stepped on and goes off for everyone", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("mines-room", { name: "Аня" });
+  await b.join("mines-room", { name: "Борис" });
+  // Frost without having thrown an icicle is refused; after one, accepted once.
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  a.send({ t: "act", k: "throw", to: [1, 0.2, 1], w: "icicle", pw: 1, pid: "i1" });
+  await b.wait((m) => m.t === "act" && m.k === "throw" && m.w === "icicle");
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  a.send({ t: "act", k: "frost", pid: "i1", x: 1, z: 1 });
+  await b.wait((m) => m.t === "act" && m.k === "frost");
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "frost").length, 1);
+  // A mine at Anya's feet.
+  a.send({ t: "pose", x: 2, y: 0, z: 2, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  a.send({ t: "mine.place", x: 2.2, z: 2.1 });
+  const placed = await b.wait((m) => m.t === "mines" && m.mines.length === 1);
+  const mine = placed.mines[0];
+  assert.equal(mine.by, a.welcome.id);
+  // Stepping on it before it is armed does nothing; after, the fuse starts.
+  b.send({ t: "mine.step", id: mine.id });
+  await new Promise((r) => setTimeout(r, 1300));
+  b.send({ t: "mine.step", id: mine.id });
+  const lit = await a.wait((m) => m.t === "mines" && m.mines[0]?.triggerAt);
+  assert(lit.mines[0].triggerAt > Date.now() + 2000);
+  const boom = await b.wait((m) => m.t === "boom" && m.kind === "mine", 5000);
+  assert.equal(boom.by, a.welcome.id);
+  await b.wait((m) => m.t === "mines" && m.mines.length === 0);
+  a.close();
+  b.close();
+  await app.close();
+});

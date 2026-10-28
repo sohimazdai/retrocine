@@ -50,7 +50,7 @@ import {
   CHARGE_TIME,
   PROJECTILE_GRAVITY,
 } from "./projectiles.js";
-import { Effects, projectileMesh } from "./effects.js";
+import { Effects, projectileMesh, mineModel } from "./effects.js";
 import {
   createState,
   serializeState,
@@ -66,6 +66,7 @@ import {
   THROW_SPEED,
   runMatchStep,
   matchActive,
+  runMines,
 } from "./state.js";
 import { loadMatch, matchEnabled, projectileDamage, blastDamage, MAX_HP, TEAM_COLOR, DMG } from "./match.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
@@ -663,6 +664,170 @@ function ensureTeamRing(p) {
   p.teamRing.visible = true;
   p.teamRing.material.color.set(dead ? "#8a8a8a" : TEAM_COLOR[team]);
   p.teamRing.material.opacity = dead ? 0.3 : 0.85;
+}
+
+// ——— Icicle: shatters where it lands, freezing everyone close by for a few seconds ———
+const shownFrosts = new Set();
+const FROST = projectile("icicle").frost;
+function showFrost(x, z) {
+  const at = new T.Vector3(x, 0.15, z);
+  effects.puff(at, "#d8f3ff", 22, 3.2, 0.05);
+  effects.puff(at.clone().setY(0.5), "#9fdcff", 10, 2, 0.035);
+  // A patch of frost on the ground that melts away.
+  const ring = new T.Mesh(new T.CircleGeometry(FROST.radius, 40), new T.MeshBasicMaterial({ color: "#cdeeff", transparent: true, opacity: 0.55, depthWrite: false }));
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.set(x, 0.02, z);
+  const shards = new T.Group();
+  const ice = new T.MeshStandardMaterial({ color: "#d9f4ff", roughness: 0.1, transparent: true, opacity: 0.85, emissive: "#6fc8ff", emissiveIntensity: 0.3 });
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + Math.random() * 0.4,
+      r = 0.3 + Math.random() * (FROST.radius - 0.6);
+    const s = new T.Mesh(new T.ConeGeometry(0.06 + Math.random() * 0.05, 0.25 + Math.random() * 0.35, 5), ice);
+    s.position.set(x + Math.cos(a) * r, 0.12, z + Math.sin(a) * r);
+    s.rotation.set((Math.random() - 0.5) * 0.6, 0, (Math.random() - 0.5) * 0.6);
+    shards.add(s);
+  }
+  const g = new T.Group();
+  g.add(ring, shards);
+  effects.add(
+    g,
+    FROST.seconds,
+    (it) => {
+      const k = 1 - it.age / FROST.seconds;
+      ring.material.opacity = 0.55 * k;
+      ice.opacity = 0.85 * k;
+      shards.scale.setScalar(0.4 + 0.6 * Math.min(1, it.age * 6));
+    },
+    () => {
+      ring.geometry.dispose();
+      ring.material.dispose();
+      shards.children.forEach((s) => s.geometry.dispose());
+      ice.dispose();
+    },
+  );
+}
+// Everyone runs this for their own avatar: inside the zone you are slowed.
+function applyFrost(x, z, pid) {
+  if (!pid || !shownFrosts.has(pid)) showFrost(x, z);
+  if (pid) shownFrosts.add(pid);
+  if (Math.hypot(active.x - x, active.z - z) < FROST.radius && active.y < 2.5) {
+    active.slow = FROST.seconds;
+    sprinting = false;
+    toast("Заморожены: скорость вдвое ниже, Shift не работает", 1800);
+  }
+}
+function frostProjectile(pr, point) {
+  pr.mesh.visible = false;
+  if (pr.owner !== "self") return; // the thrower reports where it shattered
+  applyFrost(point.x, point.z, pr.pid);
+  net.send({ t: "act", k: "frost", pid: pr.pid, x: r3(point.x), z: r3(point.z) });
+}
+// Frozen avatars get a crust of ice around their feet.
+function ensureFrost(p) {
+  const frozen = p === active ? active.slow > 0 : !!p.flags?.fr;
+  if (!frozen) {
+    if (p.frostFx) p.frostFx.visible = false;
+    return;
+  }
+  if (!p.frostFx) {
+    const g = new T.Group(),
+      ice = new T.MeshStandardMaterial({ color: "#d9f4ff", roughness: 0.1, transparent: true, opacity: 0.8, emissive: "#6fc8ff", emissiveIntensity: 0.35 });
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 7) * Math.PI * 2,
+        s = new T.Mesh(new T.ConeGeometry(0.06, 0.28 + (i % 3) * 0.08, 5), ice);
+      s.position.set(Math.cos(a) * 0.32, 0.12, Math.sin(a) * 0.32);
+      s.rotation.set(Math.sin(a) * 0.35, 0, -Math.cos(a) * 0.35);
+      g.add(s);
+    }
+    p.root.add(g);
+    p.frostFx = g;
+  }
+  p.frostFx.visible = true;
+}
+
+// ——— Mines: everyone sees them; stepped on, one blinks and lights up its surroundings, then blows ———
+const MINE = projectile("mine").mine;
+const mineMeshes = new Map();
+const steppedMines = new Set();
+function renderMines() {
+  const list = world.mines || [];
+  for (const [id, g] of mineMeshes)
+    if (!list.some((m) => m.id === id)) {
+      scene.remove(g);
+      g.traverse((o) => {
+        if (o.isMesh) o.geometry.dispose();
+      });
+      mineMeshes.delete(id);
+      steppedMines.delete(id);
+    }
+  for (const m of list) {
+    let g = mineMeshes.get(m.id);
+    if (!g) {
+      g = mineModel();
+      g.position.set(m.x, 0, m.z);
+      g.userData.mine = m.id;
+      scene.add(g);
+      mineMeshes.set(m.id, g);
+    }
+    g.userData.data = m;
+    if (m.triggerAt != null && !g.userData.light) {
+      // Bright flashing light that spills onto the floor and everything nearby.
+      const light = new T.PointLight("#ff3a1a", 0, 7, 1.6);
+      light.position.set(0, 0.5, 0);
+      g.add(light);
+      g.userData.light = light;
+    }
+  }
+}
+function tickMines() {
+  const now = clockNow();
+  for (const g of mineMeshes.values()) {
+    const m = g.userData.data,
+      lamp = g.userData.lamp;
+    if (!m) continue;
+    if (m.triggerAt == null) {
+      // Armed: a slow, dim blink; before arming it is dark.
+      lamp.material.emissiveIntensity = now < m.armAt ? 0.1 : 0.25 + (Math.sin(now / 260) > 0.6 ? 1.2 : 0);
+      continue;
+    }
+    // Triggered: blinking faster and faster until it goes off.
+    const left = Math.max(0, m.triggerAt - now) / MINE.fuse,
+      rate = 6 + (1 - left) * 26,
+      on = Math.sin((now / 1000) * rate * Math.PI) > 0;
+    lamp.material.emissiveIntensity = on ? 6 : 0.4;
+    lamp.scale.setScalar(on ? 0.06 : 0.035);
+    g.userData.body.material.emissive?.set(on ? "#ff2a14" : "#000000");
+    g.userData.body.material.emissiveIntensity = on ? 0.6 : 0;
+    if (g.userData.light) g.userData.light.intensity = on ? 14 : 1.5;
+  }
+}
+// Offline the browser sets mines off itself; anyone (you included) stepping on an armed one starts it.
+function stepMines() {
+  if (!net.connected) for (const m of runMines(world, clockNow())) onServer(m);
+  if (!world.mines?.length || active.dead) return;
+  const now = clockNow();
+  for (const m of world.mines)
+    if (m.triggerAt == null && now >= m.armAt && !steppedMines.has(m.id) && active.y < 0.35 && Math.hypot(active.x - m.x, active.z - m.z) < MINE.trigger) {
+      steppedMines.add(m.id);
+      op({ t: "mine.step", id: m.id });
+      toast("Щёлк… мина!", 1500);
+    }
+}
+function placeMine(kind) {
+  const now = performance.now();
+  if (now < (cooldownUntil[kind.id] || 0)) {
+    toast(`${kind.emoji} ${kind.label} будет готова через ${Math.ceil((cooldownUntil[kind.id] - now) / 1000)} с`, 1300);
+    return;
+  }
+  if ((world.mines || []).some((m) => m.by === matchId())) {
+    toast("Ваша мина уже стоит — новую можно поставить, когда она сработает", 2200);
+    return;
+  }
+  cooldownUntil[kind.id] = now + kind.cooldown * 1000;
+  startAction(active, "kick", worldTime, {});
+  op({ t: "mine.place", x: r3(active.x), z: r3(active.z) });
+  toast("Мина поставлена — взведётся через секунду. Отойдите!", 2000);
+  renderCooldowns();
 }
 function updateRides(dt) {
   updateTrolleys();
@@ -1319,7 +1484,7 @@ function renderWeapon() {
   if (icon) icon.outerHTML = `<span class="weapon-emoji" aria-hidden="true">${kind.emoji}</span>`;
   const tip = btn.querySelector(".tip");
   if (tip) tip.textContent = `${kind.label} · клик, ПКМ — сильнее`;
-  btn.title = `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–7 — выбрать снаряд`;
+  btn.title = kind.place ? `${kind.label}: клик — поставить под ноги. 1–9 — выбрать` : `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–9 — выбрать снаряд`;
   if (!$("#weaponPicker").hidden) renderWeaponPicker();
 }
 function renderWeaponPicker() {
@@ -1352,6 +1517,7 @@ function throwSnow(hit, power = 1) {
   if (active.dead) return;
   const kind = projectile(weapon),
     now = performance.now();
+  if (kind.place) return placeMine(kind);
   if (now < (cooldownUntil[kind.id] || 0)) {
     if (kind.cooldown >= 1) toast(`${kind.emoji} ${kind.label} будет готов${kind.id === "grenade" ? "а" : ""} через ${Math.ceil((cooldownUntil[kind.id] - now) / 1000)} с`, 1300);
     return;
@@ -1498,7 +1664,9 @@ function onBoom(m) {
     active.hit = 0.9;
     pending = null;
     // Match damage falls off with distance and is fully stopped by solid cover between you and it.
-    if (matchLive() && !blastBlocked(m.x, m.z, active.x, active.z)) takeDamage(blastDamage(d, m.r), m.by === "self" ? matchId() : m.by);
+    // Distance from the epicentre along the ground (plus height if you are above it): right on top is −10.
+    const ground = Math.hypot(active.x - m.x, active.z - m.z, Math.max(0, active.y - m.y));
+    if (matchLive() && !blastBlocked(m.x, m.z, active.x, active.z)) takeDamage(blastDamage(ground, m.r), m.by === "self" ? matchId() : m.by);
   }
   for (const p of remotes.values()) if (Math.hypot(p.x - m.x, p.z - m.z) < m.r) p.hit = 0.8;
   for (const [, mesh] of noteMeshes)
@@ -1736,7 +1904,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — притормозить, <kbd>Space</kbd> — стоп. На доске <kbd>Shift</kbd> — прыжок, в воздухе — трюк. Карт выдаёт автомат на картинге; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>7</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с). Тяжёлое летит ближе.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 15–45°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — притормозить, <kbd>Space</kbd> — стоп. На доске <kbd>Shift</kbd> — прыжок, в воздухе — трюк. Карт выдаёт автомат на картинге; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>9</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -2332,9 +2500,10 @@ document.addEventListener("keydown", (e) => {
         if (active.grounded || active.ride.grind) active.ride.ollie = true;
         else active.ride.trick = true;
       }
-    } else sprinting = true;
+    } else sprinting = !(active.slow > 0);
+    shiftHeld = true;
   }
-  const digit = /^Digit([1-7])$/.exec(e.code);
+  const digit = /^Digit([1-9])$/.exec(e.code);
   if (digit && !e.repeat) setWeapon(PROJECTILES[+digit[1] - 1].id);
   if (e.code === "Space") {
     e.preventDefault();
@@ -2366,7 +2535,10 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("keyup", (e) => {
   if (keyMap[e.code]) keys.delete(keyMap[e.code]);
   if (e.code === "Tab") toggleScoreboard(false);
-  if (e.key === "Shift") sprinting = false;
+  if (e.key === "Shift") {
+    sprinting = false;
+    shiftHeld = false;
+  }
   if (e.code === "Space") spaceHeld = false;
 });
 window.addEventListener("blur", () => {
@@ -2434,7 +2606,13 @@ function updateSeesaws(dt) {
 function physics(dt) {
   worldTime += dt;
   if (active.hurt > 0) active.hurt = Math.max(0, active.hurt - dt);
+  if (active.slow > 0) {
+    // Frozen by an icicle: half speed, and Shift (sprint, push) does nothing until it wears off.
+    active.slow = Math.max(0, active.slow - dt);
+    sprinting = active.slow === 0 && shiftHeld && !active.ride;
+  }
   stepMatchOffline();
+  stepMines();
   updateSeesaws(dt);
   mapScene.tickTips(dt);
   const obstacles = mapScene.colliders();
@@ -2558,7 +2736,7 @@ function physics(dt) {
       }
       // Ice: you skate — speed builds up, and you glide on when you let go.
       const ice = p.y < 0.2 && !!iceAt(mapScene.map, p.x, p.z);
-      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1), ice);
+      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1) * (p.slow > 0 ? 0.5 : 1), ice);
       p.velocityX = (p.x - oldX) / dt;
       p.velocityZ = (p.z - oldZ) / dt;
       if (!wasGrounded && p.grounded) p.land = 0.2;
@@ -2637,6 +2815,11 @@ function physics(dt) {
       const target = owner(hit.object);
       pr.normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new T.Vector3(0, 1, 0);
       if (pr.normal.dot(pr.v) > 0) pr.normal.negate();
+      if (k.frostOnContact) {
+        frostProjectile(pr, hit.point);
+        removal.push(pr);
+        continue;
+      }
       if (k.explodeOnContact) {
         explodeProjectile(pr, hit.point);
         if (pr.owner === "self") removal.push(pr);
@@ -2707,9 +2890,11 @@ function visual(dt) {
   }
   // Remote avatars are sampled once per rendered frame, so their motion is as smooth as the display.
   for (const p of players) if (p.remote) updateRemote(p, dt);
+  tickMines();
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
     ensureTeamRing(p);
+    ensureFrost(p);
     if (!p.remote && sledding(p)) {
       // On a sled you face down the slope.
       const d = gradient(p.support, p.x, p.z),
@@ -2953,6 +3138,7 @@ function moveStructure(id, x, z, y = 0, tip = null) {
 }
 // ——— Shift: sprint, push, lift ———
 let sprinting = false,
+  shiftHeld = false,
   pushState = 0;
 const liftedBy = {};
 // Leaning into a prop with Shift shows the pushing pose; holding a lifted prop raises the arms.
@@ -3038,6 +3224,7 @@ function currentPose() {
     if (active.climb.pull > 0.05) pose.pu = Math.round(active.climb.pull * 10) / 10;
   } else if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
   if (sledding(active)) pose.sd = 1;
+  if (active.slow > 0) pose.fr = 1;
   if (active.kart) {
     pose.kt = 1;
     if (Math.abs(active.kart.steer) > 0.05) pose.ks = Math.round(active.kart.steer * 10) / 10;
@@ -3141,10 +3328,13 @@ function loadState(fresh, objs) {
     structures: fresh.structures,
     scores: fresh.scores,
     timer: fresh.timer,
+    match: fresh.match,
+    mines: fresh.mines || [],
     flags: {},
     lifts: {},
   });
   world.v = (world.v || 0) + 1;
+  renderMines();
   for (const id of [...cubeMeshes.keys()]) removeCubeMesh(id);
   syncAliases();
   for (const packed of objs || []) {
@@ -3221,7 +3411,7 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0, hb: m.hb || 0, pu: m.pu || 0, kt: m.kt || 0, ks: m.ks || 0, tq: m.tq || null, tb: m.tb || 0, tk: m.tk ?? -1 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0, hb: m.hb || 0, pu: m.pu || 0, kt: m.kt || 0, ks: m.ks || 0, tq: m.tq || null, tb: m.tb || 0, tk: m.tk ?? -1, fr: m.fr || 0 };
       break;
     }
     case "profile":
@@ -3231,6 +3421,10 @@ function onServer(m, at) {
       // Run over: you are thrown at once, as the driver saw it.
       if (m.k === "hit") {
         if (m.target === net.id) knockOver(m.v);
+        break;
+      }
+      if (m.k === "frost") {
+        applyFrost(m.x, m.z, m.pid);
         break;
       }
       if (m.k === "melee") {
@@ -3306,6 +3500,10 @@ function onServer(m, at) {
     }
     case "ride":
       onRide(m.ride);
+      break;
+    case "mines":
+      world.mines = m.mines;
+      renderMines();
       break;
     case "match": {
       const wasLive = world.match?.phase;
@@ -3514,6 +3712,7 @@ function startNetwork() {
     window.kino = { players, world, remotes, net, mediaClient, op, camera, avatarModal, editor: () => avatarEditor, notes: () => notes, active: () => active };
   setInterval(renderPresence, 2000);
   initMatchHud();
+  renderMines();
   active.hp = MAX_HP;
   renderMatchHud();
   // Keep the match banner's countdown ticking.

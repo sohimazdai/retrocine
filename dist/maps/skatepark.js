@@ -17,6 +17,7 @@ const BANK = { x: 6.6, z: -6.9, w: 4.2, d: 2.4, h: 1.2 };
 
 export default {
   id: "skatepark",
+  backdrop: "city",
   title: "Скейтпарк",
   description: "Рампы, фанбокс, перила; скейты, самокаты и BMX с трюками",
   color: "#8a8f98",

@@ -34,6 +34,7 @@ export const SEESAW = { length: 4.4, width: 0.52, pivot: 0.55, swing: 0.47 };
 
 export default {
   id: "playground",
+  backdrop: "yard",
   title: "Детская площадка",
   description: "Батут, кольцо, ворота, качели-весы и форт с горкой",
   color: "#e4734f",

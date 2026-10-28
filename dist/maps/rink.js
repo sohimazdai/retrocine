@@ -44,6 +44,7 @@ export const HUT = { x: -11.8, z: -6.0, w: 3.6, d: 2.8, h: 3.4 };
 
 export default {
   id: "rink",
+  backdrop: "winter",
   title: "Зимний каток",
   description: "Скользкий лёд, хоккей, горка с санками и снежные комы",
   color: "#7fa7d8",

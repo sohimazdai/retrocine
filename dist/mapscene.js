@@ -188,6 +188,8 @@ export class MapScene {
     this.decorRoot = decor;
     this.decor = DECOR.get(map.id)?.(decor, map, { scene: this.scene }) || null;
     for (const s of map.statics || []) STATICS[s.kind]?.(decor, s, map);
+    // What lies beyond the floor's left and right edges (scenery only, not colliders).
+    if (map.backdrop) STATICS.backdrop?.(decor, { style: map.backdrop }, map);
     decor.traverse((o) => {
       if (o.isMesh) o.receiveShadow = true;
     });

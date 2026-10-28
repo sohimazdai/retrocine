@@ -38,6 +38,7 @@ export const ZIPS = [
 
 export default {
   id: "ropepark",
+  backdrop: "wood",
   title: "Верёвочный парк",
   description: "Площадки на деревьях, канаты, сетка, скалодром, батуты и троллеи",
   color: "#5f8f4e",

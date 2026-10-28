@@ -23,6 +23,7 @@ const STAIRS = { kind: "stairs", shape: "ramp", x: 13.55, z: BALCONY.z + BALCONY
 
 export default {
   id: "saloon",
+  backdrop: "town",
   title: "Салун",
   description: "Стойка с кружками, столы, пианино, балкон и бочки",
   color: "#a8643a",

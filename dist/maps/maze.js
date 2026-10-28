@@ -122,6 +122,7 @@ export function hedges(seed) {
 const F = FOUNTAIN;
 export default {
   id: "maze",
+  backdrop: "garden",
   title: "Лабиринт",
   description: "Живая изгородь и фонтан с минотавром в центре",
   color: "#4f8a4a",

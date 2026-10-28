@@ -34,6 +34,7 @@ const loge = (side) => {
 };
 export default {
   id: "cinema",
+  backdrop: "theater",
   title: "Кинозал",
   description: "Пирамида, катушки, большой куб, мяч и ворота",
   color: "#8f7fb0",

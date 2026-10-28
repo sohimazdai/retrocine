@@ -54,6 +54,7 @@ export const RIVER_ZONE = { id: "water", kind: "water", x0: WATER.x0, x1: WATER.
 
 export default {
   id: "river",
+  backdrop: "mountains",
   title: "Горная река",
   description: "Течение, крутые берега и камни, которые уносит водой",
   color: "#4f8fa8",

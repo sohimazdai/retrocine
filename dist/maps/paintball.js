@@ -40,6 +40,7 @@ export const TOWER_LADDERS = [-1, 1].map((side) => ({ id: "tower-" + (side < 0 ?
 
 export default {
   id: "paintball",
+  backdrop: "forest",
   title: "Пейнтбол",
   description: "Надувные укрытия, катушки, стога и перевёрнутые столы",
   color: "#c2c14b",

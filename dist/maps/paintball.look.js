@@ -128,12 +128,63 @@ function tableDown(g, p) {
 }
 registerProps({ snake, dorito, cake, can, brick, haystack, "table-down": tableDown });
 
+// A weathered concrete barricade with a scuffed base and a few paint hits.
+function barricade(group, s) {
+  const g = new T.Group();
+  g.position.set(s.x, 0, s.z);
+  g.rotation.y = s.rot || 0;
+  group.add(g);
+  mesh(g, new T.BoxGeometry(s.w, s.h, s.d), mat("#9a9a90", { roughness: 0.95 }), 0, s.h / 2, 0);
+  mesh(g, new T.BoxGeometry(s.w + 0.1, 0.2, s.d + 0.1), mat("#6f6f66", { roughness: 0.95 }), 0, 0.1, 0);
+  const r = rng(Math.round(s.x * 11 + s.z * 7));
+  for (let i = 0; i < 3; i++) {
+    const front = r() < 0.5 ? 1 : -1;
+    const splat = mesh(g, new T.CircleGeometry(0.12 + r() * 0.1, 10), mat(["#d8432f", "#2f6fd8", "#f2c14e"][i], { roughness: 0.8, opacity: 0.85, side: T.DoubleSide }), (r() - 0.5) * s.w * 0.8, 0.4 + r() * (s.h - 0.8), front * (s.d / 2 + 0.012), false);
+    if (front < 0) splat.rotation.y = Math.PI;
+  }
+}
+// A raised concrete platform.
+function platform(group, s) {
+  mesh(group, new T.BoxGeometry(s.w, s.h, s.d), mat("#8f8f84", { roughness: 0.95 }), s.x, s.h / 2, s.z);
+  mesh(group, new T.BoxGeometry(s.w + 0.1, 0.12, s.d + 0.1), mat("#6f6f66", { roughness: 0.95 }), s.x, s.h - 0.06, s.z);
+}
+// A sloped ramp wedge up one side of the hill.
+function ramp(group, s) {
+  const up = s.h1 >= s.h0,
+    sign = up ? 1 : -1;
+  const shape = new T.Shape([
+    [-s.w / 2, 0],
+    [s.w / 2, 0],
+    [sign * (s.w / 2), s.h],
+  ].map(([x, y]) => new T.Vector2(x, y)));
+  const geo = new T.ExtrudeGeometry(shape, { depth: s.d, bevelEnabled: false });
+  geo.translate(0, 0, -s.d / 2);
+  mesh(group, geo, mat("#86867b", { roughness: 0.95 }), s.x, 0, s.z);
+}
+// A wooden crate.
+function crate(group, s) {
+  mesh(group, new T.BoxGeometry(s.w, s.h, s.d), mat("#9a6b3c", { roughness: 0.85 }), s.x, s.h / 2, s.z);
+  const edge = mat("#6f4a28", { roughness: 0.8 });
+  for (const sy of [0.5, -0.5]) for (const sx of [1, -1]) mesh(group, new T.BoxGeometry(0.08, s.h * 0.96, s.d * 0.98), edge, s.x + sx * s.w * 0.46, s.h / 2 + sy * 0.001, s.z);
+  mesh(group, new T.BoxGeometry(s.w * 0.98, 0.08, s.d * 0.98), edge, s.x, s.h - 0.04, s.z);
+}
+// A low earth berm with a grassy cap.
+function berm(group, s) {
+  mesh(group, new T.BoxGeometry(s.w, s.h, s.d), mat("#6b5a3c", { roughness: 1 }), s.x, s.h / 2, s.z);
+  const cap = mesh(group, new T.SphereGeometry(1, 12, 6), mat("#5d7a3c", { roughness: 1 }), s.x, s.h, s.z);
+  cap.scale.set(s.w / 2, 0.25, s.d / 2);
+}
 registerDecor("paintball", (group, map) => {
   for (const s of map.statics || []) {
     if (s.kind === "tower-deck") towerDeck(group, s);
     if (s.kind === "tower-post") mesh(group, new T.BoxGeometry(s.w, s.h, s.d), mat("#5a4632", { roughness: 0.8 }), s.x, s.h / 2, s.z);
     if (s.kind === "parapet") parapet(group, s);
     if (s.kind === "sandbags") sandbags(group, s);
+    if (s.kind === "barricade") barricade(group, s);
+    if (s.kind === "platform") platform(group, s);
+    if (s.kind === "ramp") ramp(group, s);
+    if (s.kind === "crate") crate(group, s);
+    if (s.kind === "berm") berm(group, s);
   }
   const flags = [];
   for (const s of (map.statics || []).filter((s) => s.kind === "flag")) {

@@ -250,6 +250,67 @@ export const CHARACTERS = [
     hairstyle: "curly",
     hairColor: "#241c1d",
   },
+  {
+    id: "six", name: "Шесть", subtitle: "Six · Little Nightmares",
+    category: "heroes", color: "#dbbd32", skin: "#d3bc91",
+    pantsColor: "#d3bc91", shoeColor: "#d3bc91",
+  },
+  {
+    id: "little-sister", name: "Сестричка", subtitle: "Little Sister · BioShock",
+    category: "heroes", color: "#788b9e", skin: "#d1c6ae",
+    pantsColor: "#d1c6ae", shoeColor: "#493b32", hairColor: "#342b26",
+  },
+  {
+    id: "ciri", name: "Цири", subtitle: "Ciri · The Witcher",
+    category: "fantasy", color: "#ece4d0", skin: "#e5c4ac",
+    pantsColor: "#695246", shoeColor: "#463b33", hairColor: "#dedbd2",
+  },
+  {
+    id: "anton-chigurh", name: "Антон Чигур", subtitle: "Старикам тут не место · Anton Chigurh",
+    category: "stars", color: "#514737", skin: "#cfab8c",
+    pantsColor: "#393e40", shoeColor: "#3b2d26", hairColor: "#302820",
+  },
+  {
+    id: "elastigirl", name: "Эластика", subtitle: "Elastigirl · Суперсемейка",
+    category: "heroes", color: "#c93830", skin: "#e7b89a",
+    pantsColor: "#c93830", shoeColor: "#25232a", hairColor: "#813e29",
+  },
+  {
+    id: "scarlet-witch", name: "Алая ведьма", subtitle: "Scarlet Witch · Marvel",
+    category: "heroes", color: "#962c42", skin: "#e9c2aa",
+    pantsColor: "#382b37", shoeColor: "#3c2430", hairColor: "#9b4f32",
+    hairstyle: "long",
+  },
+  {
+    id: "eleven", name: "Одиннадцать", subtitle: "Eleven · Очень странные дела · Stranger Things",
+    category: "heroes", color: "#c98e9b", skin: "#e2bba3",
+    pantsColor: "#e2bba3", shoeColor: "#eee6db", hairColor: "#66513d",
+  },
+  {
+    id: "alf", name: "Альф", subtitle: "ALF · Гость с Мельмака",
+    category: "creatures", color: "#b17b48", skin: "#b17b48",
+    pantsColor: "#b17b48", shoeColor: "#895a35", hairColor: "#78492f",
+  },
+  {
+    id: "winnie-pooh", name: "Винни-Пух", subtitle: "Winnie the Pooh · Мишка и мёд",
+    category: "creatures", color: "#ad7e44", skin: "#ad7e44",
+    pantsColor: "#ad7e44", shoeColor: "#694a2f",
+  },
+  {
+    id: "carlson", name: "Карлсон", subtitle: "Малыш и Карлсон · Пропеллер за спиной",
+    category: "fantasy", color: "#83a580", skin: "#edbe9c",
+    pantsColor: "#bb754c", shoeColor: "#743c2b", hairColor: "#c35a29",
+  },
+  {
+    id: "spongebob", name: "Спанчбоб", subtitle: "Губка Боб Квадратные Штаны · SpongeBob",
+    category: "creatures", color: "#f0ce39", skin: "#f0ce39",
+    pantsColor: "#997047", shoeColor: "#25262c",
+  },
+  {
+    id: "cheburashka", name: "Чебурашка", subtitle: "Большие уши и доброе сердце",
+    category: "creatures", color: "#744a32", skin: "#b68a5f",
+    pantsColor: "#744a32", shoeColor: "#5d3c2a",
+  },
 ].map((p) => ({ ...defaults, ...p, character: p.id }));
 
 // Original procedural toy interpretations. Every accessory is a mesh attached
@@ -460,39 +521,35 @@ export function dressCharacter(rig, p, primitives) {
       face.visible = false;
       const g = part("raincoat-hood");
       // A tall pointed hood facing forward, framing a dark opening — Six's signature silhouette.
-      const outer = new T.Shape(
-        [
-          [-0.52, -0.52],
-          [-0.62, 0.22],
-          [0, 0.98],
-          [0.62, 0.22],
-          [0.52, -0.52],
-        ].map((v) => new T.Vector2(...v)),
-      );
-      const hole = new T.Path(
-        [
-          [-0.34, -0.34],
-          [0.34, -0.34],
-          [0.35, 0.16],
-          [0, 0.44],
-          [-0.35, 0.16],
-        ].map((v) => new T.Vector2(...v)),
-      );
+      const outer = new T.Shape();
+      outer.moveTo(0.1, 0.82);
+      outer.bezierCurveTo(-0.04, 0.64, -0.42, 0.3, -0.57, -0.04);
+      outer.quadraticCurveTo(-0.65, -0.2, -0.43, -0.38);
+      outer.quadraticCurveTo(0, -0.52, 0.43, -0.38);
+      outer.quadraticCurveTo(0.62, -0.24, 0.5, 0.08);
+      outer.quadraticCurveTo(0.37, 0.53, 0.1, 0.82);
+      const hole = new T.Path();
+      hole.moveTo(-0.37, -0.28);
+      hole.quadraticCurveTo(0, -0.43, 0.36, -0.28);
+      hole.quadraticCurveTo(0.42, -0.14, 0.29, 0.07);
+      hole.quadraticCurveTo(0.16, 0.2, 0.04, 0.26);
+      hole.quadraticCurveTo(-0.3, 0.1, -0.37, -0.28);
       outer.holes.push(hole);
       mesh(
         g,
-        new T.ExtrudeGeometry(outer, { depth: 0.52, bevelEnabled: true, bevelSize: 0.03, bevelThickness: 0.03, bevelSegments: 2 }),
+        new T.ExtrudeGeometry(outer, { depth: 0.66, bevelEnabled: true, bevelSize: 0.025, bevelThickness: 0.035, bevelSegments: 3 }),
         p.color,
         0,
         0.02,
-        0.08,
+        -0.22,
       );
       // The shadowed inside of the hood and a hint of the little chin.
-      box(g, 0.74, 0.82, 0.12, "#3a2c0c", 0, 0.04, 0.05, 0.02);
-      ball(g, p.skin, 0, -0.2, 0.3, 0.22, 0.14, 0.1);
+      box(g, 0.83, 0.73, 0.12, "#241f15", 0, -0.04, 0.05, 0.06);
+      ball(g, p.skin, 0, -0.22, 0.23, 0.18, 0.11, 0.09);
+      box(g, 0.47, 0.22, 0.1, "#241f15", 0, -0.025, 0.28, 0.06);
+      box(g, 0.09, 0.012, 0.015, "#876b4b", 0.02, -0.25, 0.315, 0.004);
       // A rounded shell closing the back and sides.
       box(g, 0.92, 0.9, 0.5, p.color, 0, 0.06, -0.24, 0.22);
-      cone(g, p.color, 0.46, 0.5, 0, 0.5, -0.08, 5).rotation.y = Math.PI / 2;
     }
     if (signatureBody) {
       const g = garment();
@@ -500,6 +557,10 @@ export function dressCharacter(rig, p, primitives) {
       const coat = cylinder(g, p.color, 0.22, 0.41, 0.72, 0, -0.14, 0);
       coat.scale.z = 0.74;
       box(g, 0.03, 0.66, 0.025, "#c28f1f", 0, -0.12, 0.3, 0.008);
+      for (const y of [0.1, -0.08, -0.26]) {
+        box(g, 0.11, 0.045, 0.04, "#e8cb43", 0.035, y, 0.31, 0.012);
+        ball(g, "#a78d25", 0.07, y, 0.337, 0.018, 0.018, 0.01);
+      }
       for (const s of [-1, 1]) {
         box(g, 0.15, 0.14, 0.04, "#d9b02f", s * 0.17, -0.26, 0.28, 0.03);
         // Sleeve cuffs.
@@ -507,6 +568,284 @@ export function dressCharacter(rig, p, primitives) {
       }
     }
     paws(p.skin);
+  }
+  if (id === "little-sister") {
+    const g = part("glowing-eyes", face);
+    rig.eyes.forEach((eye) => {
+      eye.children[0].material = glow("#f5d965");
+      rig.secondary.push({ object: eye.children[0], type: "light" });
+    });
+    // Keep the eyes on the facial rig so blinking and emotions still work.
+    ball(g, "#988774", 0.13, -0.17, 0.35, 0.055, 0.018, 0.012);
+    if (signatureHead) {
+      const hair = part("sister-hair");
+      box(hair, 0.86, 0.24, 0.73, p.hairColor, 0, 0.31, -0.04, 0.1);
+      box(hair, 0.8, 0.55, 0.2, p.hairColor, 0, 0.03, -0.32, 0.08);
+      for (const s of [-1, 1]) {
+        ball(hair, p.hairColor, s * 0.38, 0.28, -0.16, 0.2, 0.22, 0.19);
+        box(hair, 0.2, 0.07, 0.1, "#c6b5a1", s * 0.39, 0.29, 0.02, 0.02);
+      }
+    }
+    if (signatureBody) {
+      const dress = garment("sister-dress");
+      cylinder(dress, p.color, 0.21, 0.36, 0.56, 0, -0.06, 0).scale.z = 0.7;
+      box(dress, 0.25, 0.4, 0.04, "#d8cbb4", 0, -0.08, 0.21, 0.03);
+      for (const s of [-1, 1]) {
+        ball(dress, "#e4d7c3", s * 0.085, 0.17, 0.16, 0.1, 0.055, 0.04);
+        ball(arms[s === -1 ? 0 : 1], p.color, 0, -0.04, 0, 0.13, 0.13, 0.13);
+      }
+      box(dress, 0.5, 0.055, 0.34, "#d8cbb4", 0, -0.3, 0, 0.018);
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "ciri") {
+    const scar = part("cheek-scar", face);
+    tube(scar, [[-0.28, 0.19, 0.36], [-0.25, 0.02, 0.414], [-0.13, -0.18, 0.36]], "#ac746a", 0.012);
+    rig.eyes.forEach((eye) => ball(eye, "#739e69", 0, 0, 0.067, 0.055, 0.073, 0.017));
+    if (signatureHead) {
+      const hair = part("ashen-hair");
+      box(hair, 0.86, 0.22, 0.72, p.hairColor, 0, 0.33, -0.03, 0.1);
+      ball(hair, p.hairColor, 0, 0.15, -0.39, 0.28, 0.28, 0.15);
+      for (const s of [-1, 1]) {
+        const lock = box(hair, 0.16, 0.65, 0.16, p.hairColor, s * 0.36, 0.01, 0.25, 0.07);
+        lock.rotation.z = -s * 0.2;
+      }
+      box(hair, 0.4, 0.17, 0.14, p.hairColor, -0.13, 0.25, 0.33, 0.06).rotation.z = -0.3;
+    }
+    if (signatureBody) {
+      const body = garment("witcher-outfit");
+      box(body, 0.47, 0.45, 0.34, p.color, 0, -0.02, 0, 0.07);
+      polygon(body, [[-0.08, 0.2], [0.08, 0.2], [0, -0.02]], p.skin, 0.02, 0.18);
+      belt(body, "#654c37");
+      box(body, 0.12, 0.23, 0.08, "#715741", 0.2, -0.2, 0.12, 0.02);
+      elbows.forEach((e) => box(e, 0.16, 0.18, 0.18, "#795e43", 0, -0.07, 0, 0.035));
+      const sword = part("witcher-sword", torso);
+      sword.position.set(-0.12, 0.03, -0.28);
+      sword.rotation.z = -0.5;
+      box(sword, 0.09, 0.76, 0.07, "#50493f", 0, -0.12, 0, 0.018);
+      box(sword, 0.23, 0.04, 0.09, "#bdc3c2", 0, 0.27, 0, 0.012);
+      cylinder(sword, "#564031", 0.035, 0.035, 0.2, 0, 0.38, 0);
+      ball(sword, "#bdc3c2", 0, 0.49, 0, 0.045);
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "anton-chigurh") {
+    if (signatureHead) {
+      const hair = part("chigurh-bob");
+      box(hair, 0.94, 0.3, 0.79, p.hairColor, 0, 0.3, -0.035, 0.13);
+      box(hair, 0.88, 0.58, 0.22, p.hairColor, 0, 0, -0.31, 0.07);
+      for (const s of [-1, 1])
+        box(hair, 0.18, 0.58, 0.55, p.hairColor, s * 0.43, -0.015, -0.035, 0.08);
+      box(hair, 0.68, 0.14, 0.1, p.hairColor, 0, 0.28, 0.36, 0.04);
+    }
+    if (signatureBody) {
+      const jacket = garment("chigurh-jacket");
+      box(jacket, 0.49, 0.5, 0.36, p.color, 0, -0.055, 0, 0.065);
+      box(jacket, 0.13, 0.42, 0.025, "#a59c7f", 0, -0.02, 0.19, 0.01);
+      for (const s of [-1, 1]) {
+        box(jacket, 0.12, 0.2, 0.04, "#71634b", s * 0.1, 0.11, 0.2, 0.012).rotation.z = s * 0.4;
+        box(jacket, 0.13, 0.11, 0.04, "#655842", s * 0.14, -0.15, 0.2, 0.012);
+      }
+      const coin = part("coin", elbows[1]);
+      cylinder(coin, "#c7c1a5", 0.045, 0.045, 0.014, 0, -0.19, 0.065).rotation.x = Math.PI / 2;
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "elastigirl") {
+    if (signatureHead) {
+      const mask = part("hero-mask");
+      // Rings leave the animated eyes visible through the black domino mask.
+      for (const s of [-1, 1]) {
+        mesh(mask, new T.TorusGeometry(0.15, 0.035, 8, 24), "#25232a", s * 0.215, 0.02, 0.37).scale.y = 0.85;
+        box(mask, 0.14, 0.5, 0.45, p.hairColor, s * 0.4, 0.01, -0.09, 0.06);
+      }
+      box(mask, 0.14, 0.055, 0.05, "#25232a", 0, 0.02, 0.39, 0.015);
+      box(mask, 0.87, 0.25, 0.74, p.hairColor, 0, 0.33, -0.05, 0.1);
+      box(mask, 0.83, 0.55, 0.2, p.hairColor, 0, 0.02, -0.32, 0.08);
+      box(mask, 0.54, 0.16, 0.18, p.hairColor, -0.15, 0.27, 0.3, 0.06).rotation.z = -0.22;
+    }
+    if (signatureBody) {
+      const suit = garment("incredibles-suit");
+      box(suit, 0.46, 0.46, 0.35, p.color, 0, -0.03, 0, 0.07);
+      box(suit, 0.46, 0.12, 0.36, "#25232a", 0, -0.2, 0, 0.04);
+      box(suit, 0.47, 0.045, 0.37, "#e59338", 0, -0.14, 0, 0.01);
+      ball(suit, "#eebd38", 0, 0.06, 0.19, 0.13, 0.09, 0.02);
+      ball(suit, "#25232a", 0, 0.06, 0.207, 0.1, 0.075, 0.012);
+      box(suit, 0.035, 0.08, 0.015, "#f8d04f", 0, 0.04, 0.22, 0.008);
+      ball(suit, "#f8d04f", 0, 0.11, 0.22, 0.023, 0.023, 0.01);
+      elbows.forEach((e) => box(e, 0.17, 0.24, 0.19, "#25232a", 0, -0.09, 0, 0.05));
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "scarlet-witch") {
+    if (signatureHead) {
+      const crown = part("scarlet-crown");
+      polygon(crown, [[-0.44, 0.14], [-0.43, 0.59], [-0.21, 0.37], [0, 0.48], [0.21, 0.37], [0.43, 0.59], [0.44, 0.14], [0.22, 0.23], [0, 0.1], [-0.22, 0.23]], p.color, 0.055, 0.365);
+      ball(crown, "#d45c67", 0, 0.32, 0.43, 0.045, 0.07, 0.02);
+    }
+    if (signatureBody) {
+      const body = garment("scarlet-costume");
+      box(body, 0.44, 0.43, 0.35, p.color, 0, -0.03, 0, 0.06);
+      for (const s of [-1, 1]) {
+        polygon(body, [[s * 0.06, 0.17], [s * 0.2, 0.17], [s * 0.11, -0.2], [0, -0.13]], "#532434", 0.025, 0.18);
+        const magic = part(`chaos-magic-${s}`, elbows[s === -1 ? 0 : 1]);
+        const orb = ball(magic, glow("#ed425b"), 0, -0.17, 0.13, 0.085);
+        mesh(magic, new T.TorusGeometry(0.12, 0.012, 6, 24), glow("#e86578"), 0, -0.17, 0.13);
+        rig.secondary.push({ object: orb, type: "light" });
+      }
+      cloak(p.color);
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "eleven") {
+    if (signatureHead) {
+      const hair = part("buzz-cut");
+      box(hair, 0.83, 0.18, 0.7, p.hairColor, 0, 0.32, -0.025, 0.08);
+      box(hair, 0.82, 0.4, 0.12, p.hairColor, 0, 0.08, -0.32, 0.05);
+    }
+    if (signatureBody) {
+      const dress = garment("eleven-dress");
+      cylinder(dress, p.color, 0.21, 0.35, 0.54, 0, -0.06, 0).scale.z = 0.75;
+      for (const s of [-1, 1]) {
+        ball(dress, "#f1e8dc", s * 0.09, 0.17, 0.17, 0.1, 0.05, 0.04);
+        box(dress, 0.11, 0.37, 0.35, "#405976", s * 0.2, 0.01, 0, 0.03);
+      }
+      arms.forEach((a, i) => {
+        hideMeshes(a);
+        hideMeshes(elbows[i]);
+        box(a, 0.18, 0.21, 0.2, "#405976", 0, -0.075, 0, 0.05);
+        box(elbows[i], 0.15, 0.14, 0.17, "#405976", 0, -0.04, 0, 0.04);
+        rig.hands[i].visible = true;
+      });
+      const waffle = part("waffle", elbows[1]);
+      box(waffle, 0.19, 0.19, 0.045, "#d8a45b", 0, -0.18, 0.09, 0.025);
+      for (const v of [-0.05, 0, 0.05]) {
+        box(waffle, 0.012, 0.16, 0.012, "#a77239", v, -0.18, 0.118, 0.003);
+        box(waffle, 0.16, 0.012, 0.012, "#a77239", 0, -0.18 + v, 0.118, 0.003);
+      }
+    }
+    if (signatureFeet) {
+      knees.forEach((k) => {
+        box(k, 0.16, 0.13, 0.17, "#f1e8dc", 0, -0.045, 0, 0.035);
+        box(k, 0.165, 0.02, 0.175, "#426a87", 0, -0.005, 0, 0.006);
+      });
+      paws(p.shoeColor);
+    }
+  }
+  if (["alf", "winnie-pooh", "cheburashka"].includes(id)) {
+    const g = newFace(p.skin, 0.88, 0.78, 0.74);
+    const fur = part("fur-head");
+    box(fur, 1, 0.88, 0.72, p.color, 0, 0.015, -0.12, 0.2);
+    g.position.z = 0.08;
+    const ears = part("round-ears");
+    for (const s of [-1, 1]) {
+      const big = id === "cheburashka";
+      const ear = pivot(ears, s * (big ? 0.67 : 0.43), big ? 0.03 : 0.37, -0.08);
+      ball(ear, p.color, 0, 0, 0, big ? 0.34 : 0.18, big ? 0.36 : 0.2, 0.14);
+      ball(ear, big ? "#aa7b50" : "#694831", 0, 0, 0.12, big ? 0.25 : 0.1, big ? 0.27 : 0.12, 0.035);
+      rig.secondary.push({ object: ear, type: "ear", side: s });
+    }
+    if (id === "alf") {
+      // Long ridged muzzle and the swept tuft distinguish ALF from the bears.
+      const snout = part("alf-snout");
+      ball(snout, p.color, 0, -0.07, 0.53, 0.22, 0.17, 0.29);
+      ball(snout, "#684730", 0, -0.015, 0.78, 0.12, 0.075, 0.055);
+      for (const z of [0.49, 0.58, 0.67])
+        tube(snout, [[-0.16, 0, z], [0, 0.08, z], [0.16, 0, z]], "#906036", 0.012);
+      for (let i = 0; i < 5; i++) {
+        const tuft = cone(fur, p.hairColor, 0.085, 0.28, -0.16 + i * 0.08, 0.51, -0.04, 7);
+        tuft.rotation.z = -0.35;
+      }
+      rig.mouth.position.set(0, -0.23, 0.57);
+      if (signatureBody) {
+        softBody(p.color, "#c08e55");
+        tail(p.color, p.color);
+      }
+    } else if (id === "winnie-pooh") {
+      for (let i = 0; i < 2; i++) {
+        const s = i ? 1 : -1;
+        ball(g, "#64452e", s * 0.205, 0.06, 0.39, 0.185, 0.22, 0.03);
+        rig.eyes[i].position.z = 0.43;
+        rig.eyes[i].scale.setScalar(0.72);
+      }
+      ball(g, "#d0a363", 0, -0.16, 0.41, 0.24, 0.15, 0.09);
+      ball(g, "#312c25", 0, -0.08, 0.5, 0.11, 0.08, 0.055);
+      rig.mouth.position.z = 0.49;
+      if (signatureBody) {
+        softBody(p.color, "#c79a59");
+        const honey = part("honey-pot", elbows[0]);
+        cylinder(honey, "#8e5a32", 0.1, 0.08, 0.16, 0, -0.2, 0.1);
+        cylinder(honey, "#e6b54b", 0.1, 0.1, 0.035, 0, -0.115, 0.1);
+      }
+    } else {
+      ball(g, "#443025", 0, -0.09, 0.415, 0.075, 0.05, 0.045);
+      if (signatureBody) softBody(p.color, "#ad8054");
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "carlson") {
+    if (signatureHead) {
+      const hair = part("ginger-hair");
+      box(hair, 0.83, 0.2, 0.68, p.hairColor, 0, 0.31, -0.05, 0.09);
+      box(hair, 0.8, 0.33, 0.16, p.hairColor, 0, 0.14, -0.32, 0.07);
+      for (let i = 0; i < 5; i++)
+        ball(hair, p.hairColor, -0.27 + i * 0.12, 0.35 + Math.sin(i) * 0.06, 0.25, 0.12, 0.13, 0.12);
+    }
+    if (signatureBody) {
+      const body = softBody(p.color);
+      ball(body, p.pantsColor, 0, -0.21, 0.03, 0.32, 0.21, 0.25);
+      box(body, 0.07, 0.42, 0.04, p.pantsColor, -0.13, -0.01, 0.255, 0.015).rotation.z = -0.15;
+      ball(body, "#e8cf84", -0.1, 0.05, 0.29, 0.045, 0.045, 0.018);
+      box(body, 0.23, 0.24, 0.16, "#8e5940", 0, -0.01, -0.29, 0.05);
+      const propeller = part("propeller", torso);
+      propeller.position.set(0, 0.02, -0.42);
+      for (const angle of [0, Math.PI / 2])
+        box(propeller, 0.75, 0.1, 0.055, "#b74832", 0, 0, 0, 0.04).rotation.z = angle;
+      ball(propeller, "#e7c377", 0, 0, -0.04, 0.075, 0.075, 0.045);
+      rig.secondary.push({ object: propeller, type: "propeller" });
+    }
+    paws(p.shoeColor);
+  }
+  if (id === "spongebob") {
+    const g = newFace(p.skin, 1.02, 0.85, 0.58);
+    const sponge = part("sponge-pores", g);
+    for (const [x, y, r] of [[-0.42, 0.3, 0.055], [0.4, 0.29, 0.06], [-0.44, -0.18, 0.045], [0.44, -0.27, 0.065], [-0.3, -0.34, 0.035], [0.32, 0.38, 0.03]])
+      ball(sponge, "#c0a42e", x, y, 0.294, r, r * 0.8, 0.012);
+    rig.eyes.forEach((eye) => {
+      eye.position.y = 0.1;
+      eye.children.forEach((child) => (child.visible = false));
+      ball(eye, "#fff9e6", 0, 0, 0.025, 0.19, 0.21, 0.06);
+      ball(eye, "#64a7c2", 0, 0, 0.08, 0.095, 0.115, 0.025);
+      ball(eye, "#212a32", 0, 0, 0.102, 0.052, 0.07, 0.012);
+      ball(eye, "#ffffff", -0.02, 0.035, 0.115, 0.02, 0.025, 0.008);
+      for (const x of [-0.1, 0, 0.1])
+        box(eye, 0.018, 0.1, 0.018, "#33302b", x, 0.21, 0.025, 0.006).rotation.z = -x * 3;
+    });
+    rig.brows.forEach((b) => (b.visible = false));
+    ball(g, p.skin, 0, -0.015, 0.41, 0.06, 0.13, 0.1);
+    rig.mouth.position.set(0, -0.24, 0.32);
+    rig.mouth.children.forEach((c) => (c.visible = false));
+    box(rig.mouth, 0.38, 0.12, 0.04, "#9c6032", 0, 0, 0, 0.045);
+    for (const s of [-1, 1]) {
+      box(rig.mouth, 0.07, 0.1, 0.04, "#fff9e6", s * 0.047, 0.015, 0.025, 0.01);
+      ball(g, "#e89b56", s * 0.34, -0.13, 0.31, 0.09, 0.045, 0.018);
+    }
+    if (signatureBody) {
+      const body = garment("square-pants");
+      box(body, 0.5, 0.19, 0.35, "#fff9e6", 0, 0.105, 0, 0.035);
+      box(body, 0.51, 0.27, 0.36, p.pantsColor, 0, -0.12, 0, 0.035);
+      polygon(body, [[0, 0.16], [-0.045, 0.04], [0, -0.02], [0.045, 0.04]], "#c73b36", 0.025, 0.19);
+      for (const x of [-0.17, -0.06, 0.06, 0.17])
+        box(body, 0.065, 0.025, 0.02, "#4f392b", x, -0.035, 0.19, 0.005);
+    }
+    if (signatureFeet) {
+      knees.forEach((k) => {
+        box(k, 0.16, 0.13, 0.18, "#fff9e6", 0, -0.045, 0, 0.03);
+        for (const [y, color] of [[0, "#c73b36"], [-0.035, "#64a7c2"]])
+          box(k, 0.165, 0.014, 0.185, color, 0, y, 0, 0.005);
+      });
+      paws(p.shoeColor);
+    }
   }
   if (id === "reg") {
     if (signatureHead) {
@@ -1317,5 +1656,6 @@ export function animateCharacter(rig, time) {
       object.rotation.z = base + Math.sin(time * 2.5 + seed) * 0.1;
     if (type === "light")
       object.material.emissiveIntensity = 0.65 + Math.sin(time * 3) * 0.25;
+    if (type === "propeller") object.rotation.z = time * 18;
   }
 }

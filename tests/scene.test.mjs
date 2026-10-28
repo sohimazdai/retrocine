@@ -309,12 +309,12 @@ test("character gallery filters, previews, saves and cancels while preserving pa
   const a = boot(),
     d = a.w.document;
   a.run("avatarModal()");
-  assert.equal(d.querySelectorAll("[data-look]").length, 28);
+  assert.equal(d.querySelectorAll("[data-look]").length, avatarModule.LOOKS.length);
   const name = d.querySelector("#avatarName");
   name.value = "Аня";
   name.dispatchEvent(new a.w.Event("input", { bubbles: true }));
   d.querySelector('[data-look-category="creatures"]').click();
-  assert.equal(d.querySelectorAll("[data-look]").length, 5);
+  assert.equal(d.querySelectorAll("[data-look]").length, avatarModule.LOOKS.filter((p) => p.category === "creatures").length);
   const search = d.querySelector("#lookSearch");
   search.value = "волк";
   search.dispatchEvent(new a.w.Event("input", { bubbles: true }));

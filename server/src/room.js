@@ -11,7 +11,10 @@ import {
   stepPushes,
   stateMap,
   releaseRides,
+  runMatchStep,
+  matchActive,
 } from "../../dist/state.js";
+import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
 import { projectile, PROJECTILES } from "../../dist/projectiles.js";
 import { LIMITS, clamp } from "../../dist/physics.js";
@@ -20,7 +23,7 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
-const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap"]);
+const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap", "melee"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
 // Stable per browser and room, without revealing the browser's secret uid to anyone.
@@ -190,6 +193,12 @@ export class Room {
         this.startPhysics();
       }
     for (const ride of releaseRides(this.state, peer.id, peer.pose)) this.broadcast({ t: "ride", ride });
+    // Drop them from any match in progress (a team left empty counts as the other team winning).
+    if (this.state.match) {
+      matchRemovePlayer(this.state.match, peer.id);
+      this.broadcast({ t: "match", match: serializeMatch(this.state.match) });
+      if (matchActive(this.state)) this.startPhysics();
+    }
     this.broadcast({ t: "leave", id: peer.id });
     this.log(`room ${this.id}: ${peer.id} left, ${this.peers.size} inside`);
   }
@@ -275,6 +284,11 @@ export class Room {
           if (!Number.isFinite(msg.ms) || msg.ms < 1500 || msg.ms > 600000) return;
           out.ms = Math.round(msg.ms);
         }
+        // A melee hit on another player (the victim applies the damage on their own client).
+        if (msg.k === "melee") {
+          if (typeof msg.target !== "string" || !this.peers.has(msg.target)) return;
+          out.target = msg.target;
+        }
         this.broadcast(out, peer);
         return;
       }
@@ -293,10 +307,12 @@ export class Room {
       name: peer.profile.name,
       now: now(),
       newId,
+      peers: [...this.peers.values()].map((p) => p.id),
     });
     if (!result) return;
     for (const { msg: out, others } of result.out) this.broadcast(out, others ? peer : null);
     if (result.physics) this.startPhysics();
+    if (msg.t.startsWith("match")) this.startPhysics();
     if (msg.t.startsWith("timer")) this.scheduleTimer();
     this.markDirty();
   }
@@ -336,7 +352,12 @@ export class Room {
       this.acc -= PHYS_DT;
       steps++;
     }
-    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state));
+    // Advance the team match (countdown, round ends, respawns) and tell everyone.
+    for (const m of runMatchStep(this.state, nowMs, [...this.peers.values()].map((p) => p.id))) {
+      this.broadcast(m);
+      this.markDirty();
+    }
+    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state));
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;

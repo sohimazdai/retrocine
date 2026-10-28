@@ -29,6 +29,7 @@ import * as climbingModule from "../dist/climbing.js";
 import * as kartingModule from "../dist/karting.js";
 import * as kartsModule from "../dist/karts.js";
 import * as tumbleModule from "../dist/tumble.js";
+import * as matchModule from "../dist/match.js";
 import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
@@ -219,6 +220,7 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...kartingModule,
     ...kartsModule,
     ...tumbleModule,
+    ...matchModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -1257,4 +1259,64 @@ test("race: driving into someone online tells everyone who was hit; their pose t
   for (let i = 6; i < 12; i++) a.server.emit({ t: "pose", id: "oleg", s: t1 + i * 33, x: 4, y: 0, z: 6.7, a: 0, vy: 0, g: 1 });
   a.tick(0.4);
   assert.equal(a.run("kartMeshes.size"), 1, "out of it, his kart is gone; yours stays");
+});
+
+test("paintball team match: R readies up, a 10 s countdown, a live round with health; cover stops a blast; dying ends the round and the next one respawns you; TAB shows the score", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "paintball" })');
+  a.tick(0.2);
+  const key = (type, code) => a.w.document.dispatchEvent(new a.w.KeyboardEvent(type, { code, bubbles: true }));
+  key("keydown", "KeyR");
+  key("keyup", "KeyR");
+  assert.equal(a.run("world.match.phase"), "countdown");
+  assert.match(a.w.document.querySelector("#matchBanner").textContent, /Бой через/);
+  // Offline the match runs on the wall clock: skip ahead past the countdown.
+  a.run("world.match.until = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("world.match.phase"), "live");
+  assert.ok(a.run("myTeam()"), "you are on a team");
+  assert.equal(a.run("active.hp"), 10);
+  assert.equal(a.run("!!active.teamRing && active.teamRing.visible"), true, "a team ring under you");
+  // A grenade going off right next to you: the closer, the more it hurts.
+  a.run("Object.assign(active, { x: 0, z: 8, y: 0, vy: 0, grounded: true, kx: 0, kz: 0 })");
+  a.run('onBoom({ x: 1.2, y: 0.4, z: 8, r: 4.6, power: 15, by: "someone" })');
+  const hp = a.run("active.hp");
+  assert(hp < 10 && hp > 0, `hurt but standing: ${hp}`);
+  a.tick(2);
+  // Behind a concrete barricade the same blast does nothing.
+  a.run("Object.assign(active, { x: 5.4, z: 5.1, y: 0, vy: 0, grounded: true, kx: 0, kz: 0, tumble: null })");
+  const before = a.run("active.hp");
+  a.run('onBoom({ x: 5.4, y: 0.4, z: 3.0, r: 4.6, power: 15, by: "someone" })');
+  assert.equal(a.run("active.hp"), before, "the barricade took the blast");
+  // Out: the round ends, and after the break the next round puts you back at full health.
+  a.run('takeDamage(10, "someone")');
+  assert.equal(a.run("active.dead"), true);
+  a.tick(0.3);
+  assert.equal(a.run("world.match.phase"), "roundover");
+  a.run("world.match.until = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("world.match.phase"), "live");
+  assert.equal(a.run("world.match.round"), 2);
+  assert.equal(a.run("active.dead"), false);
+  assert.equal(a.run("active.hp"), 10);
+  assert.equal(a.run("world.match.stats.self.d"), 1, "one death on the board");
+  // TAB holds the scoreboard open.
+  key("keydown", "Tab");
+  assert(a.w.document.querySelector("#scoreboard").classList.contains("on"));
+  assert.match(a.w.document.querySelector("#scoreBody").textContent, /Килы.*Очки.*Смерти/);
+  key("keyup", "Tab");
+  assert(!a.w.document.querySelector("#scoreboard").classList.contains("on"));
+});
+
+test("throwing on the run: only your speed along the throw adds to the shot, not sideways drift", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  const shot = (vel) =>
+    a.run(`(() => { const n = projectiles.length; releaseSnow(active, { to: new T.Vector3(active.x, 0.2, active.z - 6), w: "snow", pw: 1, vel: ${JSON.stringify(vel)} }); const pr = projectiles[n]; return { x: pr.v.x, z: pr.v.z }; })()`);
+  const still = shot([0, 0]),
+    forward = shot([0, -5]),
+    side = shot([5, 0]);
+  assert(Math.hypot(forward.x, forward.z) > Math.hypot(still.x, still.z) + 3, "running forward throws faster");
+  assert(Math.abs(Math.atan2(forward.x, forward.z) - Math.atan2(still.x, still.z)) < 1e-6, "same direction");
+  assert(Math.abs(side.x - still.x) < 1e-6 && Math.abs(side.z - still.z) < 1e-6, "sideways speed does not bend the shot");
 });

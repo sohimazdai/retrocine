@@ -64,7 +64,10 @@ import {
   dynamicObjects,
   freeSpot,
   THROW_SPEED,
+  runMatchStep,
+  matchActive,
 } from "./state.js";
+import { loadMatch, matchEnabled, projectileDamage, blastDamage, MAX_HP, TEAM_COLOR, DMG } from "./match.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
 import { Media } from "./media.js";
 import { apiUrl, currentRoom, roomLink } from "./config.js";
@@ -450,6 +453,216 @@ function knockOver(v) {
   active.climb = null;
   pending = null;
   startTumble(active, v);
+}
+
+// ——— Team match (paintball): your browser is the authority on your own health ———
+const matchId = () => (net?.connected ? net.id : "self");
+const myTeam = () => world.match?.teams?.[matchId()] || null;
+const teamColorHex = (team) => TEAM_COLOR[team] || null;
+function teamOf(p) {
+  const id = p === active ? matchId() : p.profile.id;
+  return world.match?.teams?.[id] || null;
+}
+const inMatchMap = () => matchEnabled(mapScene.map);
+// Live for you: a round is on and you are not out.
+const matchLive = () => world.match?.phase === "live" && world.match.alive?.[matchId()] !== false && !active.dead;
+function takeDamage(amount, byId) {
+  if (!matchLive() || amount <= 0) return;
+  active.hp = Math.max(0, (active.hp ?? MAX_HP) - amount);
+  active.hurt = 0.4;
+  op({ t: "match.dmg", by: byId || null, amount: Math.round(amount) });
+  if (active.hp <= 0) dieNow(byId);
+  renderHp();
+}
+function dieNow(byId) {
+  if (active.dead) return;
+  active.dead = true;
+  if (active.ride) leaveRide();
+  if (active.kart) leaveKart();
+  active.climb = null;
+  pending = null;
+  effects.puff(new T.Vector3(active.x, active.y + 0.9, active.z), teamColorHex(myTeam()) || "#d8d8d8", 16, 3, 0.05);
+  op({ t: "match.dead", by: byId || null });
+  toast("Вы выбыли — следующий раунд вернёт в бой", 2600);
+  renderMatchHud();
+}
+function respawnSelf(spawn) {
+  if (active.kart) delete active.kart;
+  Object.assign(active, { x: spawn.x, z: spawn.z, y: 0, vy: 0, grounded: true, angle: spawn.a ?? active.angle, kx: 0, kz: 0, hp: MAX_HP, dead: false, tumble: null, climb: null, ride: active.ride ? null : active.ride, slow: 0, noSprint: 0 });
+  pending = null;
+  renderHp();
+  renderMatchHud();
+}
+// A blast is fully blocked by solid, tall cover between its centre and you.
+function blastBlocked(ax, az, bx, bz) {
+  const boxes = mapScene.colliders().filter((b) => !b.y && !b.rail && b.h0 == null && b.h >= 1.6);
+  const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / 0.18);
+  for (let i = 1; i < steps; i++) {
+    const x = ax + ((bx - ax) * i) / steps,
+      z = az + ((bz - az) * i) / steps;
+    for (const b of boxes) if (inside(x, z, b)) return true;
+  }
+  return false;
+}
+// The nearest other avatar within melee reach.
+function meleeTarget() {
+  return players
+    .filter((p) => p !== active && Math.hypot(p.x - active.x, p.z - active.z) < 1.9 && !(p.remote ? p.flags?.tb : p.tumble))
+    .sort((a, b) => Math.hypot(a.x - active.x, a.z - active.z) - Math.hypot(b.x - active.x, b.z - active.z))[0];
+}
+function meleeSwing(target) {
+  startAction(active, "kick", worldTime, {});
+  active.angle = Math.atan2(target.x - active.x, target.z - active.z);
+  net.send({ t: "act", k: "melee", target: target.profile.id });
+  // Offline, nobody else runs the victim's client: apply it here.
+  if (!net.connected && target === active) takeDamage(DMG.melee, matchId());
+}
+// Offline, the browser advances the match clock itself.
+function stepMatchOffline() {
+  if (net.connected || !matchActive(world)) return;
+  for (const m of runMatchStep(world, clockNow(), [matchId()])) onServer(m);
+}
+// ——— Match HUD: a banner, your health, and the TAB scoreboard ———
+let scoreboardOpen = false;
+function initMatchHud() {
+  if ($("#matchHud")) return;
+  const style = document.createElement("style");
+  style.textContent = `
+#matchHud{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:40;display:none;flex-direction:column;align-items:center;gap:6px;font:600 14px system-ui,sans-serif;color:#f2f0ea;pointer-events:none;text-align:center}
+#matchHud.on{display:flex}
+#matchBanner{background:rgba(20,22,18,.72);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:7px 16px;backdrop-filter:blur(8px);box-shadow:0 6px 20px rgba(0,0,0,.35)}
+#matchBanner b{font-weight:800}
+#matchBanner .teamc{display:inline-flex;align-items:center;gap:4px;margin:0 5px}
+#matchBanner .dot{width:11px;height:11px;border-radius:50%;display:inline-block}
+#hpWrap{width:210px;height:14px;background:rgba(20,22,18,.72);border:1px solid rgba(255,255,255,.14);border-radius:8px;overflow:hidden;display:none}
+#hpWrap.on{display:block}
+#hpFill{height:100%;width:100%;transition:width .18s ease, background .2s}
+#matchHint{font-weight:600;opacity:.85;font-size:12.5px}
+#scoreboard{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:rgba(8,9,12,.55);backdrop-filter:blur(3px)}
+#scoreboard.on{display:flex}
+#scoreboard .card{background:rgba(22,24,20,.96);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:18px 20px;min-width:440px;max-width:92vw;color:#f2f0ea;font:14px system-ui,sans-serif;box-shadow:0 18px 60px rgba(0,0,0,.5)}
+#scoreboard h3{margin:0 0 10px;font-size:16px}
+#scoreboard table{width:100%;border-collapse:collapse}
+#scoreboard th,#scoreboard td{padding:5px 8px;text-align:right}
+#scoreboard th:first-child,#scoreboard td:first-child{text-align:left}
+#scoreboard th{font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.6;border-bottom:1px solid rgba(255,255,255,.12)}
+#scoreboard tr.teamrow td{font-weight:800;padding-top:12px;border-bottom:1px solid rgba(255,255,255,.1)}
+#scoreboard tr.me td{background:rgba(255,255,255,.06)}
+#scoreboard tr.out td:first-child{opacity:.5;text-decoration:line-through}
+#scoreboard .foot{margin-top:10px;opacity:.6;font-size:12px;text-align:center}`;
+  document.head.appendChild(style);
+  const hud = document.createElement("div");
+  hud.id = "matchHud";
+  hud.innerHTML = `<div id="matchBanner"></div><div id="hpWrap"><div id="hpFill"></div></div><div id="matchHint"></div>`;
+  document.body.appendChild(hud);
+  const sb = document.createElement("div");
+  sb.id = "scoreboard";
+  sb.innerHTML = `<div class="card"><h3>Счёт матча</h3><div id="scoreBody"></div><div class="foot">TAB — закрыть · R — готов к бою</div></div>`;
+  document.body.appendChild(sb);
+}
+function playerName(id) {
+  if (id === matchId()) return active.profile.name || "Вы";
+  return remotes.get(id)?.profile.name || players.find((p) => p.profile.id === id)?.profile.name || "Игрок";
+}
+function teamDot(team) {
+  return `<span class="dot" style="background:${TEAM_COLOR[team]}"></span>`;
+}
+function aliveCounts() {
+  const m = world.match,
+    c = { blue: 0, red: 0 };
+  for (const id of Object.keys(m.teams || {})) if (m.alive?.[id]) c[m.teams[id]]++;
+  return c;
+}
+function renderHp() {
+  const wrap = $("#hpWrap"),
+    fill = $("#hpFill");
+  if (!wrap) return;
+  const live = world.match?.phase === "live" && myTeam() && !active.dead;
+  wrap.classList.toggle("on", !!live);
+  if (!live) return;
+  const hp = Math.max(0, active.hp ?? MAX_HP);
+  fill.style.width = `${(hp / MAX_HP) * 100}%`;
+  fill.style.background = active.hurt > 0 ? "#fff" : hp > 5 ? teamColorHex(myTeam()) : hp > 2 ? "#e0a53a" : "#d8432f";
+}
+function renderMatchHud() {
+  initMatchHud();
+  const hud = $("#matchHud"),
+    banner = $("#matchBanner"),
+    hint = $("#matchHint");
+  const on = inMatchMap();
+  hud.classList.toggle("on", on);
+  if (!on) {
+    $("#scoreboard").classList.remove("on");
+    scoreboardOpen = false;
+    return;
+  }
+  const m = world.match || {},
+    ready = Object.values(m.ready || {}).filter(Boolean).length,
+    here = net.connected ? players.length : 1;
+  if (m.phase === "idle") {
+    const iAmReady = m.ready?.[matchId()];
+    banner.innerHTML = `Командный бой · готовы ${ready}/${here}`;
+    hint.textContent = iAmReady ? "Вы готовы — ждём остальных" : "Нажмите R, когда готовы";
+  } else if (m.phase === "countdown") {
+    const s = Math.max(0, Math.ceil((m.until - clockNow()) / 1000));
+    banner.innerHTML = `<b>Бой через ${s}…</b>`;
+    hint.textContent = "Готовьтесь! Команды распределит сервер";
+  } else if (m.phase === "live") {
+    const c = aliveCounts();
+    banner.innerHTML = `Раунд ${m.round} · <span class="teamc">${teamDot("blue")}${c.blue}</span> <span class="teamc">${teamDot("red")}${c.red}</span>`;
+    hint.textContent = active.dead ? "Вы выбыли — ждите следующего раунда" : myTeam() ? `Ваша команда: ${myTeam() === "blue" ? "синие" : "красные"}` : "Вы наблюдаете — вступите в следующем матче";
+  } else if (m.phase === "roundover") {
+    banner.innerHTML = m.winner ? `<b>${m.winner === "blue" ? "Победа синих!" : "Победа красных!"}</b>` : `<b>Ничья</b>`;
+    hint.textContent = "Следующий раунд вот-вот…";
+  }
+  renderHp();
+  if (scoreboardOpen) renderScoreboard();
+}
+function renderScoreboard() {
+  initMatchHud();
+  const m = world.match || {},
+    rows = (team) =>
+      Object.keys(m.teams || {})
+        .filter((id) => m.teams[id] === team)
+        .map((id) => ({ id, k: m.stats?.[id]?.[0] ?? (m.stats?.[id]?.k || 0), d: m.stats?.[id]?.[1] ?? (m.stats?.[id]?.d || 0), p: m.stats?.[id]?.[2] ?? (m.stats?.[id]?.p || 0), alive: m.alive?.[id] }))
+        .sort((a, b) => b.k - a.k || b.p - a.p || a.d - b.d);
+  const body = ["blue", "red"]
+    .map((team) => {
+      const rs = rows(team),
+        tot = rs.reduce((o, r) => ({ k: o.k + r.k, d: o.d + r.d, p: o.p + r.p }), { k: 0, d: 0, p: 0 });
+      return (
+        `<tr class="teamrow"><td>${teamDot(team)} ${team === "blue" ? "Синие" : "Красные"}</td><td>${tot.k}</td><td>${tot.p}</td><td>${tot.d}</td></tr>` +
+        rs.map((r) => `<tr class="${r.id === matchId() ? "me" : ""} ${r.alive ? "" : "out"}"><td>${playerName(r.id)}</td><td>${r.k}</td><td>${r.p}</td><td>${r.d}</td></tr>`).join("")
+      );
+    })
+    .join("");
+  $("#scoreBody").innerHTML = `<table><thead><tr><th>Игрок</th><th>Килы</th><th>Очки</th><th>Смерти</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+function toggleScoreboard(show) {
+  initMatchHud();
+  scoreboardOpen = show ?? !scoreboardOpen;
+  if (scoreboardOpen && !inMatchMap()) scoreboardOpen = false;
+  if (scoreboardOpen) renderScoreboard();
+  $("#scoreboard").classList.toggle("on", scoreboardOpen);
+}
+// A coloured ring on the ground marks each player's team during a match.
+function ensureTeamRing(p) {
+  const team = teamOf(p);
+  if (!team) {
+    if (p.teamRing) p.teamRing.visible = false;
+    return;
+  }
+  if (!p.teamRing) {
+    const ring = new T.Mesh(new T.RingGeometry(0.42, 0.56, 28), new T.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.02;
+    p.root.add(ring);
+    p.teamRing = ring;
+  }
+  const dead = world.match?.alive?.[p === active ? matchId() : p.profile.id] === false;
+  p.teamRing.visible = true;
+  p.teamRing.material.color.set(dead ? "#8a8a8a" : TEAM_COLOR[team]);
+  p.teamRing.material.opacity = dead ? 0.3 : 0.85;
 }
 function updateRides(dt) {
   updateTrolleys();
@@ -1136,6 +1349,7 @@ function chargeLevel() {
   return charge ? Math.min(1, (performance.now() - charge.start) / 1000 / CHARGE_TIME) : 0;
 }
 function throwSnow(hit, power = 1) {
+  if (active.dead) return;
   const kind = projectile(weapon),
     now = performance.now();
   if (now < (cooldownUntil[kind.id] || 0)) {
@@ -1168,9 +1382,19 @@ function releaseSnow(player, payload) {
   from.addScaledVector(direction, 0.5);
   const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1),
     v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g);
-  // Throwing on the move carries the avatar's own momentum into the shot.
-  v.x += payload.vel?.[0] ?? player.velocityX ?? 0;
-  v.z += payload.vel?.[1] ?? player.velocityZ ?? 0;
+  // Throwing on the move: your speed along the throw (forward or back, not sideways) adds to the
+  // shot's speed; the direction stays where you aimed.
+  {
+    const vx = payload.vel?.[0] ?? player.velocityX ?? 0,
+      vz = payload.vel?.[1] ?? player.velocityZ ?? 0,
+      h = Math.hypot(v.x, v.z);
+    if (h > 1e-6) {
+      const along = (vx * v.x + vz * v.z) / h,
+        k = Math.max(0.3, (h + along) / h);
+      v.x *= k;
+      v.z *= k;
+    }
+  }
   const mesh = projectileMesh(kind);
   mesh.position.copy(from);
   scene.add(mesh);
@@ -1218,6 +1442,9 @@ function burst(pos, kind, snowOwner = "self", pr = null) {
           p.vy = Math.min(7, 2.1 + knock * 0.35);
           p.grounded = false;
         }
+        // In a match, a direct hit costs health (friendly fire counts; blasts are handled on boom).
+        const by = snowOwner === "self" ? matchId() : snowOwner;
+        if (!k.explosion && by !== matchId()) takeDamage(projectileDamage(k.id), by);
       }
     }
   }
@@ -1270,6 +1497,8 @@ function onBoom(m) {
     }
     active.hit = 0.9;
     pending = null;
+    // Match damage falls off with distance and is fully stopped by solid cover between you and it.
+    if (matchLive() && !blastBlocked(m.x, m.z, active.x, active.z)) takeDamage(blastDamage(d, m.r), m.by === "self" ? matchId() : m.by);
   }
   for (const p of remotes.values()) if (Math.hypot(p.x - m.x, p.z - m.z) < m.r) p.hit = 0.8;
   for (const [, mesh] of noteMeshes)
@@ -1317,6 +1546,7 @@ function hangFromBar(bar) {
 const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y - p.y < 1.45 && c.y - p.y > -0.9;
 function kickNearest() {
   if (active.tumble) return;
+  if (active.dead) return;
   if (active.kart) {
     leaveKart();
     return;
@@ -1358,10 +1588,15 @@ function kickNearest() {
         Math.hypot(a.x - active.x, a.z - active.z) -
         Math.hypot(b.x - active.x, b.z - active.z),
     )[0];
+  // A nearby player can be hit at close range (a shove, or half your health in a match); if an
+  // opponent is closer than any ball, swing at them. E always does something, even into the air.
+  const foe = meleeTarget(),
+    foeD = foe ? Math.hypot(foe.x - active.x, foe.z - active.z) : Infinity,
+    nearD = near ? Math.hypot(near.x - active.x, near.z - active.z) : Infinity;
+  if (foe && foeD <= nearD) return meleeSwing(foe);
   if (near?.kind === "basketball") shoot(near);
-  else if (near && startAction(active, "kick", worldTime, { cube: near }))
-    net.send({ t: "act", k: "kick", target: near.id });
-  else toast("Подойдите к мячу или маленькому кубику и нажмите E", 1800);
+  else if (near && startAction(active, "kick", worldTime, { cube: near })) net.send({ t: "act", k: "kick", target: near.id });
+  else startAction(active, "kick", worldTime, {});
 }
 function modal(title, body, wide = false) {
   avatarEditor?.dispose();
@@ -2107,6 +2342,14 @@ document.addEventListener("keydown", (e) => {
     if (!e.repeat) doJump();
   }
   if (e.code === "KeyE" && !e.repeat) kickNearest();
+  // Team match: R to ready up (while waiting), hold TAB for the score.
+  if (e.code === "KeyR" && !e.repeat && inMatchMap() && world.match?.phase === "idle") {
+    op({ t: world.match.ready?.[matchId()] ? "match.unready" : "match.ready" });
+  }
+  if (e.code === "Tab") {
+    e.preventDefault();
+    if (!e.repeat && inMatchMap()) toggleScoreboard(true);
+  }
   if (e.code === "KeyV") setTool("interact");
   if (e.code === "KeyX") setTool("snow");
   if (e.code === "KeyN") setTool("note");
@@ -2122,6 +2365,7 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("keyup", (e) => {
   if (keyMap[e.code]) keys.delete(keyMap[e.code]);
+  if (e.code === "Tab") toggleScoreboard(false);
   if (e.key === "Shift") sprinting = false;
   if (e.code === "Space") spaceHeld = false;
 });
@@ -2189,6 +2433,8 @@ function updateSeesaws(dt) {
 }
 function physics(dt) {
   worldTime += dt;
+  if (active.hurt > 0) active.hurt = Math.max(0, active.hurt - dt);
+  stepMatchOffline();
   updateSeesaws(dt);
   mapScene.tickTips(dt);
   const obstacles = mapScene.colliders();
@@ -2463,6 +2709,7 @@ function visual(dt) {
   for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
+    ensureTeamRing(p);
     if (!p.remote && sledding(p)) {
       // On a sled you face down the slope.
       const d = gradient(p.support, p.x, p.z),
@@ -2986,6 +3233,20 @@ function onServer(m, at) {
         if (m.target === net.id) knockOver(m.v);
         break;
       }
+      if (m.k === "melee") {
+        // You were hit in melee: a shove and, in a match, a chunk of health.
+        if (m.target === net.id) {
+          const by = remotes.get(m.id);
+          const dir = by ? new T.Vector3(active.x - by.x, 0, active.z - by.z) : new T.Vector3(Math.sin(active.angle), 0, Math.cos(active.angle));
+          if (dir.lengthSq() < 1e-4) dir.set(0, 0, 1);
+          dir.normalize();
+          active.kx = (active.kx || 0) + dir.x * 4;
+          active.kz = (active.kz || 0) + dir.z * 4;
+          active.hit = 0.6;
+          takeDamage(DMG.melee, m.id);
+        }
+        break;
+      }
       if (m.k === "lap") {
         const p = remotes.get(m.id);
         if (p && recordLap(p.profile.name, m.ms / 1000)) toast(`${p.profile.name}: лучший круг ${lapTime(m.ms / 1000)}`, 2500);
@@ -3046,6 +3307,17 @@ function onServer(m, at) {
     case "ride":
       onRide(m.ride);
       break;
+    case "match": {
+      const wasLive = world.match?.phase;
+      world.match = loadMatch(m.match);
+      // A new round: jump to your spawn, full health, back in the fight.
+      const spawn = m.spawns?.[matchId()];
+      if (spawn) respawnSelf(spawn);
+      else if (world.match.alive?.[matchId()] !== false && wasLive !== "live" && world.match.phase === "live") active.hp = MAX_HP;
+      if (world.match.phase === "idle") active.dead = false;
+      renderMatchHud();
+      break;
+    }
     case "reset": {
       delete active.ride;
       delete active.kart;
@@ -3053,10 +3325,11 @@ function onServer(m, at) {
       active.climb = null;
       loadState(createState(m.state, uid), m.objs);
       // Everyone starts the new map at its entrance.
-      Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0 });
+      Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0, hp: MAX_HP, dead: false, slow: 0 });
       pending = null;
       const who = m.by === net.id || m.by === "self" ? "Вы" : remotes.get(m.by)?.profile.name || m.name || "Кто-то";
       toast(`${who} — карта «${mapDef(world.map).title}»`, 3500);
+      renderMatchHud();
       break;
     }
     case "timer":
@@ -3240,6 +3513,11 @@ function startNetwork() {
   if (/[?&]debug\b/.test(location.search))
     window.kino = { players, world, remotes, net, mediaClient, op, camera, avatarModal, editor: () => avatarEditor, notes: () => notes, active: () => active };
   setInterval(renderPresence, 2000);
+  initMatchHud();
+  active.hp = MAX_HP;
+  renderMatchHud();
+  // Keep the match banner's countdown ticking.
+  setInterval(() => inMatchMap() && renderMatchHud(), 250);
   // Browsers only play sound after a gesture: the first click in the room unlocks it.
   window.addEventListener("pointerdown", () => mediaClient.startAudio(), true);
   if (!net.WebSocketImpl) {

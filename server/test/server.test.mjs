@@ -489,3 +489,34 @@ test("karts: only a driver can knock someone over, the throw is limited; laps an
   b.close();
   await app.close();
 });
+
+test("team match: everyone readying up starts the countdown for all; melee reaches a real player only; a throw carries the thrower's speed", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("paintball-room", { name: "Аня" });
+  await b.join("paintball-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "paintball" });
+  await b.wait((m) => m.t === "reset");
+  // Damage before a round is live counts for nothing.
+  a.send({ t: "match.dmg", by: b.welcome.id, amount: 5 });
+  a.send({ t: "match.ready" });
+  const one = await b.wait((m) => m.t === "match" && m.match.phase === "idle");
+  assert.equal(one.match.phase, "idle", "one of two ready: still waiting");
+  b.send({ t: "match.ready" });
+  const go = await a.wait((m) => m.t === "match" && m.match.phase === "countdown");
+  assert(go.match.until > Date.now() + 8000, "a 10 s countdown");
+  // Melee: relayed to the target, refused for someone not in the room.
+  a.send({ t: "act", k: "melee", target: "ghost" });
+  a.send({ t: "act", k: "melee", target: b.welcome.id });
+  const hit = await b.wait((m) => m.t === "act" && m.k === "melee");
+  assert.equal(hit.target, b.welcome.id);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(b.inbox.filter((m) => m.t === "act" && m.k === "melee").length, 1);
+  a.send({ t: "act", k: "throw", to: [1, 0.2, 1], w: "snow", pw: 1, vel: [40, -3] });
+  const thrown = await b.wait((m) => m.t === "act" && m.k === "throw");
+  assert.deepEqual(thrown.vel, [12, -3], "speed is clamped");
+  a.close();
+  b.close();
+  await app.close();
+});

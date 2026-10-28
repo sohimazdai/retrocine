@@ -33,6 +33,7 @@ import {
 } from "./world.js";
 import { MAPS } from "./maps/index.js";
 import { projectile } from "./projectiles.js";
+import * as match from "./match.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
@@ -76,6 +77,7 @@ export function createState(saved = {}, newId) {
     rides,
     structures,
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
+    match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
     flags: {},
     lifts: {},
     v: 0,
@@ -118,6 +120,7 @@ export function serializeState(s) {
     rides: (s.rides || []).map(({ id, kind, x, z, a, by }) => ({ id, kind, x, z, a, by })),
     structures: s.structures,
     scores: s.scores,
+    match: s.match ? match.serializeMatch(s.match) : undefined,
     timer: s.timer,
   };
 }
@@ -464,6 +467,25 @@ export function applyOp(s, op, ctx) {
       all({ t: "timer", timer: s.timer });
       break;
     }
+    // ——— Team match (paintball) ———
+    case "match.ready": {
+      if (!match.matchEnabled(stateMap(s))) return null;
+      if (match.ready(s.match, ctx.peer, ctx.now, ctx.peers || [ctx.peer])) { all({ t: "match", match: match.serializeMatch(s.match) }); physics = true; }
+      break;
+    }
+    case "match.unready": {
+      match.unready(s.match, ctx.peer);
+      all({ t: "match", match: match.serializeMatch(s.match) });
+      break;
+    }
+    case "match.dmg": {
+      if (match.damage(s.match, ctx.peer, typeof op.by === "string" ? op.by : null, num(op.amount, 0, 10))) all({ t: "match", match: match.serializeMatch(s.match) });
+      break;
+    }
+    case "match.dead": {
+      if (match.died(s.match, ctx.peer, typeof op.by === "string" ? op.by : null)) all({ t: "match", match: match.serializeMatch(s.match) });
+      break;
+    }
     default:
       return null;
   }
@@ -491,7 +513,22 @@ export const STATE_OPS = new Set([
   "timer.start",
   "timer.toggle",
   "timer.hide",
+  "match.ready",
+  "match.unready",
+  "match.dmg",
+  "match.dead",
 ]);
+
+// Advances the match clock (countdown, round transitions). Returns broadcast messages. The server
+// calls it each tick; the browser calls it in its own loop offline. Each round-start message carries
+// `spawns` so clients can reposition their own avatar.
+export function runMatchStep(s, now, peerIds, rand = Math.random) {
+  if (!s.match || !match.matchEnabled(stateMap(s))) return [];
+  return match.stepMatch(s.match, now, peerIds, stateMap(s), rand).map((patch) => ({ t: "match", match: match.serializeMatch(s.match), spawns: patch.spawns }));
+}
+export function matchActive(s) {
+  return s.match && s.match.phase !== "idle";
+}
 
 // ——— Pushing and lifting props (Shift) ———
 // pushers: [{ id, x, y, z, mx, mz }] — avatars holding Shift, their position and input direction.

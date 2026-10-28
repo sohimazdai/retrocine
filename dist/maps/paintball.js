@@ -57,6 +57,7 @@ function hill(x, z, w, d, h) {
 export default {
   id: "paintball",
   camZoom: 1.3,
+  teamplay: true,
   backdrop: "forest",
   title: "Пейнтбол",
   description: "Надувные укрытия, катушки, стога, столы, баррикады, холм и окопы",

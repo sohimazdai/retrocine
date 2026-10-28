@@ -2185,6 +2185,7 @@ function updateSeesaws(dt) {
 function physics(dt) {
   worldTime += dt;
   updateSeesaws(dt);
+  mapScene.tickTips(dt);
   const obstacles = mapScene.colliders();
   const loose = dynamicObjects(world);
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
@@ -2681,7 +2682,7 @@ function throttled(key, fn, interval = 50) {
   fn();
 }
 // Moves a structure (or the big cube) and carries your avatar if it stands on top.
-function moveStructure(id, x, z, y = 0) {
+function moveStructure(id, x, z, y = 0, tip = null) {
   const s = mapScene.props.get(id);
   if (!s) return;
   const dy = y - (s.y || 0);
@@ -2694,8 +2695,8 @@ function moveStructure(id, x, z, y = 0) {
     active.z += z - s.z;
     active.y += dy;
   }
-  mapScene.move(id, x, z, y);
-  world.structures[id] = y ? { x, z, y } : { x, z };
+  mapScene.move(id, x, z, y, tip);
+  world.structures[id] = { x, z, ...(y ? { y } : {}), ...(tip && tip.ta ? { tx: tip.tx, tz: tip.tz, ta: tip.ta } : {}) };
   world.v = (world.v || 0) + 1;
 }
 // ——— Shift: sprint, push, lift ———
@@ -2901,7 +2902,7 @@ function loadState(fresh, objs) {
   const old = new Set(mapScene.pickables);
   if (mapChanged) mapScene.build(mapDef(world.map), world.structures, world.balls);
   else {
-    for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0);
+    for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0, pos.ta ? pos : null);
     mapScene.setBalls(world.balls);
   }
   pickables = [...pickables.filter((p) => !old.has(p)), ...mapScene.pickables];
@@ -3010,7 +3011,7 @@ function onServer(m, at) {
       applyObjects(m);
       break;
     case "struct":
-      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z, m.y || 0);
+      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z, m.y || 0, m.ta ? { tx: m.tx, tz: m.tz, ta: m.ta } : null);
       liftedBy[m.id] = m.by || [];
       break;
     case "boom":

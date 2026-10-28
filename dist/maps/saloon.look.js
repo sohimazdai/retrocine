@@ -90,7 +90,39 @@ function stool(g, p) {
   }
   mesh(g, new T.TorusGeometry(0.17, 0.015, 6, 18), mat(BRASS, { metal: 0.8, roughness: 0.3 }), 0, 0.25, 0).rotation.x = Math.PI / 2;
 }
-registerProps({ bar, piano, "saloon-table": saloonTable, chair, stool });
+// An oval green-felt poker table on a carved pedestal, with a padded leather rail, cards and chips.
+function pokerTable(g, p) {
+  const c = p.colliders[0],
+    rx = c.radius,
+    rz = c.radius * 0.72,
+    top = c.h;
+  const oval = (r, y, h, m, seg = 36) => {
+    const mn = mesh(g, new T.CylinderGeometry(r, r, h, seg), m, 0, y, 0);
+    mn.scale.z = rz / rx;
+    return mn;
+  };
+  // Pedestal and splayed foot.
+  mesh(g, new T.CylinderGeometry(0.16, 0.2, top - 0.08, 12), mat(DARK), 0, (top - 0.08) / 2, 0);
+  const foot = mesh(g, new T.CylinderGeometry(0.5, 0.56, 0.08, 20), mat(DARK), 0, 0.04, 0);
+  foot.scale.z = rz / rx;
+  // Felt top, then a raised wooden rail around it.
+  oval(rx - 0.12, top - 0.02, 0.05, mat("#1f6f46", { roughness: 0.95 }));
+  const rail = oval(rx, top, 0.1, mat("#5a2f1c", { roughness: 0.5 }));
+  oval(rx - 0.02, top + 0.055, 0.06, mat("#6b2130", { roughness: 0.6 }));
+  oval(rx - 0.16, top + 0.055, 0.04, mat("#1f6f46", { roughness: 0.95 }));
+  // Scattered cards and a few stacks of chips.
+  const r = rng(Math.round(p.x * 13 + p.z * 5) + 7);
+  for (let i = 0; i < 5; i++) {
+    const card = mesh(g, new T.BoxGeometry(0.12, 0.004, 0.17), mat("#f6f2ea"), (r() - 0.5) * 1.1, top + 0.03, (r() - 0.5) * 0.7, false);
+    card.rotation.y = r() * Math.PI;
+  }
+  for (let i = 0; i < 4; i++) {
+    const n = 2 + Math.floor(r() * 4);
+    for (let k = 0; k < n; k++)
+      mesh(g, new T.CylinderGeometry(0.06, 0.06, 0.018, 14), mat(["#c0392b", "#2c3e50", "#f1c40f", "#ecf0f1"][i]), -0.6 + i * 0.4, top + 0.035 + k * 0.018, 0.28 + (r() - 0.5) * 0.1, false);
+  }
+}
+registerProps({ bar, piano, "saloon-table": saloonTable, "poker-table": pokerTable, chair, stool });
 // Bottles on the shooting-gallery shelves.
 BALL_BUILDERS.bottle = (g, b) => {
   const r = b.size / 2,

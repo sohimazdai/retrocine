@@ -36,6 +36,9 @@ import { projectile } from "./projectiles.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
+// Furniture topples when the force on it exceeds this times its weight; it ends up lying this far over.
+const TOPPLE_FORCE = 3.5,
+  TOPPLE_LIE = 1.45;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
 export function createState(saved = {}, newId) {
@@ -620,10 +623,25 @@ export function applyBlast(s, x, y, z, radius, power) {
     const { gap, dx, dz } = gapTo(prop, pos, x, z);
     if (gap > radius) continue;
     const len = Math.hypot(dx, dz) || 1,
-      shift = (power * (1 - Math.max(0, gap) / radius) * 0.05) / prop.weight;
-    const next = clampProp(prop, pos.x - (dx / len) * shift, pos.z - (dz / len) * shift);
-    if (overlapsOthers(s, prop, next)) continue;
-    setPropPosition(s, prop.id, next);
+      strength = power * (1 - Math.max(0, gap) / radius),
+      // The push is away from the blast.
+      px = -dx / len,
+      pz = -dz / len;
+    if (strength > prop.weight * TOPPLE_FORCE) {
+      // A strong enough blast topples the prop: it flies a little and lands on its side.
+      const slide = clamp(0.25 + (strength / prop.weight) * 0.05, 0, 1.1);
+      let next = clampProp(prop, pos.x + px * slide, pos.z + pz * slide);
+      if (overlapsOthers(s, prop, next)) next = { x: pos.x, z: pos.z };
+      // It tips about the horizontal axis across the push, falling in the push direction.
+      s.structures[prop.id] = { x: next.x, z: next.z, tx: -pz, tz: px, ta: TOPPLE_LIE };
+    } else {
+      const shift = (strength * 0.05) / prop.weight;
+      const next = clampProp(prop, pos.x + px * shift, pos.z + pz * shift);
+      if (overlapsOthers(s, prop, next)) continue;
+      // Keep it toppled if it already was.
+      const keep = pos.ta ? { tx: pos.tx, tz: pos.tz, ta: pos.ta } : {};
+      s.structures[prop.id] = { ...next, ...keep };
+    }
     moved.push({ id: prop.id, ...s.structures[prop.id] });
   }
   return moved;

@@ -214,6 +214,13 @@ export class MapScene {
         waypoints: info.waypoints || [],
         movable: Number.isFinite(info.weight),
       });
+      // A prop that is already toppled (e.g. for someone joining late) starts lying over.
+      if (pos.ta) {
+        const s = this.props.get(info.id);
+        s.tipTarget = { tx: pos.tx, tz: pos.tz, ta: pos.ta };
+        s.tip = { ...s.tipTarget };
+        this.applyTip(s);
+      }
       this.pickables.push(root);
     }
     this.setBalls(balls || []);
@@ -238,14 +245,59 @@ export class MapScene {
       this.pickables.push(mesh);
     }
   }
-  move(id, x, z, y = 0) {
+  move(id, x, z, y = 0, tip = null) {
     const s = this.props.get(id);
     if (!s) return;
     s.x = x;
     s.z = z;
     s.y = y;
-    s.root.position.set(x, y, z);
+    // A toppled prop tips over about a horizontal axis; the client eases the fall (see tickTips).
+    s.tipTarget = tip && tip.ta ? { tx: tip.tx, tz: tip.tz, ta: tip.ta } : null;
+    if (!s.tip) s.tip = { tx: s.tipTarget?.tx || 1, tz: s.tipTarget?.tz || 0, ta: 0 };
+    this.applyTip(s);
     this.version++;
+  }
+  // The height to lift a toppled prop so its base does not sink through the floor.
+  tipLift(s) {
+    if (s.lift == null) s.lift = Math.max(0.25, ...s.localColliders.map((c) => c.h || 0)) / 2;
+    return s.lift;
+  }
+  applyTip(s) {
+    const t = s.tip;
+    if (!t || t.ta < 1e-3) {
+      s.root.quaternion.identity();
+      s.root.rotation.y = s.info.rot || 0;
+      s.root.position.set(s.x, s.y || 0, s.z);
+      return;
+    }
+    const axis = new T.Vector3(t.tx, 0, t.tz);
+    if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
+    axis.normalize();
+    const q = new T.Quaternion().setFromAxisAngle(axis, t.ta);
+    q.multiply(new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), s.info.rot || 0));
+    s.root.quaternion.copy(q);
+    s.root.position.set(s.x, (s.y || 0) + this.tipLift(s) * Math.sin(t.ta), s.z);
+  }
+  // Eases toppling props toward their resting angle each frame.
+  tickTips(dt) {
+    for (const s of this.props.values()) {
+      const target = s.tipTarget?.ta || 0;
+      if (s.tip && s.tipTarget) {
+        s.tip.tx = s.tipTarget.tx;
+        s.tip.tz = s.tipTarget.tz;
+      }
+      if (!s.tip || Math.abs(s.tip.ta - target) < 1e-3) {
+        if (s.tip && s.tip.ta !== target) {
+          s.tip.ta = target;
+          this.applyTip(s);
+        }
+        continue;
+      }
+      // Fall accelerates, stand-up is quicker.
+      const rate = target > s.tip.ta ? 7 + s.tip.ta * 6 : 14;
+      s.tip.ta += (target - s.tip.ta) * Math.min(1, rate * dt);
+      this.applyTip(s);
+    }
   }
   // Seesaw tilt (−1…1): changes the plank's slope in the colliders and its angle on screen.
   setTilt(id, tilt) {

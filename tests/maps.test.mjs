@@ -292,3 +292,25 @@ test("rink: you slide down the hill on a sled and roll out at the bottom", () =>
   for (let i = 0; i < 120 * 1.5; i++) stepBody(q, { x: 1, z: 0 }, boxes, 1 / 120);
   assert(q.y > 2.3 && q.grounded, `still on top at ${q.x.toFixed(2)}, ${q.y}`);
 });
+
+test("a strong blast topples nearby furniture onto its side; a toppled prop is a low, wider obstacle", () => {
+  const s = createState({ map: "saloon" }, newId);
+  const chair = mapProps(mapDef("saloon")).find((p) => p.id === "table-a-chair-l");
+  const pos0 = s.structures[chair.id];
+  // A grenade-strength blast right on the chair.
+  const moved = applyOp(s, { t: "boom", kind: "grenade", x: pos0.x + 0.1, y: 0.4, z: pos0.z }, { peer: "self", newId }).out.filter((m) => m.msg.t === "struct");
+  const tipped = s.structures[chair.id];
+  assert(tipped.ta > 1, `the chair is lying over: ${tipped.ta}`);
+  assert(Number.isFinite(tipped.tx) && Number.isFinite(tipped.tz), "it has a tip axis");
+  assert(moved.some((m) => m.msg.id === chair.id && m.msg.ta), "everyone is told it toppled");
+  // The upright chair is ~0.48 tall; toppled it is lower and spread wider.
+  const upright = propColliders(chair, pos0)[0].h;
+  const lying = propColliders(chair, tipped)[0];
+  assert(lying.h < upright, `lower lying down: ${lying.h} < ${upright}`);
+  const area = (c) => (c.shape === "cylinder" ? Math.PI * c.radius ** 2 : c.w * c.d);
+  assert(area(lying) > area(propColliders(chair, pos0)[0]), "wider footprint on its side");
+  // A piano is heavy (weight 3): a blast from across the room only nudges it, no topple.
+  const piano0 = s.structures.piano;
+  applyOp(s, { t: "boom", kind: "fireball", x: piano0.x + 3.6, y: 0.4, z: piano0.z + 3.6 }, { peer: "self", newId });
+  assert(!s.structures.piano.ta, "the piano stays standing");
+});

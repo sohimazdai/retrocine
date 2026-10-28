@@ -83,9 +83,21 @@ export function seesawCollider(c, tilt = 1) {
     t = clamp(tilt, -1, 1);
   return { ...c, h0: mid - t * swing, h1: mid + t * swing, h: mid + swing };
 }
+// A toppled prop (pos.ta is how far over it is, 0…~1.5) lies flat: a low, wider obstacle you bump
+// into or step onto, like a knocked-over barrel.
+function toppled(c, ta) {
+  const spread = (c.h || 0.5) * 0.4 * Math.sin(ta),
+    h = 0.3 + 0.22 * Math.cos(ta);
+  if (c.shape === "cylinder") return { ...c, radius: (c.radius || 0.3) + spread, h };
+  return { ...c, w: (c.w || 0.5) + spread * 2, d: (c.d || 0.5) + spread * 2, h };
+}
 export function propColliders(info, pos) {
   const p = pos || info;
-  return info.local.map((c) => lifted({ ...(c.seesaw ? seesawCollider(c, p.tilt ?? 1) : c), x: p.x + c.x, z: p.z + c.z, prop: info.id }, p.y));
+  return info.local.map((c) => {
+    let cc = c.seesaw ? seesawCollider(c, p.tilt ?? 1) : c;
+    if (p.ta) cc = toppled(cc, p.ta);
+    return lifted({ ...cc, x: p.x + cc.x, z: p.z + cc.z, prop: info.id }, p.y);
+  });
 }
 export function obstacles(map, positions) {
   return [...(map.statics || []), ...mapProps(map).flatMap((p) => propColliders(p, positions?.[p.id]))];

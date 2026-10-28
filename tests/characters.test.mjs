@@ -7,9 +7,10 @@ import { animateRig } from "../dist/animation.js";
 import { EMOTIONS } from "../dist/emotions.js";
 import { framePortrait } from "../dist/room.js";
 
-test("all 22 characters keep identity across selecting, saving and returning to a basic avatar", () => {
+test("all 34 characters keep identity across selecting, saving and returning to a basic avatar", () => {
   let profile = { id: "self", name: "Саша", x: 2, z: 3 };
-  assert.equal(CHARACTERS.length, 22);
+  assert.equal(CHARACTERS.length, 34);
+  assert.equal(new Set(CHARACTERS.map((p) => p.id)).size, CHARACTERS.length);
   for (const preset of CHARACTERS) {
     profile = applyLook(profile, preset.id);
     assert.equal(profile.id, "self");
@@ -29,6 +30,49 @@ test("all 22 characters keep identity across selecting, saving and returning to 
   assert.equal(rig.features, undefined);
   assert.equal(profile.headwear, "headphones");
   disposeAvatar(rig);
+});
+
+test("new characters can replace signature clothing without losing their identity", () => {
+  const signatureParts = {
+    six: ["raincoat-hood", "costume"],
+    "little-sister": ["sister-hair", "sister-dress"],
+    ciri: ["ashen-hair", "witcher-outfit", "witcher-sword"],
+    "anton-chigurh": ["chigurh-bob", "chigurh-jacket", "coin"],
+    elastigirl: ["hero-mask", "incredibles-suit"],
+    "scarlet-witch": ["scarlet-crown", "scarlet-costume", "chaos-magic-1", "cape"],
+    eleven: ["buzz-cut", "eleven-dress", "waffle"],
+    alf: ["costume", "tail"],
+    "winnie-pooh": ["costume", "honey-pot"],
+    carlson: ["ginger-hair", "costume", "propeller"],
+    spongebob: ["square-pants"],
+    cheburashka: ["costume"],
+  };
+  for (const [id, names] of Object.entries(signatureParts)) {
+    const profile = applyLook({ id: "self", name: "Игрок" }, id);
+    const original = avatar(profile);
+    const custom = avatar({ ...profile, headwear: "none", outfit: "tshirt", footwear: "sneakers" });
+    assert.equal(custom.root.userData.character, id);
+    for (const name of names) {
+      assert(original.features[name], `${id}: missing ${name}`);
+      assert.equal(custom.features[name], undefined, `${id}: retained ${name}`);
+    }
+    disposeAvatar(original);
+    disposeAvatar(custom);
+  }
+});
+
+test("Carlson's propeller and Scarlet Witch's magic animate on their joints", () => {
+  for (const [id, feature] of [["carlson", "propeller"], ["scarlet-witch", "chaos-magic-1"]]) {
+    const rig = avatar(applyLook({ id: "self", name: "Игрок" }, id));
+    const part = rig.features[feature];
+    assert.equal(part.parent, id === "carlson" ? rig.torso : rig.elbows[1]);
+    const value = () => id === "carlson" ? part.rotation.z : part.children[0].material.emissiveIntensity;
+    animateRig(rig, { time: 0.1, grounded: true }, 0.1);
+    const before = value();
+    animateRig(rig, { time: 0.5, speed: 5, grounded: true }, 0.1);
+    assert.notEqual(value(), before);
+    disposeAvatar(rig);
+  }
 });
 
 test("every character supports locomotion, jumps, throws, kicks and all nine emotions without invalid geometry", () => {

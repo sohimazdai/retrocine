@@ -48,10 +48,11 @@ test("salute raises the right hand to the head and releases the pose afterwards"
   assert.equal(rig.arms[1].scale.y, 1);
   assert.equal(rig.arms[1].position.y, 0.12);
 });
-test("flame hair changes shape over time in all uses of the rig", () => {
+test("the fire shader advances over time in all uses of the rig", () => {
   const rig = avatar({ id: "test", hairstyle: "flame" });
+  assert(rig.fireHair?.isMesh && rig.fireMaterial, "flame hair is a shader mesh");
   animateRig(rig, { time: 0.2, grounded: true }, 0.016);
-  const before = rig.flames.map((m) => m.scale.y);
+  const before = rig.fireMaterial.uniforms.uTime.value;
   animateRig(rig, { time: 0.4, grounded: true }, 0.016);
-  assert(rig.flames.some((m, i) => m.scale.y !== before[i]));
+  assert.notEqual(rig.fireMaterial.uniforms.uTime.value, before);
 });

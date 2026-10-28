@@ -1,6 +1,7 @@
 import * as T from "three";
 import { RoundedBoxGeometry } from "./vendor/RoundedBoxGeometry.js";
 import { CHARACTERS, dressCharacter, animateCharacter } from "./characters.js";
+import { buildFireHair } from "./fire.js";
 
 const geometries = new Map(),
   materials = new Map();
@@ -437,58 +438,17 @@ export function avatar(input) {
   const mouthOpen = ball(mouth, "#5b3546", 0, 0, -0.004, 0.045, 0.038, 0.016);
   mouthOpen.visible = false;
   const flames = [];
+  let fireHair = null,
+    fireMaterial = null;
   const coveredHair =
     p.headwear === "signature" &&
     ["builder", "miner", "doctor", "samurai", "astronaut"].includes(p.character);
   if (p.hairstyle === "flame" && p.headwear !== "bear" && !coveredHair) {
-    const flameMaterials = ["#ff6230", "#ffa12e", "#ffe89a"].map(
-      (c) =>
-        new T.MeshStandardMaterial({
-          color: c,
-          emissive: c,
-          emissiveIntensity: 0.8,
-          roughness: 0.65,
-        }),
-    );
-    for (let i = 0; i < 11; i++) {
-      const angle = i * 2.4,
-        radius = i ? 0.25 : 0;
-      const flame = new T.Mesh(
-        new T.ConeGeometry(0.1 + (i % 3) * 0.02, 0.48 + (i % 4) * 0.08, 7),
-        flameMaterials[i % 3],
-      );
-      flame.position.set(
-        Math.sin(angle) * radius,
-        0.44 + (i % 3) * 0.035,
-        Math.cos(angle) * radius,
-      );
-      flame.userData.seed = i;
-      flame.userData.baseY = flame.position.y;
-      head.add(flame);
-      flames.push(flame);
-    }
-    // Long living-fire locks streaming down the back and sides to about the waist.
-    for (let i = 0; i < 9; i++) {
-      const s = i % 2 ? 1 : -1,
-        row = Math.floor(i / 2),
-        len = 0.95 + (i % 3) * 0.22;
-      const lock = new T.Mesh(
-        new T.ConeGeometry(0.11 + (i % 3) * 0.015, len, 6),
-        flameMaterials[i % 3],
-      );
-      // Hang from around the back of the head, fanning outward as they fall.
-      const x = i === 8 ? 0 : s * (0.18 + row * 0.12);
-      lock.position.set(x, 0.12 - len / 2, -0.24 - (i % 2) * 0.06);
-      lock.rotation.x = Math.PI; // point downward
-      lock.rotation.z = -x * 0.6;
-      lock.userData.seed = i * 1.3 + 2;
-      lock.userData.baseY = lock.position.y;
-      lock.userData.baseRotX = Math.PI;
-      lock.userData.baseRotZ = -x * 0.6;
-      lock.userData.lock = true;
-      head.add(lock);
-      flames.push(lock);
-    }
+    // Flowing fire grown thick on the head, driven by a shader (see fire.js).
+    const built = buildFireHair();
+    fireHair = built.mesh;
+    fireMaterial = built.material;
+    head.add(fireHair);
   } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
     box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
     box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
@@ -610,6 +570,8 @@ export function avatar(input) {
     mouth,
     mouthOpen,
     flames,
+    fireHair,
+    fireMaterial,
     profile: p,
   };
   dressCharacter(rig, p, { box, ball, material, cylinder, pivot });
@@ -618,6 +580,7 @@ export function avatar(input) {
 
 export function tickAccessories(rig, time) {
   animateCharacter(rig, time);
+  if (rig.fireMaterial) rig.fireMaterial.uniforms.uTime.value = time;
   for (const flame of rig.flames || []) {
     const d = flame.userData,
       seed = d.seed,

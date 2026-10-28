@@ -556,7 +556,7 @@ test("avatar editor previews equipment live and cancellation preserves the avata
     .querySelector('[data-choice="hairstyle"][data-value="flame"]')
     .click();
   a.tick(0.2);
-  assert(a.run("avatarEditor.rig.flames.length") > 0);
+  assert(a.run("!!avatarEditor.rig.fireHair"));
   assert.equal(a.run("active.profile"), before);
   a.run('$("#modal").close()');
   assert.equal(a.run("avatarEditor"), null);

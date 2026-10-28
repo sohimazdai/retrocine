@@ -124,10 +124,12 @@ test("signature accessories are volumetric, animated and removable independently
   disposeAvatar(bat);
   disposeAvatar(custom);
   const fire = avatar(applyLook({ id: "p", name: "Игрок" }, "flame-princess"));
+  assert(fire.fireHair?.isMesh, "the fire hair is a shader mesh");
+  assert(fire.fireHair.geometry.getAttribute("aT"), "lock-length attribute for the shader");
   animateRig(fire, { time: 0.2, grounded: true }, 0.1);
-  const shape = fire.flames[0].scale.y;
+  const t0 = fire.fireMaterial.uniforms.uTime.value;
   animateRig(fire, { time: 0.7, grounded: true }, 0.1);
-  assert.notEqual(fire.flames[0].scale.y, shape);
+  assert.notEqual(fire.fireMaterial.uniforms.uTime.value, t0, "the fire shader advances in time");
   disposeAvatar(fire);
 });
 

@@ -467,6 +467,28 @@ export function avatar(input) {
       head.add(flame);
       flames.push(flame);
     }
+    // Long living-fire locks streaming down the back and sides to about the waist.
+    for (let i = 0; i < 9; i++) {
+      const s = i % 2 ? 1 : -1,
+        row = Math.floor(i / 2),
+        len = 0.95 + (i % 3) * 0.22;
+      const lock = new T.Mesh(
+        new T.ConeGeometry(0.11 + (i % 3) * 0.015, len, 6),
+        flameMaterials[i % 3],
+      );
+      // Hang from around the back of the head, fanning outward as they fall.
+      const x = i === 8 ? 0 : s * (0.18 + row * 0.12);
+      lock.position.set(x, 0.12 - len / 2, -0.24 - (i % 2) * 0.06);
+      lock.rotation.x = Math.PI; // point downward
+      lock.rotation.z = -x * 0.6;
+      lock.userData.seed = i * 1.3 + 2;
+      lock.userData.baseY = lock.position.y;
+      lock.userData.baseRotX = Math.PI;
+      lock.userData.baseRotZ = -x * 0.6;
+      lock.userData.lock = true;
+      head.add(lock);
+      flames.push(lock);
+    }
   } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
     box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
     box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
@@ -597,16 +619,17 @@ export function avatar(input) {
 export function tickAccessories(rig, time) {
   animateCharacter(rig, time);
   for (const flame of rig.flames || []) {
-    const seed = flame.userData.seed;
+    const d = flame.userData,
+      seed = d.seed,
+      lock = d.lock;
     flame.scale.set(
       1 + Math.sin(time * 9 + seed) * 0.08,
-      0.86 + Math.sin(time * 12 + seed * 1.7) * 0.2,
+      0.86 + Math.sin(time * 12 + seed * 1.7) * (lock ? 0.09 : 0.2),
       1,
     );
-    flame.rotation.z = Math.sin(time * 7 + seed) * 0.19;
-    flame.rotation.x = Math.cos(time * 6 + seed) * 0.13;
-    flame.position.y =
-      flame.userData.baseY + Math.sin(time * 11 + seed) * 0.025;
+    flame.rotation.z = (d.baseRotZ || 0) + Math.sin(time * 7 + seed) * (lock ? 0.09 : 0.19);
+    flame.rotation.x = (d.baseRotX || 0) + Math.cos(time * 6 + seed) * (lock ? 0.07 : 0.13);
+    flame.position.y = d.baseY + Math.sin(time * 11 + seed) * 0.025;
   }
 }
 

@@ -3224,7 +3224,7 @@ function startNetwork() {
   net.pose = () => (placedOnce ? currentPose() : undefined);
   // ?debug exposes internals for end-to-end checks and troubleshooting in the console.
   if (/[?&]debug\b/.test(location.search))
-    window.kino = { players, world, remotes, net, mediaClient, op, camera, notes: () => notes, active: () => active };
+    window.kino = { players, world, remotes, net, mediaClient, op, camera, avatarModal, editor: () => avatarEditor, notes: () => notes, active: () => active };
   setInterval(renderPresence, 2000);
   // Browsers only play sound after a gesture: the first click in the room unlocks it.
   window.addEventListener("pointerdown", () => mediaClient.startAudio(), true);

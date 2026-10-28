@@ -7,9 +7,9 @@ import { animateRig } from "../dist/animation.js";
 import { EMOTIONS } from "../dist/emotions.js";
 import { framePortrait } from "../dist/room.js";
 
-test("all 19 characters keep identity across selecting, saving and returning to a basic avatar", () => {
+test("all 24 characters keep identity across selecting, saving and returning to a basic avatar", () => {
   let profile = { id: "self", name: "Саша", x: 2, z: 3 };
-  assert.equal(CHARACTERS.length, 19);
+  assert.equal(CHARACTERS.length, 24);
   for (const preset of CHARACTERS) {
     profile = applyLook(profile, preset.id);
     assert.equal(profile.id, "self");

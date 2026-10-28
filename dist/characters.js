@@ -3,6 +3,7 @@ import * as T from "three";
 export const CHARACTER_CATEGORIES = [
   ["all", "Все"],
   ["heroes", "Герои"],
+  ["stars", "Звёзды"],
   ["jobs", "Профессии"],
   ["creatures", "Существа"],
   ["fantasy", "Фэнтези"],
@@ -215,6 +216,63 @@ export const CHARACTERS = [
     pantsColor: "#826a50",
     shoeColor: "#826a50",
   },
+  {
+    id: "spiderman",
+    name: "Человек-паук",
+    subtitle: "Красно-синий костюм и паутина",
+    category: "heroes",
+    color: "#c5262c",
+    pantsColor: "#2a4b9b",
+    shoeColor: "#1f2f66",
+  },
+  {
+    id: "trump",
+    name: "Дональд Трамп",
+    subtitle: "Зачёс и длинный красный галстук",
+    category: "stars",
+    color: "#23304e",
+    skin: "#e8b074",
+    pantsColor: "#23304e",
+    shoeColor: "#23242a",
+    hairstyle: "short",
+    hairColor: "#e8d08a",
+  },
+  {
+    id: "messi",
+    name: "Месси",
+    subtitle: "Сборная Аргентины, №10",
+    category: "stars",
+    color: "#8cc6e6",
+    skin: "#d9a173",
+    pantsColor: "#2a2d36",
+    shoeColor: "#d64f7a",
+    hairstyle: "short",
+    hairColor: "#2d2420",
+  },
+  {
+    id: "dualipa",
+    name: "Дуа Липа",
+    subtitle: "Длинные тёмные волосы, поп-образ",
+    category: "stars",
+    color: "#c6335f",
+    skin: "#e2ab83",
+    pantsColor: "#20222b",
+    shoeColor: "#20222b",
+    hairstyle: "long",
+    hairColor: "#171318",
+  },
+  {
+    id: "jon-snow",
+    name: "Джон Сноу",
+    subtitle: "Чёрный меховой плащ Дозора",
+    category: "fantasy",
+    color: "#2f2d31",
+    skin: "#d7a981",
+    pantsColor: "#2a2622",
+    shoeColor: "#211d1a",
+    hairstyle: "curly",
+    hairColor: "#241c1d",
+  },
 ].map((p) => ({ ...defaults, ...p, character: p.id }));
 
 // Original procedural toy interpretations. Every accessory is a mesh attached
@@ -418,61 +476,58 @@ export function dressCharacter(rig, p, primitives) {
   };
 
   if (id === "six") {
+    // The iconic oversized yellow raincoat hood: a rounded shell that swallows the head and droops
+    // to a long point in front, leaving the little face in shadow underneath.
     if (signatureHead) {
-      const g = part("pointed-hood");
-      const shape = new T.Shape(
+      // The face is lost in the shadow of the hood.
+      face.visible = false;
+      const g = part("raincoat-hood");
+      // A tall pointed hood facing forward, framing a dark opening — Six's signature silhouette.
+      const outer = new T.Shape(
         [
-          [-0.5, -0.4],
-          [-0.57, 0.17],
-          [0, 0.75],
-          [0.57, 0.17],
-          [0.5, -0.4],
+          [-0.52, -0.52],
+          [-0.62, 0.22],
+          [0, 0.98],
+          [0.62, 0.22],
+          [0.52, -0.52],
         ].map((v) => new T.Vector2(...v)),
       );
       const hole = new T.Path(
         [
-          [-0.35, -0.29],
-          [0.35, -0.29],
-          [0.36, 0.13],
-          [0, 0.37],
-          [-0.36, 0.13],
+          [-0.34, -0.34],
+          [0.34, -0.34],
+          [0.35, 0.16],
+          [0, 0.44],
+          [-0.35, 0.16],
         ].map((v) => new T.Vector2(...v)),
       );
-      shape.holes.push(hole);
+      outer.holes.push(hole);
       mesh(
         g,
-        new T.ExtrudeGeometry(shape, {
-          depth: 0.13,
-          bevelEnabled: true,
-          bevelSize: 0.025,
-          bevelThickness: 0.02,
-          bevelSegments: 2,
-        }),
+        new T.ExtrudeGeometry(outer, { depth: 0.52, bevelEnabled: true, bevelSize: 0.03, bevelThickness: 0.03, bevelSegments: 2 }),
         p.color,
         0,
-        0,
-        0.32,
+        0.02,
+        0.08,
       );
-      box(g, 0.9, 0.86, 0.36, p.color, 0, 0.06, -0.2, 0.16);
-      polygon(
-        g,
-        [
-          [-0.4, 0.4],
-          [0, 0.75],
-          [0.4, 0.4],
-        ],
-        p.color,
-        0.48,
-        -0.2,
-      );
+      // The shadowed inside of the hood and a hint of the little chin.
+      box(g, 0.74, 0.82, 0.12, "#3a2c0c", 0, 0.04, 0.05, 0.02);
+      ball(g, p.skin, 0, -0.2, 0.3, 0.22, 0.14, 0.1);
+      // A rounded shell closing the back and sides.
+      box(g, 0.92, 0.9, 0.5, p.color, 0, 0.06, -0.24, 0.22);
+      cone(g, p.color, 0.46, 0.5, 0, 0.5, -0.08, 5).rotation.y = Math.PI / 2;
     }
     if (signatureBody) {
       const g = garment();
-      const coat = cylinder(g, p.color, 0.23, 0.34, 0.57, 0, -0.06, 0);
-      coat.scale.z = 0.72;
-      box(g, 0.027, 0.52, 0.025, "#cf9c27", 0, -0.06, 0.24, 0.006);
-      for (const s of [-1, 1])
-        box(g, 0.13, 0.12, 0.03, p.color, s * 0.14, -0.2, 0.23, 0.02);
+      // A long yellow slicker: wide at the hem, past the hips, with a seam and two pockets.
+      const coat = cylinder(g, p.color, 0.22, 0.41, 0.72, 0, -0.14, 0);
+      coat.scale.z = 0.74;
+      box(g, 0.03, 0.66, 0.025, "#c28f1f", 0, -0.12, 0.3, 0.008);
+      for (const s of [-1, 1]) {
+        box(g, 0.15, 0.14, 0.04, "#d9b02f", s * 0.17, -0.26, 0.28, 0.03);
+        // Sleeve cuffs.
+        box(arms[s === -1 ? 0 : 1], 0.2, 0.16, 0.2, p.color, 0, -0.07, 0, 0.05);
+      }
     }
     paws(p.skin);
   }
@@ -555,82 +610,90 @@ export function dressCharacter(rig, p, primitives) {
     paws(p.color);
   }
   if (id === "batman") {
+    // Dark cowl with a bare jaw, sharp white lenses, a pointed nose bridge and two tall ears; on the
+    // chest the yellow bat oval, a gold utility belt with pouches, and a long scalloped cape.
     if (signatureHead) {
-      const g = newFace("#292c39", 0.9, 0.79, 0.76);
-      box(g, 0.45, 0.22, 0.065, p.skin, 0, -0.25, 0.395, 0.06);
-      rig.mouth.position.z = 0.445;
+      const g = newFace("#2c303f", 0.9, 0.8, 0.77);
+      // The exposed chin and set mouth.
+      box(g, 0.44, 0.24, 0.07, p.skin, 0, -0.26, 0.39, 0.07);
+      rig.mouth.position.set(0, -0.2, 0.46);
+      rig.mouth.children.forEach((c) => (c.visible = false));
+      box(rig.mouth, 0.2, 0.028, 0.03, "#7a5247", 0, 0, 0, 0.01);
+      // Angled white eye lenses.
       rig.eyes.forEach((e, i) => {
+        const s = i ? 1 : -1;
         e.children.forEach((c) => (c.visible = false));
         polygon(
           e,
           [
-            [-0.13, 0.025],
-            [0.12, 0.06],
-            [0.09, -0.025],
-            [-0.1, -0.04],
+            [-s * 0.14, -0.02],
+            [s * 0.12, 0.08],
+            [s * 0.13, -0.01],
+            [-s * 0.11, -0.05],
           ],
-          "#ecf1f3",
-          0.025,
+          glow("#f2f6f7"),
+          0.03,
           0.045,
         );
       });
+      // A small nose ridge between the brows.
+      cone(g, "#242836", 0.05, 0.16, 0, 0.12, 0.4, 4).rotation.x = Math.PI / 2;
       const ears = part("bat-cowl");
       for (const s of [-1, 1])
         polygon(
           ears,
           [
-            [s * 0.27, 0.25],
-            [s * 0.44, 0.28],
-            [s * 0.4, 0.76],
+            [s * 0.22, 0.24],
+            [s * 0.37, 0.27],
+            [s * 0.32, 0.92],
           ],
-          "#292c39",
-          0.23,
-          -0.13,
+          "#242836",
+          0.2,
+          -0.11,
         );
     }
     if (signatureBody) {
       const g = garment();
-      box(g, 0.47, 0.43, 0.35, p.color, 0, -0.03, 0, 0.08);
-      belt(g, "#d2b15e");
-      cloak("#242735", true);
-      ball(g, "#d2b15e", 0, 0.035, 0.19, 0.155, 0.09, 0.015);
+      box(g, 0.47, 0.44, 0.35, p.color, 0, -0.03, 0, 0.08);
+      // Chest muscle shaping.
+      for (const s of [-1, 1]) ball(g, "#4b4f5e", s * 0.11, 0.08, 0.17, 0.11, 0.1, 0.03);
+      cloak("#1f2230", true);
+      // The yellow bat emblem: an oval with the black bat silhouette on it.
+      ball(g, "#e6c052", 0, 0.03, 0.185, 0.17, 0.1, 0.015);
       polygon(
         g,
         [
-          [-0.14, 0.06],
-          [-0.08, 0.04],
-          [-0.05, 0.085],
-          [-0.02, 0.04],
-          [0, 0.075],
-          [0.02, 0.04],
-          [0.05, 0.085],
-          [0.08, 0.04],
-          [0.14, 0.06],
-          [0.1, -0.015],
-          [0.05, 0.005],
-          [0, -0.045],
-          [-0.05, 0.005],
-          [-0.1, -0.015],
+          [-0.15, 0.03],
+          [-0.08, 0.035],
+          [-0.045, 0.075],
+          [-0.015, 0.03],
+          [0, 0.06],
+          [0.015, 0.03],
+          [0.045, 0.075],
+          [0.08, 0.035],
+          [0.15, 0.03],
+          [0.11, -0.02],
+          [0.05, -0.005],
+          [0, -0.05],
+          [-0.05, -0.005],
+          [-0.11, -0.02],
         ],
-        "#292c39",
-        0.018,
-        0.205,
+        "#1c1f2b",
+        0.02,
+        0.2,
       );
+      // Gold utility belt with pouches.
+      box(g, 0.49, 0.09, 0.37, "#d8b65e", 0, -0.19, 0.01, 0.02);
+      box(g, 0.1, 0.1, 0.03, "#b2903f", 0, -0.19, 0.215, 0.012);
+      for (const x of [-0.17, -0.06, 0.06, 0.17])
+        box(g, 0.07, 0.08, 0.04, "#c9a74f", x, -0.2, 0.2, 0.015);
+      // Gauntlet fins.
       elbows.forEach((e, i) => {
         for (let j = 0; j < 3; j++)
-          cone(
-            e,
-            "#292c39",
-            0.035,
-            0.12,
-            (i ? 1 : -1) * 0.1,
-            -0.02 - j * 0.045,
-            -0.03,
-            3,
-          ).rotation.z = (i ? -1 : 1) * 1.1;
+          cone(e, "#242836", 0.035, 0.13, (i ? 1 : -1) * 0.11, -0.01 - j * 0.05, -0.02, 3).rotation.z = (i ? -1 : 1) * 1.1;
       });
     }
-    paws("#252633");
+    paws("#1f2029");
   }
   if (id === "lego-boy") {
     const g = newFace(p.skin, 0.01, 0.01, 0.01);
@@ -1127,6 +1190,134 @@ export function dressCharacter(rig, p, primitives) {
         box(body, 0.018, 0.27, 0.02, "#655442", s * 0.15, -0.05, 0.18, 0.004);
     }
     paws(p.shoeColor);
+  }
+  if (id === "spiderman") {
+    // Full red-and-blue mask: big white lenses with a black rim, web lines, a spider on the chest.
+    const g = newFace(p.color, 0.86, 0.78, 0.74);
+    rig.mouth.visible = false;
+    rig.brows.forEach((b) => (b.visible = false));
+    rig.eyes.forEach((e, i) => {
+      const s = i ? 1 : -1;
+      e.children.forEach((c) => (c.visible = false));
+      polygon(e, [[-s * 0.2, -0.04], [s * 0.05, 0.17], [s * 0.21, 0.04], [s * 0.11, -0.11], [-s * 0.13, -0.09]], "#111318", 0.03, 0.03);
+      polygon(e, [[-s * 0.16, -0.02], [s * 0.04, 0.13], [s * 0.16, 0.03], [s * 0.08, -0.08], [-s * 0.1, -0.07]], glow("#eef2f0"), 0.03, 0.06);
+    });
+    // Web lines fanning down the mask and a few rings across.
+    const web = part("web");
+    for (let i = 0; i < 7; i++) {
+      const a = -0.7 + i * 0.23;
+      tube(web, [[Math.sin(a) * 0.05, 0.34, 0.35], [Math.sin(a) * 0.26, 0.02, 0.33], [Math.sin(a) * 0.4, -0.3, 0.2]], "#7a1418", 0.006);
+    }
+    for (const r of [0.14, 0.26, 0.37])
+      tube(web, [[-r, 0.26 - r, 0.34], [-r * 0.5, 0.3 - r, 0.4], [0, 0.32 - r, 0.42], [r * 0.5, 0.3 - r, 0.4], [r, 0.26 - r, 0.34]], "#7a1418", 0.006);
+    if (signatureBody) {
+      const body = garment();
+      box(body, 0.45, 0.43, 0.34, p.color, 0, -0.03, 0, 0.08);
+      // Blue flanks and a blue lower half.
+      for (const s of [-1, 1]) box(body, 0.09, 0.44, 0.34, p.pantsColor, s * 0.2, -0.03, 0, 0.05);
+      box(body, 0.46, 0.14, 0.35, p.pantsColor, 0, -0.2, 0, 0.06);
+      // The black spider: body and eight legs.
+      ball(body, "#15171d", 0, 0.06, 0.18, 0.04, 0.07, 0.02);
+      for (const s of [-1, 1])
+        for (let j = 0; j < 4; j++) {
+          const y = 0.12 - j * 0.045;
+          tube(body, [[0, 0.06, 0.185], [s * 0.08, y, 0.2], [s * 0.15, y - 0.03, 0.18]], "#15171d", 0.006);
+        }
+      for (const [i, leg] of legs.entries()) {
+        hideMeshes(leg);
+        hideMeshes(knees[i]);
+        box(leg, 0.19, 0.2, 0.22, p.pantsColor, 0, -0.06, 0, 0.05);
+        box(knees[i], 0.18, 0.16, 0.21, p.pantsColor, 0, -0.05, 0, 0.05);
+      }
+      // Red gloves over the forearms and webs across them.
+      elbows.forEach((e) => box(e, 0.2, 0.2, 0.2, p.color, 0, -0.08, 0, 0.05));
+    }
+    feet.forEach((f) => {
+      hideMeshes(f);
+      box(f, 0.25, 0.14, 0.33, p.color, 0, -0.005, 0.06, 0.05);
+    });
+  }
+  if (id === "trump") {
+    // A big blond comb-over swept forward and to the side over the base hair, a navy suit, red tie.
+    const hair = part("combover");
+    const crest = box(hair, 0.92, 0.3, 0.6, p.hairColor, 0.04, 0.44, 0.1, 0.15);
+    crest.rotation.z = -0.12;
+    crest.rotation.x = 0.22;
+    box(hair, 0.52, 0.18, 0.24, p.hairColor, -0.2, 0.5, 0.26, 0.08).rotation.z = 0.28;
+    if (signatureBody) {
+      const g = garment();
+      box(g, 0.47, 0.5, 0.35, p.color, 0, -0.07, 0, 0.08);
+      // White shirt and a long red tie down the front.
+      box(g, 0.18, 0.44, 0.03, "#f3f1ee", 0, -0.04, 0.17, 0.015);
+      box(g, 0.075, 0.46, 0.03, "#cf2634", 0, -0.12, 0.185, 0.012);
+      box(g, 0.1, 0.1, 0.035, "#cf2634", 0, 0.12, 0.185, 0.015).rotation.z = Math.PI / 4;
+      for (const s of [-1, 1]) {
+        const lapel = box(g, 0.1, 0.32, 0.04, p.color, s * 0.1, 0.03, 0.2, 0.01);
+        lapel.rotation.z = s * 0.3;
+      }
+    }
+  }
+  if (id === "messi") {
+    // A trimmed beard over the base short hair, the sky-blue-and-white striped Argentina shirt with 10.
+    const beard = part("beard");
+    for (const s of [-1, 1]) box(beard, 0.09, 0.3, 0.14, p.hairColor, s * 0.38, -0.12, 0.3, 0.04);
+    box(beard, 0.5, 0.12, 0.12, p.hairColor, 0, -0.33, 0.33, 0.05);
+    box(beard, 0.3, 0.09, 0.1, p.hairColor, 0, -0.18, 0.42, 0.04);
+    if (signatureBody) {
+      const g = garment();
+      box(g, 0.47, 0.44, 0.35, "#eef3f6", 0, -0.03, 0, 0.08);
+      for (let i = 0; i < 4; i++) box(g, 0.08, 0.44, 0.03, p.color, -0.18 + i * 0.12, -0.03, 0.175, 0.01);
+      // Number 10 on the chest.
+      box(g, 0.03, 0.14, 0.02, "#1d3f6e", -0.08, 0.02, 0.19, 0.006);
+      mesh(g, new T.TorusGeometry(0.055, 0.02, 8, 16), material("#1d3f6e"), 0.04, 0.02, 0.19).scale.z = 0.4;
+      for (const [i, leg] of legs.entries()) {
+        hideMeshes(leg);
+        box(leg, 0.2, 0.2, 0.23, p.pantsColor, 0, -0.06, 0, 0.05);
+      }
+    }
+  }
+  if (id === "dualipa") {
+    // Long dark hair past the shoulders, bold lips, a bright crop top and hoop earrings.
+    const extra = part("long-hair");
+    for (const s of [-1, 1]) {
+      box(extra, 0.17, 0.95, 0.24, p.hairColor, s * 0.4, -0.3, -0.06, 0.07);
+      const hoop = mesh(extra, new T.TorusGeometry(0.07, 0.016, 8, 18), material("#e7c45a"), s * 0.47, -0.16, 0.12);
+      hoop.rotation.y = Math.PI / 2;
+    }
+    box(extra, 0.78, 0.8, 0.22, p.hairColor, 0, -0.26, -0.33, 0.08);
+    if (signatureBody) {
+      const g = garment();
+      box(g, 0.44, 0.26, 0.33, p.color, 0, 0.06, 0, 0.08);
+      box(g, 0.46, 0.2, 0.34, "#1b1d24", 0, -0.14, 0, 0.07);
+      for (const s of [-1, 1]) box(g, 0.05, 0.18, 0.06, p.color, s * 0.13, 0.17, 0.08, 0.02);
+    }
+  }
+  if (id === "jon-snow") {
+    // A short beard over the base curly hair, a heavy black fur mantle over leather.
+    const beard = part("beard");
+    for (const s of [-1, 1]) box(beard, 0.1, 0.32, 0.15, p.hairColor, s * 0.37, -0.12, 0.3, 0.05);
+    box(beard, 0.56, 0.16, 0.14, p.hairColor, 0, -0.32, 0.33, 0.06);
+    if (signatureBody) {
+      const g = garment();
+      box(g, 0.47, 0.47, 0.36, "#3b332e", 0, -0.05, 0, 0.07);
+      box(g, 0.12, 0.42, 0.03, "#2a2420", 0, -0.04, 0.18, 0.012);
+      // Black fur mantle: a thick ruff of dark tufts over the shoulders.
+      const fur = part("fur-mantle", torso);
+      fur.position.set(0, 0.16, 0);
+      for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2;
+        ball(fur, p.color, Math.sin(a) * 0.34, 0.02 + Math.cos(a * 2) * 0.03, Math.cos(a) * 0.26 - 0.02, 0.12, 0.15, 0.12);
+      }
+      rig.secondary.push({ object: fur, type: "ear", side: 0 });
+      // A sword hilt over the shoulder.
+      const hilt = part("sword", torso);
+      cylinder(hilt, "#4a4036", 0.03, 0.03, 0.26, -0.26, 0.3, -0.24).rotation.z = 0.4;
+      box(hilt, 0.14, 0.03, 0.03, "#8a7a52", -0.3, 0.42, -0.24, 0.01).rotation.z = 0.4;
+    }
+    feet.forEach((f) => {
+      hideMeshes(f);
+      box(f, 0.25, 0.2, 0.34, p.shoeColor, 0, 0.02, 0.05, 0.05);
+    });
   }
   if (p.headwear === "bear")
     head.children

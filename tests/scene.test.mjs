@@ -296,7 +296,7 @@ test("character gallery filters, previews, saves and cancels while preserving pa
   const a = boot(),
     d = a.w.document;
   a.run("avatarModal()");
-  assert.equal(d.querySelectorAll("[data-look]").length, 25);
+  assert.equal(d.querySelectorAll("[data-look]").length, 30);
   const name = d.querySelector("#avatarName");
   name.value = "Аня";
   name.dispatchEvent(new a.w.Event("input", { bubbles: true }));

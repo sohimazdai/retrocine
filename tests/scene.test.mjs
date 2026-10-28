@@ -25,6 +25,7 @@ import * as propsModule from "../dist/props.js";
 import * as hitboxesModule from "../dist/hitboxes.js";
 import * as ridingModule from "../dist/riding.js";
 import * as ridesModule from "../dist/rides.js";
+import * as climbingModule from "../dist/climbing.js";
 import "../dist/maps/render.js";
 // Integration harness: real Three.js scene graph, geometry and raycasts; GPU draw calls only are mocked.
 const html = fs.readFileSync(
@@ -211,6 +212,7 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...hitboxesModule,
     ...ridingModule,
     ...ridesModule,
+    ...climbingModule,
     Blob: w.Blob,
     URL,
     crypto: globalThis.crypto,
@@ -953,7 +955,7 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
 test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
-  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "cinema"]) {
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "cinema"]) {
     a.run(`op({ t: "map.set", id: "${id}" })`);
     a.tick(0.3);
     assert.equal(a.run("mapScene.map.id"), id);
@@ -1058,4 +1060,27 @@ test("remote riders: the board follows them and flips with their kickflip", () =
   const board = a.run("(() => { const g = rideMeshes.get('board-1'); const p = remotes.get('anya'); return { d: g.position.distanceTo(new T.Vector3(p.x, p.y, p.z)), flip: g.userData.parts.flip.rotation.z }; })()");
   assert(board.d < 0.01, `board ${board.d} from Аня`);
   assert(board.flip > 0.5, "the deck turns over");
+});
+
+test("rope park: hold W into a tree to climb up through the hatch; E rides the zip line down", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "ropepark" })');
+  a.tick(0.2);
+  a.run("const c = mapScene.map.climbs.find((c) => c.id === 'trunk-a'); Object.assign(active, { x: c.x, z: c.z + 1.4, y: 0, vy: 0, grounded: true }); keys.add('up')");
+  a.tick(0.4);
+  assert.equal(a.run("active.climb?.c.id"), "trunk-a");
+  a.tick(1.5);
+  a.run("keys.clear()");
+  assert.equal(a.run("active.climb"), null);
+  assert(Math.abs(a.run("active.y") - 2.8) < 0.01, `on the platform at ${a.run("active.y")}`);
+  // The high platform's zip line: E at its start.
+  a.run("const z = mapScene.map.climbs.find((c) => c.id === 'zip-c'); Object.assign(active, { x: z.from[0] + 0.3, z: z.from[2], y: z.from[1] - 2.3, vy: 0, grounded: true })");
+  a.run("kickNearest()");
+  assert.equal(a.run("active.climb?.c.kind"), "zip");
+  a.tick(0.3);
+  assert(a.run("trolleys.size") === 1, "a handle on the cable");
+  a.tick(4);
+  assert.equal(a.run("active.climb"), null);
+  assert(a.run("active.grounded"));
+  assert(a.run("trolleys.size") === 0);
 });

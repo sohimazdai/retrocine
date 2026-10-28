@@ -117,6 +117,7 @@ export function animateRig(rig, state, dt) {
     rig.knees.forEach((knee) => (knee.rotation.x += compression * 2.5));
   }
   if (state.ride) applyRide(rig, state.ride, t, dt);
+  if (state.climb) applyClimb(rig, state.climb, t);
   const action = state.action;
   if (action) {
     const age = t - action.started,
@@ -252,6 +253,34 @@ function applyRide(rig, ride, t, dt) {
     rig.torso.rotation.set(0.35 + crouch * 0.1, 0, -lean * 0.1);
   }
   if (ride.grind) rig.model.rotation.z += Math.sin(t * 20) * 0.03;
+}
+
+// Hands over hands up a rope, a trunk or a wall; hanging from a zip line's handle.
+function applyClimb(rig, climb, t) {
+  rig.model.position.set(0, 0, 0);
+  rig.model.rotation.set(0, 0, 0);
+  rig.model.scale.set(1, 1, 1);
+  if (climb.zip) {
+    const swing = Math.sin(t * 3) * 0.12;
+    for (let i = 0; i < 2; i++) {
+      rig.arms[i].rotation.set(-3.0, 0, (i ? 1 : -1) * 0.12);
+      rig.elbows[i].rotation.x = -0.1;
+      rig.legs[i].rotation.set(-0.35 + swing, 0, (i ? -1 : 1) * 0.08);
+      rig.knees[i].rotation.x = 0.35;
+    }
+    rig.model.rotation.x = swing * 0.5;
+    return;
+  }
+  const phase = climb.phase || 0;
+  for (let i = 0; i < 2; i++) {
+    const s = Math.sin(phase + i * Math.PI);
+    rig.arms[i].rotation.set(-2.55 + s * 0.45, 0, (i ? 1 : -1) * 0.18);
+    rig.elbows[i].rotation.x = -0.55 - Math.max(0, s) * 0.5;
+    rig.legs[i].rotation.set(-0.7 - s * 0.45, 0, (i ? -1 : 1) * 0.12);
+    rig.knees[i].rotation.x = 0.9 + Math.max(0, s) * 0.6;
+    rig.feet[i].rotation.x = 0.2;
+  }
+  rig.torso.rotation.set(-0.05, Math.sin(phase) * 0.08, 0);
 }
 
 function applyEmote(rig, type, t, s) {

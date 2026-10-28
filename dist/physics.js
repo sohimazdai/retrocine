@@ -144,6 +144,13 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
     vyBefore = body.vy;
   body.vy -= (body.vy < 0 ? GRAVITY * 1.32 : GRAVITY) * dt;
   body.y += body.vy * dt;
+  // Heads bump into platforms and bridges from below.
+  if (body.vy > 0)
+    for (const b of boxes)
+      if (b.y && !sloped(b) && oldY + 1.55 <= b.y + 0.02 && body.y + 1.55 > b.y && inside(body.x, body.z, b)) {
+        body.y = b.y - 1.55;
+        body.vy = 0;
+      }
   body.grounded = false;
   let surface = 0,
     support = null,

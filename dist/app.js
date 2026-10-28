@@ -33,6 +33,7 @@ import { MapScene } from "./mapscene.js";
 import { HitboxView } from "./hitboxes.js";
 import { stepRide, mountRide, rideInfo, surfaceUnder, gradient } from "./riding.js";
 import { buildRide, poseRide, disposeRide } from "./rides.js";
+import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG } from "./climbing.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
@@ -284,7 +285,41 @@ function slopePitch(p) {
   const d = gradient(g.support, p.x, p.z);
   return Math.atan(d.x * Math.sin(p.angle) + d.z * Math.cos(p.angle));
 }
+// Zip line handles above whoever hangs from one.
+const trolleys = new Map();
+function updateTrolleys() {
+  const hanging = new Set();
+  for (const p of players) {
+    const zip = p.climb?.c.kind === "zip" || (p.remote && p.flags?.zp);
+    if (!zip) continue;
+    hanging.add(p);
+    let g = trolleys.get(p);
+    if (!g) {
+      g = new T.Group();
+      const metal = material("#c9ccd2", 0.3);
+      const wheel = new T.Mesh(new T.CylinderGeometry(0.07, 0.07, 0.05, 14), metal);
+      wheel.rotation.z = Math.PI / 2;
+      wheel.position.y = 0.06;
+      const bar = new T.Mesh(new T.BoxGeometry(0.04, 0.1, 0.04), metal);
+      bar.position.y = -0.04;
+      const grip = new T.Mesh(new T.CylinderGeometry(0.025, 0.025, 0.4, 8), material("#e4573f", 0.6));
+      grip.rotation.z = Math.PI / 2;
+      grip.position.y = -0.1;
+      g.add(wheel, bar, grip);
+      scene.add(g);
+      trolleys.set(p, g);
+    }
+    g.position.set(p.x, p.y + HANG + 0.02, p.z);
+    g.rotation.y = p.angle;
+  }
+  for (const [p, g] of trolleys)
+    if (!hanging.has(p)) {
+      scene.remove(g);
+      trolleys.delete(p);
+    }
+}
 function updateRides(dt) {
+  updateTrolleys();
   for (const r of world.rides || []) {
     const g = rideMeshes.get(r.id);
     if (!g) continue;
@@ -1111,7 +1146,12 @@ function onBoom(m) {
       o.vy = Math.max(o.vy, k * 0.7);
     }
 }
+let climbJump = false;
 function doJump() {
+  if (active.climb) {
+    climbJump = true;
+    return;
+  }
   if (active.ride) {
     active.ride.ollie = true;
     return;
@@ -1126,6 +1166,15 @@ const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y
 function kickNearest() {
   if (active.ride) {
     leaveRide();
+    return;
+  }
+  if (active.climb) return;
+  // Zip lines start from their platform.
+  const zip = (mapScene.map?.climbs || []).find((c) => c.kind === "zip" && zipStart(c, active));
+  if (zip) {
+    startZip(active, zip);
+    pending = null;
+    toast("Вжух! Space — отпустить", 1800);
     return;
   }
   const ride = nearestFreeRide();
@@ -2005,12 +2054,29 @@ function physics(dt) {
     const wasGrounded = p.grounded,
       oldX = p.x,
       oldZ = p.z;
-    if (!p.remote && p.ride) {
+    let grab = null;
+    if (!p.remote && !p.climb && !p.ride) {
+      p.climbCooldown = Math.max(0, (p.climbCooldown || 0) - dt);
+      grab = findClimb(mapScene.map?.climbs, p, move);
+    }
+    if (!p.remote && p.climb) {
+      // Ropes, trunks, walls, nets and zip lines.
+      const was = { x: p.x, z: p.z };
+      const result = stepClimb(p, move, obstacles, dt, climbJump);
+      climbJump = false;
+      p.velocityX = (p.x - was.x) / dt;
+      p.velocityZ = (p.z - was.z) / dt;
+      if (result === "top") p.land = 0.2;
+    } else if (!p.remote && p.ride) {
       const was = { x: p.x, z: p.z };
       rideEvents(stepRide(p, move, obstacles, dt));
       p.velocityX = (p.x - was.x) / dt;
       p.velocityZ = (p.z - was.z) / dt;
       if (p.ride?.grind && Math.random() < dt * 30) effects.puff(new T.Vector3(p.x, p.y, p.z), "#ffcf6b", 2, 2.4, 0.015);
+    } else if (grab) {
+      // Pressing against a rope, trunk, wall or net: grab it.
+      startClimb(p, grab);
+      pending = null;
     } else if (!p.remote) {
       // Rivers slow you down and carry you downstream.
       const water = p.y < 0.35 ? waterAt(mapScene.map, p.x, p.z) : null;
@@ -2170,7 +2236,7 @@ function visual(dt) {
   for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
-    if (!p.remote && !p.ride) {
+    if (!p.remote && !p.ride && !p.climb) {
       // You face your cursor; others face where their owners look (sent with their pose).
       const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
         delta = Math.atan2(
@@ -2205,6 +2271,7 @@ function visual(dt) {
         hit: p.hit,
         pushing: p === active ? pushState : p.flags?.ps || 0,
         ride: riding ? rideState(p) : null,
+        climb: p.climb ? { zip: p.climb.c.kind === "zip", phase: p.y * 5 + (p.climb.around || 0) * 2 + p.x + p.z } : p.remote && (p.flags?.cl || p.flags?.zp) ? { zip: !!p.flags.zp, phase: p.y * 5 + p.x + p.z } : null,
         charge: p === active ? chargeLevel() : p.flags?.c || 0,
         seed: p.x * 0.13,
         lookPitch: p.remote
@@ -2459,6 +2526,7 @@ function currentPose() {
   }
   if (pushState) pose.ps = pushState;
   if (charge) pose.c = Math.round(chargeLevel() * 10) / 10;
+  if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
   if (active.ride) {
     pose.rd = active.ride.id;
     if (active.ride.flip >= 0) pose.fl = Math.round(active.ride.flip * 100) / 100;
@@ -2625,7 +2693,7 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0 };
       break;
     }
     case "profile":
@@ -2689,6 +2757,7 @@ function onServer(m, at) {
       break;
     case "reset": {
       delete active.ride;
+      active.climb = null;
       loadState(createState(m.state, uid), m.objs);
       // Everyone starts the new map at its entrance.
       Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0 });

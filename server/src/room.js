@@ -69,6 +69,9 @@ export function sanitizePose(p) {
   if (typeof p.rd === "string" && /^[\w-]{1,24}$/.test(p.rd)) pose.rd = p.rd;
   if (Number.isFinite(p.fl) && p.fl >= 0) pose.fl = Math.round(clamp(p.fl, 0, 1) * 100) / 100;
   if (p.gr === 1) pose.gr = 1;
+  // Climbing a rope or wall, hanging from a zip line.
+  if (p.cl === 1) pose.cl = 1;
+  if (p.zp === 1) pose.zp = 1;
   return pose;
 }
 function spawnPose(state) {

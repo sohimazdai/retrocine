@@ -27,10 +27,10 @@ function roomCamera(aspect, degrees) {
 }
 const ndc = (camera, p) => new T.Vector3(p.x, p.y, p.z).project(camera);
 
-test("near floor corners sit in the bottom corners of the viewport at every angle from 15 to 45 degrees", () => {
-  assert.deepEqual([ELEVATION.min, ELEVATION.initial, ELEVATION.max], [15, 30, 45]);
+test("near floor corners sit in the bottom corners of the viewport at every angle from 0 to 80 degrees", () => {
+  assert.deepEqual([ELEVATION.min, ELEVATION.initial, ELEVATION.max], [0, 25, 80]);
   for (const aspect of [16 / 9, 1363 / 936, 2000 / 980, 4 / 3])
-    for (const angle of [15, 22, 30, 38, 45]) {
+    for (const angle of [0, 15, 25, 45, 65, 80]) {
       const camera = roomCamera(aspect, angle);
       for (const side of [-1, 1]) {
         const p = ndc(camera, { x: side * ROOM.halfWidth, y: 0, z: ROOM.front });
@@ -40,8 +40,11 @@ test("near floor corners sit in the bottom corners of the viewport at every angl
       const dir = camera.getWorldDirection(new T.Vector3());
       assert(Math.abs(Math.asin(-dir.y) - T.MathUtils.degToRad(angle)) < 1e-9);
       // The whole floor is in view and widens toward the viewer.
+      // The floor widens toward the viewer and stays in view at ordinary angles; past a steep tilt
+      // its far edge may run off the top of a wide viewport, which is fine.
       const far = ndc(camera, { x: ROOM.halfWidth, y: 0, z: floorBack(ROOM.halfWidth) });
-      assert(far.x > 0.4 && far.x < 1 && far.y > -1 && far.y < 0.9, `${aspect} ${angle}: far ${far.toArray()}`);
+      assert(far.x > 0 && far.x <= 1 && far.y > -1, `${aspect} ${angle}: far ${far.toArray()}`);
+      if (angle <= 45) assert(far.y < 0.95, `${aspect} ${angle}: far ${far.toArray()}`);
     }
 });
 

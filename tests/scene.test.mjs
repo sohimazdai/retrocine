@@ -284,7 +284,7 @@ test("Retina renders portraits and gallery thumbnails into their full target wit
   );
   assert(
     a.w.document
-      .querySelector('[data-look-thumbnail="six"]')
+      .querySelector('[data-look-thumbnail="batman"]')
       .src.startsWith("data:image/png"),
   );
   const renderer = a.run("avatarEditor.renderer");
@@ -296,7 +296,7 @@ test("character gallery filters, previews, saves and cancels while preserving pa
   const a = boot(),
     d = a.w.document;
   a.run("avatarModal()");
-  assert.equal(d.querySelectorAll("[data-look]").length, 30);
+  assert.equal(d.querySelectorAll("[data-look]").length, 28);
   const name = d.querySelector("#avatarName");
   name.value = "Аня";
   name.dispatchEvent(new a.w.Event("input", { bubbles: true }));
@@ -347,7 +347,7 @@ test("character gallery filters, previews, saves and cancels while preserving pa
 test("mouse click creates ballistic snow; keyboard moves and Space jumps", () => {
   const a = boot();
   a.tick(0.1);
-  a.pointer("pointerdown", 1000, 500);
+  a.pointer("pointerdown", 1000, 620);
   a.tick(0.12);
   assert.equal(a.run("projectiles.length"), 1);
   a.w.document.dispatchEvent(
@@ -587,13 +587,13 @@ test("RPG preset and subsequent customization save without changing participant 
   a.tick(0.1);
 });
 
-test("angle changes from 15 to 45 degrees keep the floor corners in place; room wheel cannot zoom", () => {
+test("angle changes from 0 to 80 degrees keep the floor corners in place; room wheel cannot zoom", () => {
   const a = boot();
-  assert.equal(a.run("camElevation"), 30);
-  for (const angle of [15, 30, 45]) {
+  assert.equal(a.run("camElevation"), 25);
+  for (const angle of [0, 25, 80]) {
     a.run(`camElevation=${angle};updateCamera()`);
     const corner = a.run(`new T.Vector3(ROOM.halfWidth,0,ROOM.front).project(camera)`);
-    assert(Math.abs(corner.x - 1) < 1e-9 && Math.abs(corner.y + 1) < 1e-9);
+    assert(Math.abs(corner.x - 1) < 1e-9 && Math.abs(corner.y + 1) < 1e-9, `angle ${angle}: ${corner.x}, ${corner.y}`);
     assert.equal(a.run("camera.aspect"), 1363 / 936);
   }
   const position = a.run("camera.position.clone()");
@@ -602,8 +602,8 @@ test("angle changes from 15 to 45 degrees keep the floor corners in place; room 
     .dispatchEvent(new a.w.WheelEvent("wheel", { deltaY: -500, clientX: 600, clientY: 600 }));
   assert(a.run("camera.position").equals(position));
   a.run("actions.view()");
-  assert.equal(a.w.document.querySelector("#elevation").min, "15");
-  assert.equal(a.w.document.querySelector("#elevation").max, "45");
+  assert.equal(a.w.document.querySelector("#elevation").min, "0");
+  assert.equal(a.w.document.querySelector("#elevation").max, "80");
   assert.equal(a.w.document.querySelector("#zoom"), null);
 });
 

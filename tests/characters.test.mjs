@@ -7,9 +7,9 @@ import { animateRig } from "../dist/animation.js";
 import { EMOTIONS } from "../dist/emotions.js";
 import { framePortrait } from "../dist/room.js";
 
-test("all 24 characters keep identity across selecting, saving and returning to a basic avatar", () => {
+test("all 22 characters keep identity across selecting, saving and returning to a basic avatar", () => {
   let profile = { id: "self", name: "Саша", x: 2, z: 3 };
-  assert.equal(CHARACTERS.length, 24);
+  assert.equal(CHARACTERS.length, 22);
   for (const preset of CHARACTERS) {
     profile = applyLook(profile, preset.id);
     assert.equal(profile.id, "self");
@@ -107,21 +107,21 @@ test("signature accessories are volumetric, animated and removable independently
   });
   assert.equal(teeth, 9);
   disposeAvatar(labubu);
-  const reg = avatar(applyLook({ id: "p", name: "Игрок" }, "reg"));
-  const before = reg.features.cape.rotation.x;
-  animateRig(reg, { time: 1, speed: 5, grounded: true }, 0.1);
-  assert.notEqual(reg.features.cape.rotation.x, before);
+  const bat = avatar(applyLook({ id: "p", name: "Игрок" }, "batman"));
+  const before = bat.features.cape.rotation.x;
+  animateRig(bat, { time: 1, speed: 5, grounded: true }, 0.1);
+  assert.notEqual(bat.features.cape.rotation.x, before);
   const profile = {
-    ...reg.profile,
+    ...bat.profile,
     headwear: "none",
     outfit: "tshirt",
     footwear: "sneakers",
   };
   const custom = avatar(profile);
-  assert.equal(custom.features["relic-helmet"], undefined);
+  assert.equal(custom.features["bat-cowl"], undefined);
   assert.equal(custom.features.cape, undefined);
-  assert.equal(custom.root.userData.character, "reg");
-  disposeAvatar(reg);
+  assert.equal(custom.root.userData.character, "batman");
+  disposeAvatar(bat);
   disposeAvatar(custom);
   const fire = avatar(applyLook({ id: "p", name: "Игрок" }, "flame-princess"));
   animateRig(fire, { time: 0.2, grounded: true }, 0.1);

@@ -23,29 +23,6 @@ const defaults = {
 };
 export const CHARACTERS = [
   {
-    id: "six",
-    name: "Six",
-    subtitle: "Little Nightmares",
-    category: "heroes",
-    color: "#f2c62e",
-    skin: "#bd9e7c",
-    pantsColor: "#bd9e7c",
-    shoeColor: "#bd9e7c",
-    hairstyle: "short",
-    hairColor: "#2c2626",
-  },
-  {
-    id: "reg",
-    name: "Рэг",
-    subtitle: "Made in Abyss",
-    category: "heroes",
-    color: "#b9a177",
-    skin: "#cba276",
-    pantsColor: "#8c513e",
-    hairstyle: "short",
-    hairColor: "#3d2925",
-  },
-  {
     id: "labubu",
     name: "Лабубу",
     subtitle: "The Monsters",

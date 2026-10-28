@@ -1,7 +1,7 @@
 import * as T from "three";
 import { ROOM, floorBack, wallZ } from "./layout.js";
 
-export const ELEVATION = { min: 15, max: 45, initial: 30 };
+export const ELEVATION = { min: 0, max: 80, initial: 25 };
 
 // The camera looks down at the given angle to the floor and is placed so the near corners of the
 // floor sit exactly in the bottom corners of the viewport. On portrait screens the floor is framed

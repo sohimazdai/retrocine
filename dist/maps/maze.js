@@ -1,6 +1,10 @@
 // Зелёный лабиринт: живая изгородь, в центре многоярусный фонтан со статуей минотавра.
 // The maze is generated from a fixed seed, so the server and every browser build the same walls.
-export const MAZE = { cols: 9, rows: 7, cell: { w: 2.8, d: 2.4 }, x0: -12.6, z0: -7.9, thickness: 0.6, height: 2.6, visible: 1.25 };
+// Hedges look waist-high but their colliders are tall, so nobody jumps from the garden wall across them.
+export const MAZE = { cols: 9, rows: 7, cell: { w: 2.8, d: 2.4 }, x0: -12.6, z0: -7.9, thickness: 0.6, height: 6, visible: 1.25 };
+// Old garden walls along both sides, with a walkway on top and trellises of ivy to climb up.
+export const GARDEN_WALL = { w: 0.9, z0: -7.5, z1: 9.8, h: 2.6 };
+const wallX = (side) => side * (14.65 - GARDEN_WALL.w / 2);
 const CLEARING = { c0: 3, c1: 5, r0: 2, r1: 4 };
 export const FOUNTAIN = { x: 0, z: MAZE.z0 + (CLEARING.r0 + CLEARING.r1 + 1) * MAZE.cell.d * 0.5 };
 
@@ -136,16 +140,18 @@ export default {
   statics: [
     ...hedges(),
     // The garden behind the maze and the corners in front of it.
+    ...[-1, 1].map((side) => ({ kind: "garden-wall", side, x: wallX(side), z: (GARDEN_WALL.z0 + GARDEN_WALL.z1) / 2, w: GARDEN_WALL.w, d: GARDEN_WALL.z1 - GARDEN_WALL.z0, h: GARDEN_WALL.h })),
     ...[
       [-11.4, -9.4, 3.4],
       [-3.4, -10.6, 3.0],
       [3.4, -10.6, 3.2],
       [11.4, -9.4, 3.5],
-      [-13.7, 9.6, 2.6],
-      [13.7, 9.6, 2.8],
     ].map(([x, z, h]) => ({ kind: "tree", x, z, shape: "cylinder", radius: 0.22, w: 0.44, d: 0.44, h })),
     ...[-9.2, 9.2].map((x) => ({ kind: "plinth", x, z: -9.3, w: 0.7, d: 0.7, h: 0.9 })),
   ],
+  climbs: [-1, 1].flatMap((side) =>
+    [-3.0, 5.4].map((z, i) => ({ id: `trellis-${side < 0 ? "l" : "r"}${i}`, kind: "wall", x: wallX(side), z, w: GARDEN_WALL.w, d: 1.3, y0: 0, y1: GARDEN_WALL.h, face: side < 0 ? "+x" : "-x" })),
+  ),
   props: [
     {
       id: "fountain",

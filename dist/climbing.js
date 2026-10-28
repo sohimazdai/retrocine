@@ -3,6 +3,8 @@
 //   rope / trunk: { kind, x, z, r, y0, y1 } — you hang around it, r is the trunk's radius (0 for a rope)
 //   wall / net:   { kind, x, z, w, d, y0, y1, face: "+x" | "-x" | "+z" | "-z" } — the climbable side
 //   zip:          { kind: "zip", from: [x, y, z], to: [x, y, z] } — the cable; you hang 1.95 below it
+//   bar:          { kind: "bar", x, z, w, d, y } — a horizontal bar at height y along its long side
+//                 (pull-up bar, monkey bars): jump up into it or press E under it to hang
 import { RADIUS, LIMITS, clamp, inside, sloped } from "./physics.js";
 import { floorBack } from "./layout.js";
 
@@ -36,7 +38,7 @@ export function findClimb(climbs, body, move) {
   const len = Math.hypot(move.x, move.z);
   if (!len || body.climbCooldown > 0) return null;
   for (const c of climbs || []) {
-    if (c.kind === "zip") continue;
+    if (c.kind === "zip" || c.kind === "bar") continue;
     if (body.y < (c.y0 || 0) - 0.6 || body.y > c.y1 - 1.0) continue;
     const h = holdPoint(c, body.x, body.z);
     if (h.gap > 0.16 || h.gap < -0.5) continue;
@@ -61,6 +63,7 @@ export function stepClimb(body, input, boxes, dt, jump) {
   const st = body.climb,
     c = st.c;
   if (c.kind === "zip") return stepZip(body, input, dt, jump);
+  if (c.kind === "bar") return stepBar(body, input, boxes, dt, jump);
   if (jump) return letGo(body, st, 6.5, 3.2);
   const up = -input.z,
     side = input.x;
@@ -167,4 +170,108 @@ function stepZip(body, input, dt, jump) {
     return "off";
   }
   return null;
+}
+
+// ——— Bars: pull-up bars and monkey bars ———
+// Hands are this far above the feet when hanging at full stretch.
+export const BAR_HANG = 2.0;
+const barAxis = (c) => (c.w >= c.d ? "x" : "z");
+const barLength = (c) => Math.max(c.w, c.d);
+// A short bar is for pull-ups (W); a long one is for going along it hand over hand.
+export const isTurnik = (c) => barLength(c) <= 1.8;
+function barSpot(c, x, z) {
+  const ax = barAxis(c);
+  return { along: ax === "x" ? x - c.x : z - c.z, across: ax === "x" ? z - c.z : x - c.x, half: barLength(c) / 2 };
+}
+// A bar your hands reach: when jumping, the one your hands come up to; with reach = true (E), any
+// bar within arm's length above your head.
+export function findBar(climbs, body, reach = false) {
+  if (body.climbCooldown > 0) return null;
+  let best = null;
+  for (const c of climbs || []) {
+    if (c.kind !== "bar") continue;
+    const s = barSpot(c, body.x, body.z);
+    // With E you can reach a little past the ends (the first rung of the monkey bars from the landing).
+    if (Math.abs(s.along) > s.half + (reach ? 0.6 : -0.08) || Math.abs(s.across) > (reach ? 0.75 : 0.45)) continue;
+    const gap = c.y - (body.y + BAR_HANG);
+    if (reach ? gap > 0.45 || c.y < body.y + 1.2 : gap < -0.35 || gap > 0.12) continue;
+    if (!best || Math.abs(s.across) < best.d) best = { c, d: Math.abs(s.across) };
+  }
+  return best?.c || null;
+}
+export function startBar(body, c) {
+  const s = barSpot(c, body.x, body.z),
+    ax = barAxis(c);
+  body.climb = { c, pull: 0, count: 0, up: false, phase: 0 };
+  if (ax === "x") body.z = c.z;
+  else body.x = c.x;
+  // Hands on the bar itself, even if you reached for its end.
+  const along = clamp(s.along, -s.half + 0.12, s.half - 0.12);
+  if (ax === "x") body.x = c.x + along;
+  else body.z = c.z + along;
+  body.y = Math.max(0, c.y - BAR_HANG);
+  body.vy = 0;
+  body.kx = body.kz = 0;
+  body.grounded = false;
+  // Facing across a pull-up bar (toward the middle of the room); along monkey bars.
+  // Pull-up bars: across the room's side bars you face the middle; on bars along x, the camera.
+  if (isTurnik(c)) body.angle = ax === "z" ? (c.x > 0 ? -Math.PI / 2 : Math.PI / 2) : 0;
+  else body.angle = ax === "z" ? (s.along > 0 ? Math.PI : 0) : s.along > 0 ? -Math.PI / 2 : Math.PI / 2;
+}
+// One step hanging from a bar. Returns "pull" (a pull-up done), "top" (onto a platform at the end),
+// "off" (let go) or null.
+function stepBar(body, input, boxes, dt, jump) {
+  const st = body.climb,
+    c = st.c,
+    ax = barAxis(c);
+  if (jump) return letGoBar(body, 4.5, 2.2);
+  const hang = Math.max(0, c.y - BAR_HANG);
+  let result = null;
+  if (isTurnik(c)) {
+    // W pulls up (chin over the bar), S lets go.
+    const up = -input.z;
+    if (up < -0.5 && st.pull < 0.05) return letGoBar(body, 0, 0);
+    st.pull = clamp(st.pull + (up > 0.5 ? 1 : -1) * dt * 2.4, 0, 1);
+    if (st.pull >= 1 && !st.up) {
+      st.up = true;
+      st.count++;
+      result = "pull";
+    }
+    if (st.pull < 0.25) st.up = false;
+  } else {
+    // Hand over hand along the monkey bars.
+    const go = ax === "x" ? input.x : input.z,
+      s = barSpot(c, body.x, body.z);
+    if (Math.abs(go) > 0.3) {
+      const next = clamp(s.along + Math.sign(go) * 1.7 * dt, -s.half + 0.12, s.half - 0.12);
+      if (ax === "x") body.x = c.x + next;
+      else body.z = c.z + next;
+      st.phase += dt * 9;
+      body.angle = ax === "z" ? (go > 0 ? 0 : Math.PI) : go > 0 ? Math.PI / 2 : -Math.PI / 2;
+      // At the end: step onto the platform there, if there is one.
+      if (Math.abs(next) >= s.half - 0.121) {
+        const dir = Math.sign(go);
+        const ahead = { x: body.x + (ax === "x" ? dir * 0.6 : 0), z: body.z + (ax === "z" ? dir * 0.6 : 0), y: hang };
+        const ledge = ledgeNear(boxes, ahead);
+        if (ledge && ledge.y > hang - 0.4 && ledge.y < hang + 1.2) {
+          Object.assign(body, ledge, { vy: 0, grounded: true });
+          body.climb = null;
+          body.climbCooldown = 0.5;
+          return "top";
+        }
+      }
+    }
+  }
+  body.y = hang + st.pull * 0.55;
+  return result;
+}
+function letGoBar(body, vy, push) {
+  const f = { x: Math.sin(body.angle), z: Math.cos(body.angle) };
+  body.climb = null;
+  body.climbCooldown = 0.5;
+  body.vy = vy;
+  body.grounded = false;
+  body.kx = f.x * push;
+  body.kz = f.z * push;
+  return "off";
 }

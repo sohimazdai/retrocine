@@ -51,6 +51,9 @@ export default {
     // Bank up to a platform at the back.
     { kind: "ramp", shape: "ramp", x: BANK.x, z: BANK.z + BANK.d / 2, w: BANK.w, d: BANK.d, h0: BANK.h, h1: 0, h: BANK.h, axis: "z" },
     { kind: "box", x: BANK.x, z: BANK.z - 0.9, w: BANK.w, d: 1.8, h: BANK.h },
+    // Tall chain-link behind the pipes, and a ledge to grind in each front corner.
+    ...[-1, 1].map((side) => ({ kind: "fence", style: "chain", x: side * 14.62, z: 1.3, w: 0.06, d: 17.8, h: 3.4, color: "#55606b" })),
+    ...[-1, 1].map((side) => ({ kind: "ledge", rail: true, x: side * 13.2, z: 8.8, w: 0.5, d: 1.8, h: 0.45 })),
   ],
   props: [
     { id: "bench-a", kind: "bench", label: "Скамейка", x: -9.6, z: 8.9, weight: 1, lift: 2, colliders: [{ x: 0, z: 0, w: 2.2, d: 0.7, h: 0.5 }], waypoints: [{ x: 0, z: 0, h: 0.5 }] },

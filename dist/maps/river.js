@@ -44,6 +44,12 @@ const BOULDERS = [
 ];
 // Stepping stones across the river: wide gaps, so even a boulder floats through.
 const STEPPING = [-3.3, -1.1, 1.1, 3.3].map((x, i) => [x, 7.5 + (i % 2) * 0.4, 0.45, 0.3]);
+const CLIFFS = cliffs();
+// Height of the ledge under a spot on a bank.
+const ledge = (x, z) => Math.max(0, ...CLIFFS.filter((c) => Math.abs(x - c.x) < c.w / 2 && Math.abs(z - c.z) < c.d / 2).map((c) => c.h));
+// A crag on the left bank's top ledge: climb its face and ride the zip line across to the right bank.
+export const CRAG = { x: -13.9, z: -0.5, w: 1.6, d: 2.4, h: 4.6 };
+export const RIVER_ZIP = { id: "zip-river", kind: "zip", from: [CRAG.x + 0.5, CRAG.h + 2.3, CRAG.z], to: [12.9, 5.0, 1.5] };
 export const RIVER_ZONE = { id: "water", kind: "water", x0: WATER.x0, x1: WATER.x1, z0: -14, z1: 12, flow: { x: 0, z: 1.6 }, drag: 4, depth: 0.55, wrap: "z", slow: 0.62, drift: 0.55 };
 
 export default {
@@ -68,9 +74,14 @@ export default {
   ],
   zones: [RIVER_ZONE],
   statics: [
-    ...cliffs(),
+    ...CLIFFS,
     ...[...BOULDERS, ...STEPPING].map(([x, z, r, h]) => ({ kind: "boulder", x, z, shape: "cylinder", radius: r, w: r * 2, d: r * 2, h })),
+    { kind: "crag", ...CRAG },
+    // A waterfall down the right bank and a campfire by the zip line's landing (scenery).
+    { kind: "waterfall", x: 12.6, z: -4.2, w: 0.05, d: 0.05, h: 0.01 },
+    { kind: "campfire", x: 13.6, z: 4.4, shape: "cylinder", radius: 0.45, w: 0.9, d: 0.9, h: ledge(13.6, 4.4) + 0.3 },
   ],
+  climbs: [{ id: "crag-face", kind: "wall", ...CRAG, y0: 2.6, y1: CRAG.h, face: "+x" }, RIVER_ZIP],
   props: [],
   balls: [
     { id: "stone-1", kind: "stone", x: -1.5, z: -9.5 },

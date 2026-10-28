@@ -2,7 +2,47 @@
 import * as T from "three";
 import { registerProps } from "../props.js";
 import { registerDecor } from "../mapscene.js";
-import { mat, mesh, TEXTURES, rng } from "./kit.js";
+import { mat, mesh, merge, placed, worldBox, TEXTURES, rng } from "./kit.js";
+import { tube } from "./sides.look.js";
+
+function towerDeck(group, s) {
+  const tex = TEXTURES.wood(),
+    wood = mat(tex ? "#d9b48d" : "#8a5a35", { map: tex, roughness: 0.85 });
+  mesh(group, worldBox(s.w, s.h - s.y, s.d, 1.2), wood, s.x, (s.h + s.y) / 2, s.z);
+  // A roof on four poles and a team banner.
+  const color = s.team === "blue" ? "#2f6fd8" : "#d8432f",
+    pole = mat("#5a4632", { roughness: 0.8 });
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) tube(group, [s.x + sx * (s.w / 2 - 0.1), s.h, s.z + sz * (s.d / 2 - 0.1)], [s.x + sx * (s.w / 2 - 0.1), s.h + 2.0, s.z + sz * (s.d / 2 - 0.1)], 0.05, pole);
+  const roof = mesh(group, new T.ConeGeometry(Math.hypot(s.w, s.d) / 2 + 0.2, 0.7, 4), mat(color, { roughness: 0.7, flat: true }), s.x, s.h + 2.35, s.z);
+  roof.rotation.y = Math.PI / 4;
+  const banner = mesh(group, new T.PlaneGeometry(0.9, 1.2), mat(color, { side: T.DoubleSide, roughness: 0.8 }), s.x - Math.sign(s.x) * (s.w / 2 + 0.02), s.y - 0.7, s.z, false);
+  banner.rotation.y = Math.PI / 2;
+  // Ladder on the field side.
+  const lx = s.x - Math.sign(s.x) * (s.w / 2 + 0.06),
+    rail = mat("#6b5238", { roughness: 0.8 });
+  for (const dz of [-0.32, 0.32]) tube(group, [lx, 0, s.z + dz], [lx, s.h + 0.6, s.z + dz], 0.035, rail);
+  for (let y = 0.3; y < s.h; y += 0.32) tube(group, [lx, y, s.z - 0.32], [lx, y, s.z + 0.32], 0.025, rail);
+}
+function parapet(group, s) {
+  const tex = TEXTURES.wood();
+  mesh(group, worldBox(s.w, s.h - s.y, s.d, 1.2), mat(tex ? "#c49a6c" : "#8a5a35", { map: tex, roughness: 0.85 }), s.x, (s.h + s.y) / 2, s.z);
+}
+// Sandbags stacked in staggered rows.
+function sandbags(group, s) {
+  const parts = [],
+    along = s.d >= s.w,
+    len = along ? s.d : s.w,
+    rows = Math.round(s.h / 0.24);
+  for (let row = 0; row < rows; row++) {
+    const n = Math.floor(len / 0.6),
+      off = row % 2 ? 0.3 : 0;
+    for (let i = 0; i < n - (row % 2); i++) {
+      const t = -len / 2 + 0.3 + off + i * 0.6;
+      parts.push(placed(new T.CapsuleGeometry(0.12, 0.34, 4, 8), s.x + (along ? 0 : t), 0.12 + row * 0.23, s.z + (along ? t : 0), along ? 0 : Math.PI / 2, Math.PI / 2, 0, [1.5, 1, 0.75]));
+    }
+  }
+  mesh(group, merge(parts), mat("#b49a6a", { roughness: 0.95 }));
+}
 
 // Inflatables: glossy fabric with darker seams.
 const fabric = (color) => mat(color, { roughness: 0.35, metal: 0.05 });
@@ -89,6 +129,12 @@ function tableDown(g, p) {
 registerProps({ snake, dorito, cake, can, brick, haystack, "table-down": tableDown });
 
 registerDecor("paintball", (group, map) => {
+  for (const s of map.statics || []) {
+    if (s.kind === "tower-deck") towerDeck(group, s);
+    if (s.kind === "tower-post") mesh(group, new T.BoxGeometry(s.w, s.h, s.d), mat("#5a4632", { roughness: 0.8 }), s.x, s.h / 2, s.z);
+    if (s.kind === "parapet") parapet(group, s);
+    if (s.kind === "sandbags") sandbags(group, s);
+  }
   const flags = [];
   for (const s of (map.statics || []).filter((s) => s.kind === "flag")) {
     const color = s.team === "blue" ? "#2f6fd8" : "#d8432f";

@@ -33,7 +33,7 @@ import { MapScene } from "./mapscene.js";
 import { HitboxView } from "./hitboxes.js";
 import { stepRide, mountRide, rideInfo, surfaceUnder, gradient } from "./riding.js";
 import { buildRide, poseRide, disposeRide } from "./rides.js";
-import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG } from "./climbing.js";
+import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG, findBar, startBar, isTurnik } from "./climbing.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
@@ -1213,6 +1213,11 @@ function doJump() {
     status();
   }
 }
+function hangFromBar(bar) {
+  startBar(active, bar);
+  pending = null;
+  toast(isTurnik(bar) ? "W — подтянуться, S — спрыгнуть" : "Перебирайте руками: стрелки вдоль перекладин, Space — спрыгнуть", 2200);
+}
 // Within reach of your feet or hands: lets you knock a mug off the bar, too.
 const reachable = (c, p, d = 1.6) => Math.hypot(c.x - p.x, c.z - p.z) < d && c.y - p.y < 1.45 && c.y - p.y > -0.9;
 function kickNearest() {
@@ -1221,6 +1226,12 @@ function kickNearest() {
     return;
   }
   if (active.climb) return;
+  // A bar above your head: hang from it.
+  const bar = findBar(mapScene.map?.climbs, active, true);
+  if (bar) {
+    hangFromBar(bar);
+    return;
+  }
   // Zip lines start from their platform.
   const zip = (mapScene.map?.climbs || []).find((c) => c.kind === "zip" && zipStart(c, active));
   if (zip) {
@@ -2110,6 +2121,14 @@ function physics(dt) {
     if (!p.remote && !p.climb && !p.ride) {
       p.climbCooldown = Math.max(0, (p.climbCooldown || 0) - dt);
       grab = findClimb(mapScene.map?.climbs, p, move);
+      // Jumping up into a bar catches it.
+      if (!grab && !p.grounded) {
+        const bar = findBar(mapScene.map?.climbs, p);
+        if (bar) {
+          hangFromBar(bar);
+          continue;
+        }
+      }
     }
     if (!p.remote && p.climb) {
       // Ropes, trunks, walls, nets and zip lines.
@@ -2119,6 +2138,11 @@ function physics(dt) {
       p.velocityX = (p.x - was.x) / dt;
       p.velocityZ = (p.z - was.z) / dt;
       if (result === "top") p.land = 0.2;
+      if (result === "pull") {
+        const n = p.climb.count;
+        toast(n === 1 ? "Подтянулся!" : `Подтягиваний: ${n}`, 900);
+        if (n % 5 === 0) emotionEffects.start(p, "fire", worldTime);
+      }
     } else if (!p.remote && p.ride) {
       const was = { x: p.x, z: p.z };
       rideEvents(stepRide(p, move, obstacles, dt));
@@ -2333,7 +2357,15 @@ function visual(dt) {
         ride: riding ? rideState(p) : null,
         sled: sledding(p),
         skate: skating(p) ? Math.min(1, speed / 5) : 0,
-        climb: p.climb ? { zip: p.climb.c.kind === "zip", phase: p.y * 5 + (p.climb.around || 0) * 2 + p.x + p.z } : p.remote && (p.flags?.cl || p.flags?.zp) ? { zip: !!p.flags.zp, phase: p.y * 5 + p.x + p.z } : null,
+        climb: p.climb
+          ? p.climb.c.kind === "bar"
+            ? { bar: true, pull: p.climb.pull, phase: p.climb.phase }
+            : { zip: p.climb.c.kind === "zip", phase: p.y * 5 + (p.climb.around || 0) * 2 + p.x + p.z }
+          : p.remote && p.flags?.hb
+            ? { bar: true, pull: p.flags.pu || 0, phase: (p.x + p.z) * 5 }
+            : p.remote && (p.flags?.cl || p.flags?.zp)
+              ? { zip: !!p.flags.zp, phase: p.y * 5 + p.x + p.z }
+              : null,
         charge: p === active ? chargeLevel() : p.flags?.c || 0,
         seed: p.x * 0.13,
         lookPitch: p.remote
@@ -2588,7 +2620,10 @@ function currentPose() {
   }
   if (pushState) pose.ps = pushState;
   if (charge) pose.c = Math.round(chargeLevel() * 10) / 10;
-  if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
+  if (active.climb?.c.kind === "bar") {
+    pose.hb = 1;
+    if (active.climb.pull > 0.05) pose.pu = Math.round(active.climb.pull * 10) / 10;
+  } else if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
   if (sledding(active)) pose.sd = 1;
   if (active.ride) {
     pose.rd = active.ride.id;
@@ -2756,7 +2791,7 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0, hb: m.hb || 0, pu: m.pu || 0 };
       break;
     }
     case "profile":

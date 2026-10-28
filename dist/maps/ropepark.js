@@ -25,6 +25,9 @@ const posts = (p, skip = []) =>
 // Stairs down from the low landing platforms toward the front.
 const steps = (p) => ({ kind: "stairs", shape: "ramp", x: p.x, z: p.z + p.d / 2 + 1.0, w: 1.4, d: 2.0, h0: p.top, h1: 0, h: p.top, axis: "z" });
 const TOWER = { x: -5.6, z: 4.8, w: 2.4, d: 2.4, h: 2.6 };
+// Along the sides: a tall bouldering wall with a crash mat at its foot, and a spider web of rope.
+export const BIG_WALL = { x: 14.0, z: -0.2, w: 1.3, d: 4.0, h: 4.2 };
+export const WEB = { x: -14.25, z: 0.6, w: 0.5, d: 3.6, h: 3.6 };
 const NET = { x: P.d.x + P.d.w / 2 + 0.04, z: P.d.z, w: 0.06, d: P.d.d - 0.4, h: P.d.top - 0.15 };
 
 // You hang 1.95 m below the cable; at the start it lifts you a little off the platform.
@@ -69,6 +72,9 @@ export default {
     steps(P.f),
     { kind: "trampoline", x: P.a.x, z: P.a.z + P.a.d / 2 + 1.5, shape: "cylinder", radius: 1.3, w: 2.6, d: 2.6, h: 0.6, bounce: 14.5 },
     { kind: "trampoline", x: 3.0, z: 2.4, shape: "cylinder", radius: 1.4, w: 2.8, d: 2.8, h: 0.6, bounce: 15 },
+    { kind: "bigwall", ...BIG_WALL },
+    { kind: "mat", x: BIG_WALL.x - BIG_WALL.w / 2 - 0.75, z: BIG_WALL.z, w: 1.5, d: BIG_WALL.d, h: 0.32, soft: 0.25 },
+    { kind: "web", ...WEB },
   ],
   climbs: [
     ...Object.entries(TREES).map(([k]) => ({ id: "trunk-" + k, kind: "trunk", x: P[k].x, z: P[k].z, r: 0.42, y0: 0, y1: P[k].top })),
@@ -77,6 +83,8 @@ export default {
     { id: "tower-front", kind: "wall", ...TOWER, y0: 0, y1: TOWER.h, face: "+z" },
     { id: "tower-side", kind: "wall", ...TOWER, y0: 0, y1: TOWER.h, face: "+x" },
     { id: "net-d", kind: "net", ...NET, y0: 0, y1: P.d.top, face: "+x" },
+    { id: "big-wall", kind: "wall", ...BIG_WALL, y0: 0, y1: BIG_WALL.h, face: "-x" },
+    { id: "web", kind: "net", ...WEB, y0: 0, y1: WEB.h, face: "+x" },
     ...ZIPS,
   ],
   props: [],

@@ -1,6 +1,6 @@
 // How the saloon looks: bar with bottles, upright piano, round tables, balcony, plank walls, lamps.
 import * as T from "three";
-import { registerProps } from "../props.js";
+import { registerProps, BALL_BUILDERS } from "../props.js";
 import { registerDecor } from "../mapscene.js";
 import { mat, mesh, merge, placed, worldBox, TEXTURES, rng, signTexture } from "./kit.js";
 
@@ -91,6 +91,15 @@ function stool(g, p) {
   mesh(g, new T.TorusGeometry(0.17, 0.015, 6, 18), mat(BRASS, { metal: 0.8, roughness: 0.3 }), 0, 0.25, 0).rotation.x = Math.PI / 2;
 }
 registerProps({ bar, piano, "saloon-table": saloonTable, chair, stool });
+// Bottles on the shooting-gallery shelves.
+BALL_BUILDERS.bottle = (g, b) => {
+  const r = b.size / 2,
+    glass = mat(b.color || "#3f6b3a", { roughness: 0.12, opacity: 0.85 });
+  mesh(g, new T.CylinderGeometry(r * 0.42, r * 0.45, r * 1.25, 12), glass, 0, -r * 0.35, 0);
+  mesh(g, new T.CylinderGeometry(r * 0.16, r * 0.4, r * 0.4, 12), glass, 0, r * 0.45, 0);
+  mesh(g, new T.CylinderGeometry(r * 0.15, r * 0.15, r * 0.45, 10), glass, 0, r * 0.85, 0);
+  mesh(g, new T.CylinderGeometry(r * 0.46, r * 0.46, r * 0.5, 12, 1, true), mat("#efe2c0", { roughness: 0.8, side: T.DoubleSide }), 0, -r * 0.35, 0, false);
+};
 
 function lamp(group, x, y, z, lights) {
   mesh(group, new T.CylinderGeometry(0.1, 0.13, 0.06, 10), mat(BRASS, { metal: 0.7, roughness: 0.35 }), x, y - 0.2, z);
@@ -143,17 +152,25 @@ registerDecor("saloon", (group, map) => {
   }
   const wanted = signTexture("wanted", "РАЗЫСКИВАЕТСЯ", { w: 512, h: 128, bg: "#e8d6a8", fg: "#3a2414", font: "bold 54px Georgia, serif", border: "#8a6a3a" });
   for (const [x, z, ry] of [
-    [-14.65, 6.2, Math.PI / 2],
-    [14.65, 6.2, -Math.PI / 2],
+    [-14.65, 9.4, Math.PI / 2],
+    [14.65, 9.4, -Math.PI / 2],
   ]) {
     const poster = mesh(group, new T.PlaneGeometry(1.2, 0.3), mat(wanted ? "#ffffff" : "#e8d6a8", { map: wanted }), x, 2.15, z, false);
     poster.rotation.y = ry;
     const face = mesh(group, new T.PlaneGeometry(0.9, 0.9), mat("#d9c595", { roughness: 0.9 }), x + (x < 0 ? 0.005 : -0.005), 1.55, z, false);
     face.rotation.y = ry;
   }
+  // Shelves of bottles on the side walls: a shooting gallery.
+  for (const s of statics.filter((s) => s.kind === "shelf")) {
+    mesh(group, worldBox(s.w, s.h - s.y, s.d, 1), wood("#a87850"), s.x, (s.h + s.y) / 2, s.z);
+    for (const dz of [-s.d / 2 + 0.2, s.d / 2 - 0.2]) mesh(group, new T.BoxGeometry(0.05, 0.3, 0.05), mat(DARK), s.x, s.y - 0.15, s.z + dz);
+    const sign = signTexture("targets", "ТИР", { w: 256, h: 96, font: "bold 64px Georgia, serif" });
+    const plate = mesh(group, new T.PlaneGeometry(0.9, 0.34), mat(sign ? "#ffffff" : MID, { map: sign }), Math.sign(s.x) * 14.64, 2.2, s.z, false);
+    plate.rotation.y = s.x < 0 ? Math.PI / 2 : -Math.PI / 2;
+  }
   // Swinging doors in the left wall.
   for (const s of [-1, 1]) {
-    const door = mesh(group, new T.BoxGeometry(0.06, 1.0, 0.62), wood("#b98a63"), -14.6, 1.25, 8.0 + s * 0.33);
+    const door = mesh(group, new T.BoxGeometry(0.06, 1.0, 0.62), wood("#b98a63"), -14.6, 1.25, 3.9 + s * 0.33);
     door.rotation.y = s * 0.15;
   }
   // Warm light from the lamps over the room.

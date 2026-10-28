@@ -1,6 +1,25 @@
 // Детская площадка: батут, баскетбольное кольцо, мячи, футбольные ворота у левого и правого края,
-// качели-весы и игрушечный трёхэтажный форт с горкой.
+// качели-весы и игрушечный трёхэтажный форт с горкой. По бокам — забор из сетки, рукоход,
+// турники трёх высот и лазалка-куб с сеткой и шестом.
 import { GOAL_COLLIDERS } from "./cinema.js";
+import { fence, turnik, monkeyBars, merge } from "./sides.js";
+
+// The climbing cube on the right: rope nets on its sides, a plank deck on top, a pole to slide down.
+export const GYM = { x: 13.25, z: -5.7, w: 2.0, d: 2.4, h: 2.1 };
+const SIDES = merge(
+  { statics: [fence(-1, -7.6, 10.2), fence(1, -7.6, 10.2)] },
+  monkeyBars("monkey-bars", -13.3, 4.4, 8.0),
+  turnik("turnik-low", 13.3, 4.4, 1.9),
+  turnik("turnik-mid", 13.3, 6.0, 2.3),
+  turnik("turnik-high", 13.3, 7.6, 2.7),
+  {
+    statics: [{ kind: "gym", ...GYM }],
+    climbs: [
+      { id: "gym-net", kind: "net", ...GYM, y0: 0, y1: GYM.h, face: "-x" },
+      { id: "gym-pole", kind: "rope", x: GYM.x - GYM.w / 2 - 0.45, z: GYM.z + GYM.d / 2 - 0.2, y0: 0.2, y1: GYM.h + 1.0 },
+    ],
+  },
+);
 
 // Fort, local coordinates (front = +z): three stacked floors, a step and a slide on the left.
 const FORT = [
@@ -31,11 +50,14 @@ export default {
   },
   spawn: { x0: -3, x1: 3, z0: 6.5, z1: 8.5 },
   statics: [
-    [-13.4, -6.6, 3.4],
-    [13.6, -5.2, 3.6],
-    [-13.8, 9.4, 3.1],
-    [13.8, 9.4, 3.3],
-  ].map(([x, z, h]) => ({ kind: "tree", x, z, shape: "cylinder", radius: 0.22, w: 0.44, d: 0.44, h })),
+    ...[
+      [13.9, -1.7, 3.6],
+      [-13.8, 9.4, 3.1],
+      [13.8, 9.4, 3.3],
+    ].map(([x, z, h]) => ({ kind: "tree", x, z, shape: "cylinder", radius: 0.22, w: 0.44, d: 0.44, h })),
+    ...SIDES.statics,
+  ],
+  climbs: SIDES.climbs,
   props: [
     {
       id: "fort",

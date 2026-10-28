@@ -289,6 +289,20 @@ function applyClimb(rig, climb, t) {
   rig.model.position.set(0, 0, 0);
   rig.model.rotation.set(0, 0, 0);
   rig.model.scale.set(1, 1, 1);
+  if (climb.bar) {
+    // Hanging from a bar: arms up, elbows bending as you pull up; hand over hand on monkey bars.
+    const pull = climb.pull || 0,
+      reach = Math.sin(climb.phase || 0);
+    for (let i = 0; i < 2; i++) {
+      const s = i ? 1 : -1;
+      rig.arms[i].rotation.set(-3.0 + pull * 0.9 + reach * s * 0.25, 0, s * (0.16 + pull * 0.25));
+      rig.elbows[i].rotation.x = -0.08 - pull * 1.7;
+      rig.legs[i].rotation.set(-0.2 - pull * 0.35 + reach * s * 0.3, 0, -s * 0.05);
+      rig.knees[i].rotation.x = 0.25 + pull * 0.5;
+    }
+    rig.head.rotation.x = -0.15 + pull * 0.25;
+    return;
+  }
   if (climb.zip) {
     const swing = Math.sin(t * 3) * 0.12;
     for (let i = 0; i < 2; i++) {

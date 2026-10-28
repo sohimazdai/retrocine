@@ -28,6 +28,18 @@ const snowman = (id, x, z, hat) => ({ id, kind: "snowman", label: "Снегов�
 export const HILL = { x: 12.4, z: -6.4, w: 4.6, d: 2.4, h: 2.4 };
 const SLED_RUN = { kind: "sled-run", shape: "ramp", x: HILL.x, z: HILL.z + HILL.d / 2 + 3.75, w: 3.4, d: 7.5, h0: HILL.h, h1: 0, h: HILL.h, axis: "z", slide: 130 };
 const STEPS = { kind: "snow-steps", shape: "ramp", x: HILL.x - HILL.w / 2 - 1.5 + 0.05, z: HILL.z, w: 3.0, d: 1.4, h0: 0, h1: HILL.h, h: HILL.h, axis: "x" };
+// A snow fort on each side: walls to hide behind and a tower to jump up on, open toward the rink.
+const fort = (side, z0, z1) => {
+  const xo = side * 14.55,
+    xi = side * 12.3,
+    x = (xo + xi) / 2,
+    w = Math.abs(xo - xi);
+  return [
+    { kind: "snow-wall", x: xo - side * 0.25, z: (z0 + z1) / 2, w: 0.5, d: z1 - z0, h: 1.2 },
+    ...[z0, z1].map((z) => ({ kind: "snow-wall", x, z: z + (z === z0 ? 0.25 : -0.25), w, d: 0.5, h: 1.2 })),
+    { kind: "snow-tower", x: xo - side * 0.85, z: z0 + 0.95, w: 1.2, d: 1.2, h: 2.0 },
+  ];
+};
 export const HUT = { x: -11.8, z: -6.0, w: 3.6, d: 2.8, h: 3.4 };
 
 export default {
@@ -53,11 +65,13 @@ export default {
     { kind: "hill", ...HILL },
     SLED_RUN,
     STEPS,
+    ...fort(-1, -2.4, 2.8),
+    ...fort(1, 4.6, 8.4),
     { kind: "hut", ...HUT },
     ...[
       [-13.5, 8.5, 3.6],
       [13.7, 8.9, 3.4],
-      [-13.7, 1.6, 4.0],
+      [-14.1, -3.8, 4.0],
       [-9.0, -8.7, 4.6, true],
     ].map(([x, z, h, festive]) => ({ kind: "fir", festive: !!festive, x, z, shape: "cylinder", radius: 0.3, w: 0.6, d: 0.6, h })),
     ...[
@@ -78,7 +92,7 @@ export default {
     { id: "puck", kind: "puck", x: 0, z: 0, home: true },
     { id: "snow-1", kind: "snowroll", x: -5.6, z: 7.6 },
     { id: "snow-2", kind: "snowroll", x: 5.2, z: 8.2 },
-    { id: "snow-3", kind: "snowroll", x: -12.4, z: -1.2 },
+    { id: "snow-3", kind: "snowroll", x: -10.2, z: -1.6 },
   ],
   cubes: [],
 };

@@ -27,6 +27,7 @@ export const BALLS = {
   pebble: { size: 0.3, restitution: 0.2, friction: 4.5, label: "Камешек" },
   barrel: { size: 0.8, restitution: 0.2, friction: 3.2, label: "Бочка" },
   mug: { size: 0.28, restitution: 0.1, friction: 0.5, label: "Кружка" },
+  bottle: { size: 0.28, restitution: 0.12, friction: 2.2, label: "Бутылка" },
   paintball: { size: 0.5, restitution: 0.55, friction: 1.6, label: "Мяч" },
   cone: { size: 0.5, restitution: 0.25, friction: 3.6, label: "Конус" },
 };

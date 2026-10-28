@@ -22,6 +22,22 @@ const hay = (id, x, z) => ({ id, kind: "haystack", label: "Стог пшениц
 // A table knocked on its side: the top stands up as a shield, the legs stick out behind it (-z).
 const table = (id, x, z, rot = 0) => ({ id, kind: "table-down", label: "Перевёрнутый стол", x, z, rot, weight: 1, lift: 2, colliders: [{ x: 0, z: 0, w: 1.8, d: 0.12, h: 1.0 }] });
 
+// Along the sides: tall safety netting, a watchtower for each team (ladder on the field side) and
+// sandbag walls to hide behind.
+export const TOWER = { w: 2.2, d: 2.2, z: 7.3, y: 2.25, h: 2.4 };
+const tower = (side) => {
+  const x = side * (14.55 - TOWER.w / 2),
+    inner = x - (side * TOWER.w) / 2;
+  return [
+    { kind: "tower-deck", side, team: side < 0 ? "blue" : "red", x, z: TOWER.z, w: TOWER.w, d: TOWER.d, y: TOWER.y, h: TOWER.h },
+    ...[-1, 1].flatMap((sx) => [-1, 1].map((sz) => ({ kind: "tower-post", x: x + sx * (TOWER.w / 2 - 0.1), z: TOWER.z + sz * (TOWER.d / 2 - 0.1), w: 0.16, d: 0.16, h: TOWER.y }))),
+    // Waist-high walls on the deck except on the ladder side.
+    { kind: "parapet", x: x + (side * TOWER.w) / 2 - side * 0.05, z: TOWER.z, w: 0.1, d: TOWER.d, y: TOWER.h, h: TOWER.h + 0.95 },
+    ...[-1, 1].map((sz) => ({ kind: "parapet", x, z: TOWER.z + sz * (TOWER.d / 2 - 0.05), w: TOWER.w, d: 0.1, y: TOWER.h, h: TOWER.h + 0.95 })),
+  ];
+};
+export const TOWER_LADDERS = [-1, 1].map((side) => ({ id: "tower-" + (side < 0 ? "blue" : "red"), kind: "wall", x: side * (14.55 - TOWER.w / 2), z: TOWER.z, w: TOWER.w, d: 1.0, y0: 0, y1: TOWER.h, face: side < 0 ? "+x" : "-x" }));
+
 export default {
   id: "paintball",
   title: "Пейнтбол",
@@ -47,7 +63,12 @@ export default {
     { kind: "flag", team: "blue", x: -13.4, z: 2.0, shape: "cylinder", radius: 0.12, w: 0.24, d: 0.24, h: 3.6 },
     { kind: "flag", team: "red", x: 13.4, z: 2.0, shape: "cylinder", radius: 0.12, w: 0.24, d: 0.24, h: 3.6 },
     ...[-13.6, 13.6].map((x) => ({ kind: "tyres", x, z: 9.4, shape: "cylinder", radius: 0.6, w: 1.2, d: 1.2, h: 0.95 })),
+    ...[-1, 1].map((side) => ({ kind: "fence", style: "net", x: side * 14.62, z: 1.3, w: 0.06, d: 17.8, h: 3.6 })),
+    ...tower(-1),
+    ...tower(1),
+    ...[-1, 1].map((side) => ({ kind: "sandbags", x: side * 13.65, z: -2.7, w: 0.6, d: 3.0, h: 0.95 })),
   ],
+  climbs: TOWER_LADDERS,
   props: [
     snake("snake-a", -3.4, -4.6, "#d8432f"),
     snake("snake-b", 3.4, 6.2, "#2f6fd8"),

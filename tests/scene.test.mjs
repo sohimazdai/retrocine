@@ -1111,3 +1111,26 @@ test("winter rink: you skate and glide on the ice, ride a sled down the hill, sh
   a.tick(1.2);
   assert(a.run("world.balls.find((b) => b.kind === 'puck').x") < -3, "the puck slid away across the ice");
 });
+
+test("playground sides: E under a pull-up bar hangs you from it; W pulls up and others see it", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "playground" })');
+  a.tick(0.2);
+  a.run("const t = mapScene.map.climbs.find((c) => c.id === 'turnik-mid'); Object.assign(active, { x: t.x, z: t.z + 0.3, y: 0, vy: 0, grounded: true })");
+  a.run("kickNearest()");
+  assert.equal(a.run("active.climb?.c.id"), "turnik-mid");
+  assert.equal(a.run("currentPose().hb"), 1);
+  a.run("keys.add('up')");
+  a.tick(0.6);
+  a.run("keys.clear()");
+  assert.equal(a.run("active.climb.count"), 1);
+  a.tick(0.5);
+  a.run("keys.add('down')");
+  a.tick(0.1);
+  a.run("keys.clear()");
+  a.tick(0.6);
+  assert.equal(a.run("active.climb"), null);
+  assert(a.run("active.grounded"));
+  // The fence, the monkey bars and the climbing cube are built.
+  assert(a.run("mapScene.decorRoot.children.length") > 20);
+});

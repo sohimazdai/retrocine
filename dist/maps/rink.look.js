@@ -331,6 +331,39 @@ registerDecor("rink", (group, map) => {
     if (s.kind === "fir") twinkle.push(...fir(group, s, r));
     if (s.kind === "lamp") lamp(group, s, glow);
   }
+  // Snow forts: walls of packed snow blocks and a tower.
+  const blocks = [],
+    tops = [];
+  for (const s of statics.filter((s) => s.kind === "snow-wall" || s.kind === "snow-tower")) {
+    const along = s.d >= s.w,
+      len = along ? s.d : s.w,
+      rows = Math.round(s.h / 0.4);
+    for (let row = 0; row < rows; row++) {
+      const n = Math.max(1, Math.round(len / 0.6)),
+        size = len / n;
+      for (let i = 0; i < n; i++) {
+        const t = -len / 2 + (i + 0.5) * size + (row % 2 && i < n - 1 ? size / 2 : 0);
+        if (row % 2 && i === n - 1) continue;
+        blocks.push(placed(new T.BoxGeometry(along ? s.w : size - 0.03, 0.38, along ? size - 0.03 : s.d), s.x + (along ? 0 : t), 0.2 + row * 0.4, s.z + (along ? t : 0)));
+      }
+      if (row % 2) {
+        // Half blocks at the ends of the staggered rows.
+        for (const end of [-1, 1]) blocks.push(placed(new T.BoxGeometry(along ? s.w : size / 2 - 0.03, 0.38, along ? size / 2 - 0.03 : s.d), s.x + (along ? 0 : (end * (len - size / 2)) / 2), 0.2 + row * 0.4, s.z + (along ? (end * (len - size / 2)) / 2 : 0)));
+      }
+    }
+    tops.push(placed(new T.BoxGeometry(s.w + 0.06, 0.08, s.d + 0.06), s.x, s.h + 0.02, s.z));
+  }
+  if (blocks.length) {
+    mesh(group, merge(blocks), mat("#eef3fa", { roughness: 0.85 }));
+    mesh(group, merge(tops), mat("#ffffff", { roughness: 0.95 }));
+  }
+  // Snowball stockpiles behind the fort walls.
+  const ammo = [];
+  for (const s of statics.filter((s) => s.kind === "snow-tower")) {
+    const side = Math.sign(s.x);
+    for (let i = 0; i < 9; i++) ammo.push(placed(new T.SphereGeometry(0.11, 8, 6), s.x - side * (1.0 + (i % 3) * 0.22), 0.11 + Math.floor(i / 6) * 0.18, s.z + 1.2 + Math.floor(i / 3) * 0.2));
+  }
+  if (ammo.length) mesh(group, merge(ammo), mat(SNOW, { roughness: 0.9 }));
   // Snowdrifts along the edges of the floor.
   const drifts = [];
   for (let i = 0; i < 26; i++) {

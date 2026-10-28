@@ -74,6 +74,9 @@ export function sanitizePose(p) {
   if (p.zp === 1) pose.zp = 1;
   // Sledding down a snow slope.
   if (p.sd === 1) pose.sd = 1;
+  // Hanging from a bar, and how far pulled up.
+  if (p.hb === 1) pose.hb = 1;
+  if (Number.isFinite(p.pu) && p.pu > 0) pose.pu = Math.round(clamp(p.pu, 0, 1) * 10) / 10;
   return pose;
 }
 function spawnPose(state) {

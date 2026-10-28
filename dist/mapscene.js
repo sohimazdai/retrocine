@@ -4,10 +4,15 @@ import * as T from "three";
 import { buildProp, buildBall, disposeOwned } from "./props.js";
 import { mapProps, obstacles, toWorld, BALLS } from "./world.js";
 
-const DECOR = new Map();
+const DECOR = new Map(),
+  STATICS = {};
 // A map's renderer registers how its scenery looks: fn(group, map, ctx) → optional { update(dt, t) }.
 export function registerDecor(id, fn) {
   DECOR.set(id, fn);
+}
+// Looks shared by every map for kinds of static colliders (fences, pull-up bars, …): fn(group, s, map).
+export function registerStatics(builders) {
+  Object.assign(STATICS, builders);
 }
 const DEFAULT_THEME = {
   floor: "#514959",
@@ -182,6 +187,7 @@ export class MapScene {
     this.root.add(decor);
     this.decorRoot = decor;
     this.decor = DECOR.get(map.id)?.(decor, map, { scene: this.scene }) || null;
+    for (const s of map.statics || []) STATICS[s.kind]?.(decor, s, map);
     decor.traverse((o) => {
       if (o.isMesh) o.receiveShadow = true;
     });

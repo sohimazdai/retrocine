@@ -112,6 +112,45 @@ registerDecor("ropepark", (group, map) => {
       }
       mesh(group, merge(parts), wood);
     }
+    if (s.kind === "bigwall") {
+      // Plywood bouldering wall with a slight overhang look, a deck and railing on top.
+      const face = -Math.sign(s.x);
+      mesh(group, worldBox(s.w, s.h, s.d, 1.2), mat("#e8dcc4", { roughness: 0.8 }), s.x, s.h / 2, s.z);
+      for (let y = 0.6; y < s.h; y += 1.2) mesh(group, new T.BoxGeometry(0.02, 0.03, s.d), mat("#b9ab90"), s.x + (face * s.w) / 2 + face * 0.01, y, s.z, false);
+      mesh(group, new T.BoxGeometry(s.w + 0.1, 0.1, s.d + 0.1), dark, s.x, s.h, s.z);
+      for (const dz of [-s.d / 2 + 0.05, s.d / 2 - 0.05]) mesh(group, new T.CylinderGeometry(0.04, 0.04, 1.0, 8), dark, s.x - (face * s.w) / 2 + face * 0.1, s.h + 0.5, s.z + dz);
+      lines(group, [[s.x - (face * s.w) / 2 + face * 0.1, s.h + 0.95, s.z - s.d / 2 + 0.05], [s.x - (face * s.w) / 2 + face * 0.1, s.h + 0.95, s.z + s.d / 2 - 0.05]], ROPE, 0.9);
+    }
+    if (s.kind === "mat") {
+      mesh(group, worldBox(s.w, s.h, s.d, 1), mat("#2f6fd8", { roughness: 0.75 }), s.x, s.h / 2, s.z);
+      for (let z = s.z - s.d / 2 + 1; z < s.z + s.d / 2; z += 1) mesh(group, new T.BoxGeometry(s.w + 0.01, s.h + 0.01, 0.03), mat("#1f4fa0"), s.x, s.h / 2, z, false);
+    }
+    if (s.kind === "web") {
+      // Two posts and a rope web between them, radiating from the middle.
+      for (const dz of [-s.d / 2, s.d / 2]) mesh(group, new T.CylinderGeometry(0.08, 0.1, s.h + 0.3, 10), dark, s.x, (s.h + 0.3) / 2, s.z + dz);
+      mesh(group, new T.BoxGeometry(0.2, 0.2, s.d + 0.2), dark, s.x, s.h, s.z);
+      const cx = s.x,
+        cy = s.h / 2,
+        pts = [];
+      const rim = [];
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * Math.PI * 2,
+          y = cy + Math.sin(a) * (s.h / 2 - 0.05),
+          z = s.z + Math.cos(a) * (s.d / 2 - 0.05);
+        rim.push([cx, Math.max(0.05, Math.min(s.h - 0.05, y)), z]);
+        pts.push([cx, cy, s.z], rim[i]);
+      }
+      for (const k of [0.25, 0.45, 0.65, 0.85])
+        for (let i = 0; i < 12; i++) {
+          const a = rim[i],
+            b = rim[(i + 1) % 12];
+          pts.push([cx, cy + (a[1] - cy) * k, s.z + (a[2] - s.z) * k], [cx, cy + (b[1] - cy) * k, s.z + (b[2] - s.z) * k]);
+        }
+      lines(group, pts, ROPE, 0.95);
+      const ghostMat = mat("#ffffff", { opacity: 0.03, depthWrite: false });
+      const panel = mesh(group, new T.BoxGeometry(0.06, s.h, s.d), ghostMat, s.x, s.h / 2, s.z, false);
+      panel.userData.ghost = true;
+    }
     if (s.kind === "trampoline") {
       const pad = mesh(group, new T.TorusGeometry(s.radius - 0.1, 0.12, 10, 36), mat("#3f86b8", { roughness: 0.6 }), s.x, s.h - 0.05, s.z);
       pad.rotation.x = Math.PI / 2;

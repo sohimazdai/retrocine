@@ -191,4 +191,44 @@ registerDecor("maze", (group, map) => {
     }
   }
   for (let i = 0; i < 6; i++) rock(group, -12 + i * 4.8 + r() * 1.5, 0.12, 9.95 + r() * 0.2, 0.3, 0.18, 0.25, "#9a958b", i + 3);
+  for (const s of map.statics || []) if (s.kind === "garden-wall") gardenWall(group, s, r);
+  for (const c of map.climbs || []) if (c.kind === "wall") trellis(group, c, r);
 });
+// Old stone garden wall with a flagstone walkway on top, ivy and lanterns.
+function gardenWall(group, s, r) {
+  const tex = TEXTURES.rock();
+  mesh(group, worldBox(s.w, s.h - 0.1, s.d, 1.4), mat(tex ? "#e6dccb" : STONE, { map: tex, roughness: 0.95 }), s.x, (s.h - 0.1) / 2, s.z);
+  mesh(group, worldBox(s.w + 0.14, 0.1, s.d, 1.4), mat(STONE, { roughness: 0.8 }), s.x, s.h - 0.05, s.z);
+  const face = -Math.sign(s.x),
+    ivy = [];
+  for (let i = 0; i < 40; i++) {
+    const z = s.z - s.d / 2 + r() * s.d,
+      y = 0.3 + r() * (s.h - 0.5),
+      k = 0.25 + r() * 0.35;
+    ivy.push(placed(new T.IcosahedronGeometry(1, 0), s.x + face * (s.w / 2 + 0.02), y, z, r() * 3, r() * 3, 0, [0.12, k, k * 1.3]));
+  }
+  mesh(group, merge(ivy), mat("#3f7a35", { flat: true, roughness: 0.9 }));
+  // Lanterns on the outer edge of the walkway.
+  for (let z = s.z - s.d / 2 + 1.2; z < s.z + s.d / 2; z += 4.2) {
+    const x = s.x - face * (s.w / 2 - 0.12);
+    mesh(group, new T.CylinderGeometry(0.03, 0.03, 0.9, 6), mat("#2c2f33"), x, s.h + 0.45, z);
+    mesh(group, new T.BoxGeometry(0.18, 0.24, 0.18), mat("#ffe7b0", { emissive: "#ffbe5a", glow: 1.3 }), x, s.h + 1.0, z, false);
+  }
+}
+// A wooden lattice with ivy on the wall's maze side: the way up onto the walkway.
+function trellis(group, c, r) {
+  const nx = c.face === "+x" ? 1 : -1,
+    x = c.x + (nx * c.w) / 2 + nx * 0.04,
+    wood = mat("#7a5434", { roughness: 0.8 }),
+    z0 = c.z - c.d / 2,
+    z1 = c.z + c.d / 2,
+    parts = [];
+  // A square lattice of thin slats.
+  for (let z = z0 + 0.15; z < z1; z += 0.3) parts.push(placed(new T.BoxGeometry(0.03, c.y1, 0.035), x, c.y1 / 2, z));
+  for (let y = 0.2; y < c.y1; y += 0.3) parts.push(placed(new T.BoxGeometry(0.03, 0.035, c.d), x, y, c.z));
+  for (const z of [z0, z1]) parts.push(placed(new T.BoxGeometry(0.06, c.y1, 0.06), x, c.y1 / 2, z));
+  mesh(group, merge(parts), wood);
+  const leaves = [];
+  for (let i = 0; i < 26; i++) leaves.push(placed(new T.IcosahedronGeometry(1, 0), x + nx * 0.03, 0.2 + r() * (c.y1 - 0.3), z0 + r() * c.d, r() * 3, r() * 3, 0, [0.08, 0.12 + r() * 0.12, 0.14 + r() * 0.12]));
+  mesh(group, merge(leaves), mat("#4c8a3f", { flat: true }));
+}

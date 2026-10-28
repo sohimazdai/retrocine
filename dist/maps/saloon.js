@@ -10,6 +10,13 @@ const TABLES = [
   ["table-c", -2.4, 2.4],
   ["table-d", 5.0, 1.2],
 ];
+// Shooting gallery: a shelf of bottles on each side wall; knock them off with snowballs and the rest.
+const SHELVES = [
+  { side: -1, z0: 4.6, z1: 8.6 },
+  { side: 1, z0: 4.6, z1: 8.6 },
+];
+const SHELF = { w: 0.42, y: 1.22, h: 1.3 };
+const BOTTLE_COLORS = ["#3f6b3a", "#7a4a22", "#2e5a6b", "#6b2a3a", "#8a7a3a"];
 const BALCONY = { x: 12.6, z: -3.2, w: 3.4, d: 7.8, y: 2.25, h: 2.4 };
 // The stairs are a slope you walk up (drawn as steps), ending level with the balcony floor.
 const STAIRS = { kind: "stairs", shape: "ramp", x: 13.55, z: BALCONY.z + BALCONY.d / 2 + 1.5, w: 1.5, d: 3.0, h0: BALCONY.h, h1: 0, h: BALCONY.h, axis: "z" };
@@ -43,6 +50,7 @@ export default {
     { kind: "railing", x: BALCONY.x - BALCONY.w / 2 + 0.05, z: BALCONY.z, w: 0.08, d: BALCONY.d, y: BALCONY.h, h: BALCONY.h + 0.95 },
     { kind: "railing", x: BALCONY.x - 0.75, z: BALCONY.z + BALCONY.d / 2 - 0.05, w: BALCONY.w - 1.5, d: 0.08, y: BALCONY.h, h: BALCONY.h + 0.95 },
     STAIRS,
+    ...SHELVES.map((s) => ({ kind: "shelf", x: s.side * (14.67 - SHELF.w / 2), z: (s.z0 + s.z1) / 2, w: SHELF.w, d: s.z1 - s.z0, y: SHELF.y, h: SHELF.h })),
   ],
   props: [
     {
@@ -81,6 +89,9 @@ export default {
     { id: "barrel-1", kind: "barrel", x: -9.8, z: 5.6 },
     { id: "barrel-2", kind: "barrel", x: -8.8, z: 6.4 },
     { id: "barrel-3", kind: "barrel", x: 9.4, z: 5.6 },
+    ...SHELVES.flatMap((s) =>
+      Array.from({ length: 7 }, (_, i) => ({ id: `bottle-${s.side < 0 ? "l" : "r"}${i}`, kind: "bottle", x: s.side * 14.32, z: s.z0 + 0.35 + i * ((s.z1 - s.z0 - 0.7) / 6), y: SHELF.h + 0.14, color: BOTTLE_COLORS[(i + (s.side > 0 ? 2 : 0)) % BOTTLE_COLORS.length] })),
+    ),
   ],
   cubes: [],
 };

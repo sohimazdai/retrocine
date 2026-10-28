@@ -97,6 +97,10 @@ registerDecor("skatepark", (group, map) => {
       mesh(group, new T.BoxGeometry(s.w, s.h, s.d), s.kind === "deck" ? dark : concrete, s.x, s.h / 2, s.z);
       // Steel edges to grind on the look of it.
       for (const side of [-1, 1]) mesh(group, new T.BoxGeometry(s.w, 0.04, 0.04), steel, s.x, s.h, s.z + (side * s.d) / 2);
+    } else if (s.kind === "ledge") {
+      // A concrete ledge with a steel edge on top, to grind along.
+      mesh(group, new T.BoxGeometry(s.w, s.h, s.d), concrete, s.x, s.h / 2, s.z);
+      for (const side of [-1, 1]) mesh(group, new T.BoxGeometry(0.04, 0.04, s.d), steel, s.x + (side * s.w) / 2, s.h, s.z);
     } else if (s.rail) {
       const along = s.w >= s.d,
         len = along ? s.w : s.d,

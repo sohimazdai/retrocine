@@ -131,6 +131,20 @@ export function stepBody(body, move, boxes, dt, speedScale = 1, ice = false) {
       if (rise > 0.02 && rise <= STEP_UP && inside(body.x, body.z, b, RADIUS * 0.85)) {
         body.y = b.h;
         oldY = b.h;
+        // Up onto it: your feet (the centre) go onto the step, not hang over its edge.
+        if (!inside(body.x, body.z, b, 0.02)) {
+          if (b.shape === "cylinder") {
+            const dx = body.x - b.x,
+              dz = body.z - b.z,
+              d = Math.hypot(dx, dz) || 1,
+              k = Math.max(0, b.radius - 0.04) / d;
+            body.x = b.x + dx * Math.min(1, k);
+            body.z = b.z + dz * Math.min(1, k);
+          } else {
+            body.x = clamp(body.x, b.x - b.w / 2 + 0.04, b.x + b.w / 2 - 0.04);
+            body.z = clamp(body.z, b.z - b.d / 2 + 0.04, b.z + b.d / 2 - 0.04);
+          }
+        }
       }
     }
   for (const b of boxes) resolveHorizontal(body, b);

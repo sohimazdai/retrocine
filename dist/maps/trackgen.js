@@ -34,7 +34,9 @@ export function centreline(ctrl, step = 0.6) {
     carry = l - (s - step);
   }
   if (Math.hypot(out.at(-1)[0] - out[0][0], out.at(-1)[1] - out[0][1]) < step * 0.5) out.pop();
-  return out.map((p) => p.map((v) => Math.round(v * 1000) / 1000));
+  // The spline overshoots a little next to a climb: never below the floor (the road would sink under
+  // the turf), and a hair above it is the floor too.
+  return out.map(([x, z, y]) => [x, z, y < 0.01 ? 0 : y].map((v) => Math.round(v * 1000) / 1000));
 }
 // Runs of the closed centreline that are raised above the floor, each as an open "path" collider
 // (with a little flat run-in at both ends so it starts at ground level).

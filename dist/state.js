@@ -1,7 +1,7 @@
 // Shared room state and its operations. The sync server applies every operation with these
 // functions, and the browser uses the same ones when it has no connection, so both behave alike.
 import { clamp, stepCube, collideCubes, kickCube, LIMITS, inside } from "./physics.js";
-import { floorBack } from "./layout.js";
+import { floorBack, setRoomScale, ROOM } from "./layout.js";
 import {
   MAX_NOTES,
   MAX_CUBES,
@@ -45,6 +45,7 @@ const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
 export function createState(saved = {}, newId) {
   const map = mapDef(saved.map);
+  setRoomScale(map.scale || 1);
   const sameMap = saved.map === map.id || (!saved.map && map.id === MAPS[0].id);
   const structures = defaultPositions(map);
   if (sameMap)
@@ -66,20 +67,20 @@ export function createState(saved = {}, newId) {
   if (sameMap)
     for (const r of rides) {
       const p = (saved.rides || []).find((x) => x.id === r.id);
-      if (p && finite(p.x) && finite(p.z)) Object.assign(r, { x: clamp(p.x, -LIMITS.x, LIMITS.x), z: clamp(p.z, -12, LIMITS.z), a: num(p.a, -10, 10), by: typeof p.by === "string" ? p.by : null });
+      if (p && finite(p.x) && finite(p.z)) Object.assign(r, { x: clamp(p.x, -LIMITS.x, LIMITS.x), z: clamp(p.z, floorBack(p.x), LIMITS.z), a: num(p.a, -10, 10), by: typeof p.by === "string" ? p.by : null });
     }
   return {
     map: map.id,
     notes: (saved.notes || []).slice(0, MAX_NOTES).map((n) => sanitizeNote(n, n.id || newId())),
     cubes: cubes
       .slice(0, MAX_CUBES)
-      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -14, 14), z: num(c.z, -10, 10), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
+      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -LIMITS.x, LIMITS.x), z: num(c.z, ROOM.back, LIMITS.z), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
     balls,
     rides,
     structures,
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
-    mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, -14, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
+    mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
     mineAt: {},
     flags: {},
     lifts: {},
@@ -129,8 +130,12 @@ export function serializeState(s) {
   };
 }
 export const stateMap = (s) => mapDef(s.map);
+// The room's floor follows its map's size (map.scale). One shared geometry serves every room, so
+// each entry point below sets it for the room it works on (cheap when it is already right).
+export const fitRoom = (s) => setRoomScale(stateMap(s).scale || 1);
 // Someone left the room: whatever they rode stays where they were.
 export function releaseRides(s, peer, pose) {
+  fitRoom(s);
   const freed = [];
   for (const r of s.rides || [])
     if (r.by === peer) {
@@ -172,6 +177,7 @@ export function timerLeft(timer, now) {
 }
 // A free spot on the floor near (x, z), clear of every collider of the map.
 export function freeSpot(s, x, z, pad = 1.2) {
+  fitRoom(s);
   const obs = stateObstacles(s);
   for (let r = 0; r < 24; r += 0.5)
     for (let a = 0; a < Math.PI * 2; a += Math.PI / 6) {
@@ -185,6 +191,7 @@ export function freeSpot(s, x, z, pad = 1.2) {
 // Fixed-step simulation of cubes and balls: water currents, wrap-around at river ends, goals and
 // hoops. Returns the scoring events of this step.
 export function stepWorld(s, dt, skip = () => false) {
+  fitRoom(s);
   const map = stateMap(s),
     obs = stateObstacles(s),
     objects = dynamicObjects(s),
@@ -247,6 +254,7 @@ export function stepWorld(s, dt, skip = () => false) {
 // the room ({ msg, others } — others: do not echo to the sender) and physics marks that the
 // simulation must wake up. Returns null for an invalid or forbidden operation.
 export function applyOp(s, op, ctx) {
+  fitRoom(s);
   const out = [],
     all = (msg) => out.push({ msg, others: false }),
     others = (msg) => out.push({ msg, others: true });
@@ -398,6 +406,7 @@ export function applyOp(s, op, ctx) {
       const map = MAPS.find((m) => m.id === op.id);
       if (!map || map.id === s.map) return null;
       s.map = map.id;
+      fitRoom(s);
       s.structures = defaultPositions(map);
       s.balls = defaultBalls(map);
       s.cubes = defaultCubes(map, ctx.newId);
@@ -444,9 +453,9 @@ export function applyOp(s, op, ctx) {
     case "boom": {
       const kind = projectile(op.kind);
       if (!kind.explosion || op.kind !== kind.id || ![op.x, op.y, op.z].every(finite)) return null;
-      const x = clamp(op.x, -16, 16),
+      const x = clamp(op.x, -ROOM.halfWidth - 1.3, ROOM.halfWidth + 1.3),
         y = clamp(op.y, -1, 30),
-        z = clamp(op.z, -14, 12);
+        z = clamp(op.z, ROOM.back - 2, ROOM.front + 1.7);
       const { radius, power } = kind.explosion;
       const props = applyBlast(s, x, y, z, radius, power);
       all({ t: "boom", by: ctx.peer, kind: kind.id, pid: typeof op.pid === "string" ? op.pid.slice(0, 24) : null, x, y, z, r: radius, power });
@@ -482,7 +491,7 @@ export function applyOp(s, op, ctx) {
       if (s.mines.some((m) => m.by === ctx.peer) || s.mines.length >= MAX_MINES) return null;
       if (ctx.now - (s.mineAt[ctx.peer] || -Infinity) < cool - 150) return null;
       s.mineAt[ctx.peer] = ctx.now;
-      s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, -14, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
+      s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, ROOM.back, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
       all({ t: "mines", mines: serializeState(s).mines });
       break;
     }
@@ -552,12 +561,14 @@ export const STATE_OPS = new Set([
 // calls it each tick; the browser calls it in its own loop offline. Each round-start message carries
 // `spawns` so clients can reposition their own avatar.
 export function runMatchStep(s, now, peerIds, rand = Math.random) {
+  fitRoom(s);
   if (!s.match || !match.matchEnabled(stateMap(s))) return [];
   return match.stepMatch(s.match, now, peerIds, stateMap(s), rand).map((patch) => ({ t: "match", match: match.serializeMatch(s.match), spawns: patch.spawns }));
 }
 // Mines whose fuse has run out go off: the same blast as a grenade (props topple, objects fly, people
 // are hurt on their own screens). Returns broadcast messages and whether physics must wake up.
 export function runMines(s, now) {
+  fitRoom(s);
   const out = [],
     gone = (s.mines || []).filter((m) => m.triggerAt != null && now >= m.triggerAt);
   if (!gone.length) return out;
@@ -582,6 +593,7 @@ export function matchActive(s) {
 // add up). Avatars on opposite sides together lift it, if there are as many as its lift value;
 // the lifted prop follows their midpoint until they let go. Returns the props that moved.
 export function propPosition(s, id) {
+  fitRoom(s);
   return s.structures[id];
 }
 function setPropPosition(s, id, p) {
@@ -618,6 +630,7 @@ function gapTo(prop, pos, x, z) {
   return { gap: Math.hypot(Math.max(0, Math.abs(dx) - prop.hw), Math.max(0, Math.abs(dz) - prop.hd)), dx, dz };
 }
 export function stepPushes(s, pushers, dt) {
+  fitRoom(s);
   const moved = [];
   s.lifts ||= {};
   for (const prop of mapProps(stateMap(s))) {
@@ -685,6 +698,7 @@ export function stepPushes(s, pushers, dt) {
 // ——— Explosions ———
 // Pushes every loose object away from the blast and nudges movable props according to their weight.
 export function applyBlast(s, x, y, z, radius, power) {
+  fitRoom(s);
   const moved = [];
   for (const o of dynamicObjects(s)) {
     const dx = o.x - x,

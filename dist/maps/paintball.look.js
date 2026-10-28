@@ -198,7 +198,8 @@ registerDecor("paintball", (group, map) => {
     ring.rotation.x = -Math.PI / 2;
   }
   // Centre line and tyre stacks at the corners.
-  const line = mesh(group, new T.PlaneGeometry(0.1, 21), mat("#ffffff", { opacity: 0.5 }), 0, 0.012, -0.5, false);
+  const k = map.scale || 1,
+    line = mesh(group, new T.PlaneGeometry(0.1, 21 * k), mat("#ffffff", { opacity: 0.5 }), 0, 0.012, -0.5 * k, false);
   line.rotation.x = -Math.PI / 2;
   const tyre = mat("#1f1f22", { roughness: 0.9 });
   for (const s of (map.statics || []).filter((s) => s.kind === "tyres"))

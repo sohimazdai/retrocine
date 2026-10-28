@@ -15,11 +15,13 @@ import {
   matchActive,
   runMines,
   minesPending,
+  fitRoom,
 } from "../../dist/state.js";
 import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
 import { projectile, PROJECTILES } from "../../dist/projectiles.js";
 import { LIMITS, clamp } from "../../dist/physics.js";
+import { ROOM } from "../../dist/layout.js";
 import { livekitToken } from "./livekit.js";
 
 export const MAX_PEERS = 16;
@@ -53,7 +55,7 @@ export function sanitizePose(p) {
   if (!p || typeof p !== "object") return null;
   const f = (v, lo, hi) => (Number.isFinite(v) ? clamp(v, lo, hi) : null);
   const x = f(p.x, -LIMITS.x, LIMITS.x),
-    z = f(p.z, -14, LIMITS.z),
+    z = f(p.z, ROOM.back, LIMITS.z),
     y = f(p.y, 0, 12);
   if (x === null || z === null || y === null) return null;
   const pose = {
@@ -128,6 +130,8 @@ export class Room {
     for (const p of this.peers.values()) if (p !== except) sendRaw(p, data, droppable);
   }
   join(ws, hello, ip) {
+    // One floor geometry serves all rooms: size it for this room's map first.
+    fitRoom(this.state);
     const uid = typeof hello.uid === "string" && /^[\w-]{6,64}$/.test(hello.uid) ? hello.uid : newId();
     // The same browser always gets the same id in a room, so identity (and the media session)
     // survives reconnects and server restarts. A second tab of that browser takes over.
@@ -189,6 +193,7 @@ export class Room {
     return { peer };
   }
   leave(peer) {
+    fitRoom(this.state);
     if (this.peers.get(peer.id) !== peer) return;
     this.peers.delete(peer.id);
     for (const o of dynamicObjects(this.state))
@@ -223,6 +228,7 @@ export class Room {
     return true;
   }
   handle(peer, msg) {
+    fitRoom(this.state);
     const isPose = msg.t === "pose";
     if (!this.allow(peer, isPose)) {
       if (++peer.dropped > 2000) peer.ws.close(4008, "rate limit");
@@ -342,6 +348,7 @@ export class Room {
     this.physTimer = null;
   }
   tick() {
+    fitRoom(this.state);
     const t = performance.now(),
       elapsed = Math.min((t - this.lastStep) / 1000, 0.1);
     this.lastStep = t;

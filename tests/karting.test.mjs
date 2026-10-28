@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { stepKart, enterKart, lapStep, onTrack, crossing, KART } from "../dist/karting.js";
 import { mapDef } from "../dist/maps/index.js";
 import { obstacles, defaultPositions } from "../dist/world.js";
+import { setRoomScale, floorBack } from "../dist/layout.js";
+import { LIMITS } from "../dist/physics.js";
+import { LAYOUT as GP } from "../dist/maps/race-gp.js";
 
 const race = mapDef("race");
 const boxes = obstacles(race, defaultPositions(race));
@@ -206,6 +209,7 @@ test("a simple driver gets round the whole track and sets a lap time", () => {
 // A driver that follows its own progress round the centreline (so at a crossing it does not jump to
 // the other road), aiming a few metres ahead and braking for sharp bends.
 function autopilot(map, seconds) {
+  setRoomScale(map.scale || 1);
   const P = map.roadPoints,
     n = P.length,
     boxes = obstacles(map, defaultPositions(map)),
@@ -227,7 +231,7 @@ function autopilot(map, seconds) {
     const ahead = Math.abs(Math.atan2(Math.sin(Math.atan2(P[(idx + 12) % n][0] - P[(idx + 6) % n][0], P[(idx + 12) % n][1] - P[(idx + 6) % n][1]) - Math.atan2(P[(idx + 6) % n][0] - P[idx][0], P[(idx + 6) % n][1] - P[idx][1])), Math.cos(Math.atan2(P[(idx + 12) % n][0] - P[(idx + 6) % n][0], P[(idx + 12) % n][1] - P[(idx + 6) % n][1]) - Math.atan2(P[(idx + 6) % n][0] - P[idx][0], P[(idx + 6) % n][1] - P[idx][1]))));
     const v = Math.hypot(b.kart.vx, b.kart.vz),
       limit = ahead > 1.4 ? 3.6 : ahead > 0.8 ? 5.5 : ahead > 0.4 ? 7.5 : 99;
-    const input = { gas: Math.abs(diff) < 0.6 && v < limit ? 1 : 0, brake: v > limit + 1 ? 1 : 0, turn: Math.max(-1, Math.min(1, diff * 3)) };
+    const input = { gas: Math.abs(diff) < 0.6 && v < limit ? 1 : 0, brake: v > limit + 0.5 ? 1 : 0, turn: Math.max(-1, Math.min(1, diff * 3)) };
     const was = { x: b.x, z: b.z };
     const ev = stepKart(b, input, { boxes, track: map.track, now: log.t }, DT);
     log.t += DT;
@@ -256,30 +260,55 @@ for (const id of ["race-mountain", "race-gp"]) {
 
 test("race-gp: under the bridge you drive at ground level; on it you are 2 m up; the bridge's ramp sides are walls", () => {
   const map = mapDef("race-gp"),
-    boxes = obstacles(map, defaultPositions(map));
+    S = map.scale,
+    SX = GP.x,
+    top = Math.max(...map.roadPoints.map((p) => p[2]));
+  setRoomScale(S);
+  const boxes = obstacles(map, defaultPositions(map));
   const bridge = boxes.find((b) => b.shape === "path");
-  // Up the road towards the loop: straight under the bridge at x = 3.6.
+  // Up the road towards the loop: straight under the bridge.
   const under = { x: 0, z: 0, y: 0, angle: 0 };
-  enterKart(under, { x: 3.6, z: 4.6, a: Math.PI }, "#fff");
+  enterKart(under, { x: 3.6 * SX, z: 4.6 * S, a: Math.PI }, "#fff");
   under.kart.vz = -6;
   let maxY = 0;
   // (Past the bridge this same road starts climbing into the loop, so only look until then.)
-  run(under, 0.9, GAS, { boxes, track: map.track }, (k) => k.z > 0.6 && (maxY = Math.max(maxY, k.y)));
+  run(under, 1.1, GAS, { boxes, track: map.track }, (k) => k.z > 0.6 * S && (maxY = Math.max(maxY, k.y)));
   assert(maxY < 0.05, `stayed on the ground under the bridge: ${maxY}`);
-  assert(under.z < 1.2, `drove on through: ${under.z}`);
+  assert(under.z < 1.2 * S, `drove on through: ${under.z}`);
   // On the bridge going east above the same spot.
-  const over = { x: 0, z: 0, y: 1.95, angle: 0 };
-  enterKart(over, { x: 2.0, z: 2.4, a: Math.PI / 2 }, "#fff");
-  over.y = 1.95;
+  const over = { x: 0, z: 0, y: top, angle: 0 };
+  enterKart(over, { x: 2.0 * SX, z: 2.4 * S, a: Math.PI / 2 }, "#fff");
+  over.y = top;
   over.kart.vx = 5;
-  run(over, 0.5, GAS, { boxes, track: map.track });
-  assert(over.y > 1.6 && over.x > 3.6, `stayed up on the bridge: y ${over.y} at x ${over.x}`);
+  run(over, 0.6, GAS, { boxes, track: map.track });
+  assert(over.y > top - 0.4 && over.x > 3.6 * SX, `stayed up on the bridge: y ${over.y} at x ${over.x}`);
   // Driving at the side of the climbing ramp from the ground bounces you off.
   const side = { x: 0, z: 0, y: 0, angle: 0 };
-  enterKart(side, { x: -5.6, z: -0.6, a: Math.PI / 2 }, "#fff");
+  enterKart(side, { x: -5.6 * SX, z: -0.6 * S, a: Math.PI / 2 }, "#fff");
   side.kart.vx = 7;
   const ev = run(side, 1, GAS, { boxes, track: map.track });
-  assert(side.x < -2.4 - 1.7 + 0.3 && side.y < 0.1, `kept out of the ramp: ${side.x}, ${side.y}`);
+  assert(side.x < -2.4 * SX - 1.7 + 0.3 && side.y < 0.1, `kept out of the ramp: ${side.x}, ${side.y}`);
   assert(ev.some((e) => e.t === "wall"));
   assert(bridge.solid === false && bridge.walls === true);
+});
+
+test("big tracks: no bend is so tight that the road folds over itself, no dip sinks under the turf, and the road stays on the bigger floor", () => {
+  for (const id of ["race-mountain", "race-gp"]) {
+    const map = mapDef(id),
+      P = map.roadPoints,
+      n = P.length,
+      half = map.track.width / 2;
+    setRoomScale(map.scale || 1);
+    for (let i = 0; i < n; i++) {
+      // Radius of the circle through the points 3 steps either side.
+      const a = P[(i - 3 + n) % n],
+        b = P[i],
+        c = P[(i + 3) % n],
+        area2 = Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])),
+        r = area2 < 1e-9 ? Infinity : (Math.hypot(b[0] - a[0], b[1] - a[1]) * Math.hypot(c[0] - b[0], c[1] - b[1]) * Math.hypot(a[0] - c[0], a[1] - c[1])) / (2 * area2);
+      assert(r > half + 0.35, `${id}: bend at ${b[0].toFixed(1)},${b[1].toFixed(1)} has radius ${r.toFixed(2)}`);
+      assert(b[2] >= 0, `${id}: road below the floor at ${i}`);
+      assert(Math.abs(b[0]) + half < LIMITS.x && b[1] + half < LIMITS.z && b[1] - half > floorBack(b[0]), `${id}: road off the floor at ${b[0].toFixed(1)},${b[1].toFixed(1)}`);
+    }
+  }
 });

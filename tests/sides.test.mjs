@@ -5,11 +5,13 @@ import { findClimb, startClimb, stepClimb, findBar, startBar, zipStart, startZip
 import { stepBody, stepCube, inside } from "../dist/physics.js";
 import { mapDef } from "../dist/maps/index.js";
 import { obstacles, defaultPositions } from "../dist/world.js";
+import { setRoomScale } from "../dist/layout.js";
 import { createState, stepWorld, applyOp } from "../dist/state.js";
 
 const DT = 1 / 120;
 const world = (id) => {
   const map = mapDef(id);
+  setRoomScale(map.scale || 1);
   return { map, boxes: obstacles(map, defaultPositions(map)) };
 };
 const standing = (x, z, y = 0) => ({ x, z, y, vy: 0, grounded: true, angle: 0 });

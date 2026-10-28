@@ -4,7 +4,15 @@ import { clamp, inside } from "./physics.js";
 import { ROOM, floorBack } from "./layout.js";
 import { mapDef } from "./maps/index.js";
 
-export const DRAG_BOUNDS = { x: 12, z: 8.5 };
+// Where stickers and dragged things can go; grows with a bigger map's room.
+export const DRAG_BOUNDS = {
+  get x() {
+    return ROOM.halfWidth - 2.7;
+  },
+  get z() {
+    return ROOM.front - 1.8;
+  },
+};
 export const MAX_NOTES = 80;
 export const MAX_CUBES = 24;
 export const NOTE_TYPES = ["good", "improve", "idea"];

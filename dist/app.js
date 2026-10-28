@@ -21,9 +21,10 @@ import {
 } from "./physics.js";
 import { animateRig, startAction } from "./animation.js";
 import { EmotionEffects, EMOTIONS } from "./emotions.js";
-import { ROOM, floorBack, fitNoteText, setWallShape } from "./layout.js";
+import { ROOM, floorBack, fitNoteText, setWallShape, setRoomScale } from "./layout.js";
 import {
   createFloor,
+  reshapeFloor,
   fitRoomCamera,
   fitWall,
   ELEVATION,
@@ -40,7 +41,7 @@ import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG, findBar, st
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, iceAt, hoopsOf } from "./world.js";
+import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, iceAt, hoopsOf, DRAG_BOUNDS } from "./world.js";
 import {
   PROJECTILES,
   projectile,
@@ -202,7 +203,7 @@ renderer.shadowMap.type = T.PCFSoftShadowMap;
 renderer.outputColorSpace = T.SRGBColorSpace;
 renderer.toneMapping = T.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.2;
-const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 120),
+const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 400),
   raycaster = new T.Raycaster(),
   pointerNDC = new T.Vector2(),
   groundPlane = new T.Plane(new T.Vector3(0, 1, 0), 0),
@@ -214,9 +215,8 @@ let cinema = null,
   avatarEditor = null;
 // The near corners of the floor stay in the bottom corners of the viewport at every angle; the wall
 // is refitted so it spans the far edge of the floor and reaches the top of the viewport.
-let camZoom = 1;
 function updateCamera() {
-  fitRoomCamera(camera, camElevation, ROOM.halfWidth * camZoom);
+  fitRoomCamera(camera, camElevation);
   const wall = fitWall(camera);
   setWallShape(wall.height, wall.edges);
   cinema?.reshape();
@@ -251,7 +251,24 @@ scene.add(keyLight);
 const rim = new T.DirectionalLight("#baa4f5", 1.4);
 rim.position.set(8, 10, -12);
 scene.add(rim);
+setRoomScale(mapDef(world.map).scale || 1);
 const floor = createFloor(scene);
+// A bigger map makes a bigger room: floor, wall and camera grow together (the picture keeps its
+// proportions), and so do the shadows' reach.
+function fitShadows() {
+  const s = ROOM.scale;
+  keyLight.position.set(-10 * s, 20 * s, 9 * s);
+  Object.assign(keyLight.shadow.camera, { left: -20 * s, right: 20 * s, top: 20 * s, bottom: -20 * s, far: 70 * s });
+  keyLight.shadow.camera.updateProjectionMatrix();
+}
+function fitRoomSize() {
+  setRoomScale(mapDef(world.map).scale || 1);
+  if (!reshapeFloor(floor)) return;
+  fitShadows();
+  updateCamera();
+}
+fitShadows();
+updateCamera();
 // The selected map: scenery, props and balls. Rebuilt when the room switches maps.
 const mapScene = new MapScene(scene, { floor, grid: floor.userData.grid, hemi, key: keyLight, rim });
 mapScene.build(mapDef(world.map), world.structures, world.balls);
@@ -1864,9 +1881,9 @@ function noteModal(id = null, pos = null, type = "good") {
       const p =
         pos ||
         new T.Vector3(
-          clamp(active.x + 1.8, -12, 12),
+          clamp(active.x + 1.8, -DRAG_BOUNDS.x, DRAG_BOUNDS.x),
           0,
-          clamp(active.z + 1, -8, 8),
+          clamp(active.z + 1, -DRAG_BOUNDS.z + 0.5, DRAG_BOUNDS.z - 0.5),
         );
       Object.assign(p, clearFloorSpot(p.x, p.z));
       op({ t: "note.add", text, type: $("#noteType").value, x: p.x, z: p.z });
@@ -2400,8 +2417,8 @@ canvas.addEventListener("pointermove", (e) => {
       drag.moved = true;
     if (drag.moved) {
       canvas.classList.add("dragging");
-      let x = clamp(pos.x + drag.offsetX, -12, 12),
-        z = clamp(pos.z + drag.offsetZ, -8.5, 8.5);
+      let x = clamp(pos.x + drag.offsetX, -DRAG_BOUNDS.x, DRAG_BOUNDS.x),
+        z = clamp(pos.z + drag.offsetZ, -DRAG_BOUNDS.z, DRAG_BOUNDS.z);
       if (drag.kind === "note") {
         const n = notes.find((n) => n.id === drag.id);
         const spot = clearFloorSpot(x, z);
@@ -3403,12 +3420,7 @@ function loadState(fresh, objs) {
   }
   const old = new Set(mapScene.pickables);
   if (mapChanged) {
-    // Bigger maps pull the camera back (keeping the screen-to-floor ratio); people can still re-tilt.
-    const z = mapDef(world.map).camZoom || 1;
-    if (z !== camZoom) {
-      camZoom = z;
-      updateCamera();
-    }
+    fitRoomSize();
     mapScene.build(mapDef(world.map), world.structures, world.balls);
     drawLaps();
     closeTrackChooser();

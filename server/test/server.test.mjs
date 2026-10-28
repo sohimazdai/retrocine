@@ -556,3 +556,31 @@ test("icicle frost only from a real icicle throw; a mine is set near you, armed,
   b.close();
   await app.close();
 });
+
+test("rooms on maps of different sizes stay apart: a bigger field lets you further out, the standard room still stops you at its edge", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port),
+    c = client(port),
+    d = client(port);
+  await a.join("big-field", { name: "Аня" });
+  await b.join("big-field", { name: "Борис" });
+  await c.join("small-room", { name: "Вера" });
+  await d.join("small-room", { name: "Гоша" });
+  a.send({ t: "map.set", id: "paintball" });
+  await b.wait((m) => m.t === "reset" && m.state.map === "paintball");
+  // Poses interleaved between the two rooms: each is limited by its own room's floor.
+  a.send({ t: "pose", x: 18.2, y: 0, z: 11.5, a: 0, vy: 0, g: 1 });
+  c.send({ t: "pose", x: 18.2, y: 0, z: 11.5, a: 0, vy: 0, g: 1 });
+  const far = await b.wait((m) => m.t === "pose" && m.x > 1);
+  const near = await d.wait((m) => m.t === "pose" && m.x > 1);
+  assert.equal(far.x, 18.2, "on the 1.3× paintball field you can stand at x 18.2");
+  assert.equal(far.z, 11.5);
+  assert(near.x < 14.4 && near.z < 10, `the standard room keeps you on its floor: ${near.x}, ${near.z}`);
+  // A sticker can go further out on the big field too.
+  a.send({ t: "note.add", text: "далеко", type: "idea", x: 16, z: 0 });
+  const { note } = await b.wait((m) => m.t === "note");
+  assert(note.x > 15, `sticker at ${note.x}`);
+  for (const x of [a, b, c, d]) x.close();
+  await app.close();
+});

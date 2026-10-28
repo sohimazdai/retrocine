@@ -189,7 +189,14 @@ export class MapScene {
     this.decor = DECOR.get(map.id)?.(decor, map, { scene: this.scene }) || null;
     for (const s of map.statics || []) STATICS[s.kind]?.(decor, s, map);
     // What lies beyond the floor's left and right edges (scenery only, not colliders).
-    if (map.backdrop) STATICS.backdrop?.(decor, { style: map.backdrop }, map);
+    // On a bigger map (map.scale) it is drawn for the standard room and scaled up with the room, so
+    // it looks the same from the camera that moved back.
+    if (map.backdrop) {
+      const far = new T.Group();
+      far.scale.setScalar(map.scale || 1);
+      decor.add(far);
+      STATICS.backdrop?.(far, { style: map.backdrop }, map);
+    }
     decor.traverse((o) => {
       if (o.isMesh) o.receiveShadow = true;
     });

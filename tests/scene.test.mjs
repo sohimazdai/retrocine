@@ -1295,9 +1295,9 @@ test("paintball team match: R readies up, a 10 s countdown, a live round with he
   assert(hp < 10 && hp > 0, `hurt but standing: ${hp}`);
   a.tick(2);
   // Behind a concrete barricade the same blast does nothing.
-  a.run("Object.assign(active, { x: 5.4, z: 5.1, y: 0, vy: 0, grounded: true, kx: 0, kz: 0, tumble: null })");
+  a.run("Object.assign(active, { x: 6.6, z: 6.4, y: 0, vy: 0, grounded: true, kx: 0, kz: 0, tumble: null })");
   const before = a.run("active.hp");
-  a.run('onBoom({ x: 5.4, y: 0.4, z: 3.0, r: 4.6, power: 15, by: "someone" })');
+  a.run('onBoom({ x: 6.6, y: 0.4, z: 4.0, r: 4.6, power: 15, by: "someone" })');
   assert.equal(a.run("active.hp"), before, "the barricade took the blast");
   // Out: the round ends, and after the break the next round puts you back at full health.
   a.run('takeDamage(10, "someone")');
@@ -1366,7 +1366,7 @@ test("mine: key 9 sets it at your feet; stepped on, it blinks with a light and b
   const a = boot({ offline: true });
   a.run('op({ t: "map.set", id: "paintball" })');
   a.tick(0.2);
-  a.run("Object.assign(active, { x: 0, z: 7.5, y: 0, vy: 0, grounded: true })");
+  a.run("Object.assign(active, { x: 0, z: 4.8, y: 0, vy: 0, grounded: true })");
   a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit9", bubbles: true }));
   assert.equal(a.run("weapon"), "mine");
   a.run("throwSnow(null)");
@@ -1393,7 +1393,7 @@ test("mine: key 9 sets it at your feet; stepped on, it blinks with a light and b
   assert.equal(a.run("active.dead"), true, "the blast at point-blank range is lethal");
 });
 
-test("kart tracks: E at the selector next to the dispenser offers the three tracks; picking one switches the room and pulls the camera back for the big ones", () => {
+test("kart tracks: E at the selector next to the dispenser offers the three tracks; picking one switches the room, which is bigger for the big ones", () => {
   const a = boot({ offline: true });
   a.run('op({ t: "map.set", id: "race" })');
   a.tick(0.2);
@@ -1410,7 +1410,7 @@ test("kart tracks: E at the selector next to the dispenser offers the three trac
   a.tick(0.3);
   assert.equal(a.run("world.map"), "race-gp");
   assert(!box.classList.contains("on"), "closes after choosing");
-  assert(a.run("camera.position.length()") > camBefore * 1.2, "a bigger track: the camera moves back");
+  assert(a.run("camera.position.length()") > camBefore * 1.2, "a bigger track is a bigger room: the camera moves back with it");
   // A kart on the new track drives and the board belongs to this track.
   const d = a.run("mapScene.map.dispensers[0]");
   a.run(`Object.assign(active, { x: ${d.x + 0.6}, z: ${d.z - 1.0}, y: 0, vy: 0, grounded: true })`);
@@ -1425,4 +1425,29 @@ test("kart tracks: E at the selector next to the dispenser offers the three trac
   a.run('op({ t: "map.set", id: "race-mountain" })');
   a.tick(0.3);
   assert.equal(a.run("lapsHere().size"), 0, "each track keeps its own best laps");
+});
+
+test("a bigger map is a bigger room: the floor, screen and camera grow together, and you can go further out", () => {
+  const a = boot({ offline: true });
+  const width = () => a.run("(floor.geometry.computeBoundingBox(), floor.geometry.boundingBox.max.x)");
+  const w0 = width(),
+    cam0 = a.run("camera.position.length()"),
+    wall0 = a.run("ROOM.wallWidth");
+  assert(Math.abs(w0 - 14.7) < 0.01);
+  a.run('op({ t: "map.set", id: "paintball" })');
+  a.tick(0.2);
+  assert(Math.abs(width() - 14.7 * 1.3) < 0.01, `floor half-width ${width()}`);
+  assert(Math.abs(a.run("camera.position.length()") / cam0 - 1.3) < 0.02, "the camera keeps the floor framed the same");
+  assert(Math.abs(a.run("ROOM.wallWidth") / wall0 - 1.3) < 0.01, "the screen spans the bigger floor's far edge");
+  // Walk right along the front: past where the standard room ends.
+  a.run("Object.assign(active, { x: 15, z: 12.6, y: 0, vy: 0, grounded: true }); keys.add('right')");
+  a.tick(1.5);
+  a.run("keys.clear()");
+  assert(a.run("active.x") > 17, `walked out to ${a.run("active.x")}`);
+  // Back on a standard map: the room shrinks again and you are put back on its floor.
+  a.run('op({ t: "map.set", id: "cinema" })');
+  a.tick(0.2);
+  assert(Math.abs(width() - 14.7) < 0.01);
+  assert(Math.abs(a.run("camera.position.length()") / cam0 - 1) < 0.01);
+  assert(Math.abs(a.run("active.x")) < 14.4 && a.run("active.z") < 10, "back on the standard floor");
 });

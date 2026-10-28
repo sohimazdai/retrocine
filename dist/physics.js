@@ -5,7 +5,15 @@ export const GRAVITY = 36,
   SPEED = 5.1,
   SPRINT = 1.7,
   RADIUS = 0.28;
-export const LIMITS = { x: ROOM.halfWidth - 0.35, z: ROOM.front - 0.35 };
+// Where a body's centre can go: follows the room's size (a map can be bigger, see setRoomScale).
+export const LIMITS = {
+  get x() {
+    return ROOM.halfWidth - 0.35;
+  },
+  get z() {
+    return ROOM.front - 0.35;
+  },
+};
 export const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 export function jump(body) {
   if (!body.grounded) return false;

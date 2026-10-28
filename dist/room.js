@@ -10,8 +10,8 @@ export function fitRoomCamera(camera, degrees, frameHalf = ROOM.halfWidth) {
   const aspect = Math.max(1, camera.aspect),
     tilt = T.MathUtils.degToRad(degrees),
     tan = Math.tan(T.MathUtils.degToRad(camera.fov / 2));
-  // frameHalf is the half-width the camera frames; larger than the floor (zoom > 1) pulls the camera
-  // back so a bigger map fits, the screen and floor shrinking together.
+  // A bigger map's room (ROOM.scale) is framed the same way, so the camera is farther back and
+  // people and things look smaller on the bigger field.
   const depth = frameHalf / (tan * aspect),
     rise = frameHalf / aspect;
   camera.position.set(
@@ -20,7 +20,7 @@ export function fitRoomCamera(camera, degrees, frameHalf = ROOM.halfWidth) {
     ROOM.front + depth * Math.cos(tilt) - rise * Math.sin(tilt),
   );
   camera.rotation.set(-tilt, 0, 0);
-  camera.far = 400;
+  camera.far = 400 * ROOM.scale;
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld(true);
   return camera;
@@ -29,7 +29,7 @@ export function fitRoomCamera(camera, degrees, frameHalf = ROOM.halfWidth) {
 // The wall's bottom corners are the far corners of the floor. Its height is chosen so the top is
 // near the top of the viewport, and its half-width narrows with height so the side edges look
 // vertical on screen (a vertical edge in the room would lean outward in this perspective).
-export function fitWall(camera, { top = 0.94, min = 4, max = 24, steps = 16 } = {}) {
+export function fitWall(camera, { top = 0.94, min = 4 * ROOM.scale, max = 24 * ROOM.scale, steps = 16 } = {}) {
   const v = new T.Vector3(),
     ndc = (x, y, z) => v.set(x, y, z).project(camera);
   const W = ROOM.halfWidth,
@@ -70,7 +70,7 @@ export function fitWall(camera, { top = 0.94, min = 4, max = 24, steps = 16 } = 
   return { height, edges };
 }
 
-export function createFloor(scene) {
+function floorGeometry() {
   const shape = new T.Shape();
   shape.moveTo(-ROOM.halfWidth, ROOM.front);
   shape.lineTo(ROOM.halfWidth, ROOM.front);
@@ -84,15 +84,12 @@ export function createFloor(scene) {
     bevelEnabled: false,
   });
   geometry.rotateX(Math.PI / 2);
-  const floor = new T.Mesh(geometry, [
-    new T.MeshStandardMaterial({ color: "#514959", roughness: 0.9 }),
-    new T.MeshStandardMaterial({ color: "#352f42", roughness: 0.75 }),
-  ]);
-  floor.receiveShadow = true;
-  floor.userData.kind = "floor";
-  scene.add(floor);
-  const lines = [];
-  for (let x = -14; x <= 14.01; x += 1.4)
+  return geometry;
+}
+function gridGeometry() {
+  const lines = [],
+    edge = Math.floor(ROOM.halfWidth / 1.4) * 1.4;
+  for (let x = -edge; x <= edge + 0.01; x += 1.4)
     lines.push(x, 0.008, floorBack(x), x, 0.008, ROOM.front);
   for (let z = ROOM.back + 0.8; z <= ROOM.front - 0.4; z += 1.4) {
     let halfWidth = ROOM.halfWidth;
@@ -102,8 +99,18 @@ export function createFloor(scene) {
   }
   const grid = new T.BufferGeometry();
   grid.setAttribute("position", new T.Float32BufferAttribute(lines, 3));
+  return grid;
+}
+export function createFloor(scene) {
+  const floor = new T.Mesh(floorGeometry(), [
+    new T.MeshStandardMaterial({ color: "#514959", roughness: 0.9 }),
+    new T.MeshStandardMaterial({ color: "#352f42", roughness: 0.75 }),
+  ]);
+  floor.receiveShadow = true;
+  floor.userData.kind = "floor";
+  scene.add(floor);
   const gridLines = new T.LineSegments(
-    grid,
+    gridGeometry(),
     new T.LineBasicMaterial({
       color: "#a193af",
       transparent: true,
@@ -112,7 +119,19 @@ export function createFloor(scene) {
   );
   scene.add(gridLines);
   floor.userData.grid = gridLines;
+  floor.userData.scale = ROOM.scale;
   return floor;
+}
+// After the room changed size (a bigger or smaller map): the floor and its grid are rebuilt.
+export function reshapeFloor(floor) {
+  if (floor.userData.scale === ROOM.scale) return false;
+  floor.userData.scale = ROOM.scale;
+  floor.geometry.dispose();
+  floor.geometry = floorGeometry();
+  const grid = floor.userData.grid;
+  grid.geometry.dispose();
+  grid.geometry = gridGeometry();
+  return true;
 }
 
 export function framePortrait(camera, rig) {

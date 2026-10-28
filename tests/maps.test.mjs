@@ -5,7 +5,7 @@ import { MAZE, carve } from "../dist/maps/maze.js";
 import { mapProps, clampProp, obstacles, defaultPositions, spawnPoint, waterAt, goalsOf, hoopsOf, seesawCollider, propColliders, propInfo } from "../dist/world.js";
 import { createState, stepWorld, applyOp, dynamicObjects, packObject, unpackObject, serializeState } from "../dist/state.js";
 import { inside, stepBody, surfaceOf, LIMITS, RADIUS } from "../dist/physics.js";
-import { floorBack } from "../dist/layout.js";
+import { floorBack, setRoomScale } from "../dist/layout.js";
 
 const solid = (b) => !b.y && b.h > 0.25;
 let n = 0;
@@ -13,6 +13,7 @@ const newId = () => "id-" + ++n;
 
 test("every map: props stand on the floor and do not overlap each other", () => {
   for (const map of MAPS) {
+    setRoomScale(map.scale || 1);
     const props = mapProps(map);
     for (const p of props) {
       const c = clampProp(p, p.x, p.z);
@@ -35,6 +36,7 @@ test("every map: props stand on the floor and do not overlap each other", () => 
 
 test("every map: balls and cubes start free and settle where they were put (except in the river)", () => {
   for (const map of MAPS) {
+    setRoomScale(map.scale || 1);
     const s = createState({ map: map.id }, newId);
     const boxes = obstacles(map, defaultPositions(map));
     for (const o of dynamicObjects(s)) {
@@ -55,6 +57,7 @@ test("every map: balls and cubes start free and settle where they were put (exce
 
 test("every map: newcomers appear on free floor; the spawn area is reachable", () => {
   for (const map of MAPS) {
+    setRoomScale(map.scale || 1);
     const boxes = obstacles(map, defaultPositions(map)).filter(solid);
     let seed = 3;
     const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;

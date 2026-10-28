@@ -91,21 +91,120 @@ export function seesawCollider(c, tilt = 1) {
     t = clamp(tilt, -1, 1);
   return { ...c, h0: mid - t * swing, h1: mid + t * swing, h: mid + swing };
 }
-// A toppled prop (pos.ta is how far over it is, 0…~1.5) lies flat: a low, wider obstacle you bump
-// into or step onto, like a knocked-over barrel.
-function toppled(c, ta) {
-  const spread = (c.h || 0.5) * 0.4 * Math.sin(ta),
-    h = 0.3 + 0.22 * Math.cos(ta);
-  if (c.shape === "cylinder") return { ...c, radius: (c.radius || 0.3) + spread, h };
-  return { ...c, w: (c.w || 0.5) + spread * 2, d: (c.d || 0.5) + spread * 2, h };
+// ——— A prop's pose ———
+// pos: { x, z, y?, yaw?, ta?, td? }. yaw — how far it has been turned (radians, on top of the map's
+// rot); ta — how far it has tipped over, 0 (standing) … π/2 (lying on its side), about the bottom
+// edge on its side td (0 +x, 1 +z, 2 −x, 3 −z, in its own frame — a box tips over an edge).
+export const TIP_LIE = Math.PI / 2;
+const SIDES = [
+  [1, 0],
+  [0, 1],
+  [-1, 0],
+  [0, -1],
+];
+export const tipSide = (td) => SIDES[(((td | 0) % 4) + 4) % 4];
+// The geometry of tipping a prop over side td: the edge it pivots on (`edge`, along the side's axis
+// from the prop's origin), the base half-width b out to it, the height of its centre of mass, the
+// distance r from the edge to it and the balance angle: tipped further than that, it falls over.
+export function tipShape(info, td = 0) {
+  const [ax, az] = tipSide(td),
+    b = info.round ? info.r : Math.abs(ax) * info.hw + Math.abs(az) * info.hd,
+    edge = ax * info.cx + az * info.cz + b,
+    hc = Math.max(0.12, info.h * (info.com ?? 0.5));
+  return { ax, az, b, edge, hc, r: Math.hypot(b, hc), crit: Math.atan2(b, hc) };
+}
+// Turning by yaw: the same convention as Object3D.rotation.y (and turn() above).
+export const yawed = (yaw, x, z) => ({ x: x * Math.cos(yaw) + z * Math.sin(yaw), z: -x * Math.sin(yaw) + z * Math.cos(yaw) });
+// A box turned by any angle: exact by quarter turns, otherwise a row of round colliders along it
+// (round shapes do not care how they are turned).
+function turnedBox(c, yaw) {
+  const q = Math.round(yaw / (Math.PI / 2));
+  if (Math.abs(yaw - q * (Math.PI / 2)) < 0.03) return [turn(c, q * (Math.PI / 2))];
+  const o = yawed(yaw, c.x, c.z),
+    long = Math.max(c.w, c.d),
+    short = Math.min(c.w, c.d);
+  const base = { h: c.h, ...(c.y ? { y: c.y } : {}), ...(c.soft ? { soft: c.soft } : {}), shape: "cylinder" };
+  if (long < short * 1.6) {
+    const radius = (long + short) / 4 + 0.02;
+    return [{ ...base, x: o.x, z: o.z, radius, w: radius * 2, d: radius * 2 }];
+  }
+  const n = Math.ceil(long / short),
+    radius = short / 2 + 0.03,
+    along = c.w >= c.d ? yawed(yaw, 1, 0) : yawed(yaw, 0, 1),
+    span = long / 2 - short / 2;
+  return Array.from({ length: n }, (_, i) => {
+    const k = n > 1 ? -span + (2 * span * i) / (n - 1) : 0;
+    return { ...base, x: o.x + along.x * k, z: o.z + along.z * k, radius, w: radius * 2, d: radius * 2 };
+  });
+}
+// A collider tipped by ta about the pivot edge of its prop's side: the upright box that holds the
+// tilted one, in the prop's frame.
+function tipped(c, shape, ta) {
+  const { ax, az, edge } = shape,
+    alongX = ax !== 0,
+    sign = ax || az,
+    hw = c.shape === "cylinder" ? c.radius : c.w / 2,
+    hd = c.shape === "cylinder" ? c.radius : c.d / 2,
+    half = alongX ? hw : hd,
+    centre = (alongX ? c.x : c.z) * sign,
+    cos = Math.cos(ta),
+    sin = Math.sin(ta);
+  let u0 = Infinity,
+    u1 = -Infinity,
+    v0 = Infinity,
+    v1 = -Infinity;
+  for (const u of [centre - half, centre + half])
+    for (const y of [c.y || 0, c.h]) {
+      const nu = edge + (u - edge) * cos + y * sin,
+        ny = -(u - edge) * sin + y * cos;
+      u0 = Math.min(u0, nu);
+      u1 = Math.max(u1, nu);
+      v0 = Math.min(v0, ny);
+      v1 = Math.max(v1, ny);
+    }
+  const { shape: _s, radius: _r, y: _y, ...out } = c;
+  out.h = v1;
+  if (v0 > 0.05) out.y = v0;
+  if (alongX) Object.assign(out, { x: ((u0 + u1) / 2) * sign, w: u1 - u0, d: hd * 2 });
+  else Object.assign(out, { z: ((u0 + u1) / 2) * sign, d: u1 - u0, w: hw * 2 });
+  return out;
+}
+// The colliders of a prop in a pose, in its own frame (before moving it to pos.x, pos.z).
+function poseColliders(info, p) {
+  const ta = p.ta || 0,
+    yaw = p.yaw || 0,
+    shape = ta > 0.02 ? tipShape(info, p.td) : null;
+  return info.local.flatMap((c) => {
+    let cc = c.seesaw ? seesawCollider(c, p.tilt ?? 1) : c;
+    if (shape) cc = tipped(cc, shape, ta);
+    if (!yaw) return [cc];
+    if (cc.shape === "cylinder") {
+      const o = yawed(yaw, cc.x, cc.z);
+      return [{ ...cc, x: o.x, z: o.z }];
+    }
+    return turnedBox(cc, yaw);
+  });
 }
 export function propColliders(info, pos) {
   const p = pos || info;
-  return info.local.map((c) => {
-    let cc = c.seesaw ? seesawCollider(c, p.tilt ?? 1) : c;
-    if (p.ta) cc = toppled(cc, p.ta);
-    return lifted({ ...cc, x: p.x + cc.x, z: p.z + cc.z, prop: info.id }, p.y);
-  });
+  return poseColliders(info, p).map((cc) => lifted({ ...cc, x: p.x + cc.x, z: p.z + cc.z, prop: info.id }, p.y));
+}
+// Where a prop's middle is now (its footprint centre, moved by the pose): for pushes and spin.
+export function propCentre(info, pos) {
+  const ta = pos.ta || 0;
+  let cx = info.cx,
+    cz = info.cz,
+    cy = info.h / 2;
+  if (ta > 0.02) {
+    const s = tipShape(info, pos.td),
+      u = s.ax * cx + s.az * cz,
+      nu = s.edge + (u - s.edge) * Math.cos(ta) + cy * Math.sin(ta);
+    cy = -(u - s.edge) * Math.sin(ta) + cy * Math.cos(ta);
+    if (s.ax) cx = nu * s.ax;
+    else cz = nu * s.az;
+  }
+  const o = yawed(pos.yaw || 0, cx, cz);
+  return { x: pos.x + o.x, z: pos.z + o.z, y: (pos.y || 0) + cy };
 }
 export function obstacles(map, positions) {
   return [...(map.statics || []), ...mapProps(map).flatMap((p) => propColliders(p, positions?.[p.id]))];
@@ -172,7 +271,10 @@ export const toWorld = (rot, lx, lz) => ({
 export function goalsOf(map, positions) {
   return mapProps(map)
     .filter((p) => p.goal)
-    .map((p) => ({ id: p.id, label: p.label, rot: p.rot || 0, ...(positions?.[p.id] || p), spot: p.ballSpot || { x: 0, z: 4.3 }, mouth: p.mouth || FOOTBALL_MOUTH }));
+    .map((p) => {
+      const pos = positions?.[p.id] || p;
+      return { id: p.id, label: p.label, ...pos, rot: (p.rot || 0) + (pos.yaw || 0), spot: p.ballSpot || { x: 0, z: 4.3 }, mouth: p.mouth || FOOTBALL_MOUTH };
+    });
 }
 // Inner width and height of a goal's mouth (football goals; hockey nets are smaller).
 export const FOOTBALL_MOUTH = { w: 4.05, h: 2.4 };
@@ -183,7 +285,8 @@ export function checkGoal(ball, previous, goal, flags) {
     before = toLocal(goal.rot, previous.x - goal.x, previous.z - goal.z);
   const line = -0.15,
     key = "goal:" + goal.id + ":" + ball.id;
-  if (!flags[key] && before.z >= line && now.z < line && !goal.y) {
+  // A goal knocked over (or carried) does not count.
+  if (!flags[key] && before.z >= line && now.z < line && !goal.y && !(goal.ta > 0.3)) {
     const t = (before.z - line) / (before.z - now.z);
     const x = before.x + (now.x - before.x) * t;
     const y = previous.y + (ball.y - previous.y) * t;
@@ -212,10 +315,10 @@ export function ballResetPosition(map, positions, ball) {
 // Basketball hoops: props with hoop: { x, z, y, r } in local coordinates.
 export function hoopsOf(map, positions) {
   return mapProps(map)
-    .filter((p) => p.hoop)
+    .filter((p) => p.hoop && !(positions?.[p.id]?.ta > 0.3))
     .map((p) => {
       const pos = positions?.[p.id] || p,
-        o = toWorld(p.rot, p.hoop.x, p.hoop.z);
+        o = toWorld((p.rot || 0) + (pos.yaw || 0), p.hoop.x, p.hoop.z);
       return { id: p.id, label: p.label, x: pos.x + o.x, z: pos.z + o.z, y: p.hoop.y + (pos.y || 0), r: p.hoop.r };
     });
 }

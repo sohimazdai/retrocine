@@ -61,6 +61,8 @@ import {
   timerLeft,
   stepPushes,
   stepWorld,
+  stepProps,
+  propNearest,
   stateObstacles,
   dynamicObjects,
   freeSpot,
@@ -1682,6 +1684,9 @@ function burst(pos, kind, snowOwner = "self", pr = null) {
       }
     }
   }
+  // Something thrown knocks a movable prop along the way it was flying.
+  if (kind?.userData.kind === "structure" && snowOwner === "self" && pr && mapScene.props.get(kind.userData.id)?.movable)
+    op({ t: "prop.hit", id: kind.userData.id, kind: k.id, vx: r3(pr.v.x), vz: r3(pr.v.z), x: r3(pos.x), y: r3(pos.y), z: r3(pos.z) });
   if (kind?.userData.kind === "note") kind.userData.wobble = 0.7;
   if (kind?.userData.kind === "screen" || kind?.userData.kind === "tile")
     screenGroup.userData.wobble = 0.35;
@@ -1840,6 +1845,17 @@ function kickNearest() {
     foeD = foe ? Math.hypot(foe.x - active.x, foe.z - active.z) : Infinity,
     nearD = near ? Math.hypot(near.x - active.x, near.z - active.z) : Infinity;
   if (foe && foeD <= nearD) return meleeSwing(foe);
+  // A prop within reach (and no ball nearer): kick it, or lift it back up if it has fallen over.
+  const prop = mapProps(mapDef(world.map))
+    .filter((p) => Number.isFinite(p.weight) && world.structures[p.id])
+    .map((p) => ({ p, d: propNearest(p, world.structures[p.id], active.x, active.y + 0.35, active.z).d }))
+    .filter((e) => e.d < 0.9)
+    .sort((a, b) => a.d - b.d)[0];
+  if (prop && prop.d < nearD) {
+    startAction(active, "kick", worldTime, {});
+    op({ t: "prop.kick", id: prop.p.id, x: active.x, z: active.z });
+    return;
+  }
   if (near?.kind === "basketball") shoot(near);
   else if (near && startAction(active, "kick", worldTime, { cube: near })) net.send({ t: "act", k: "kick", target: near.id });
   else startAction(active, "kick", worldTime, {});
@@ -2680,6 +2696,7 @@ function updateSeesaws(dt) {
     }
   }
 }
+let propClock = 0;
 function physics(dt) {
   worldTime += dt;
   if (active.hurt > 0) active.hurt = Math.max(0, active.hurt - dt);
@@ -2691,7 +2708,7 @@ function physics(dt) {
   stepMatchOffline();
   stepMines();
   updateSeesaws(dt);
-  mapScene.tickTips(dt);
+  mapScene.tickProps(dt);
   const obstacles = mapScene.colliders();
   const loose = dynamicObjects(world);
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
@@ -2854,6 +2871,19 @@ function physics(dt) {
   // Online the server is the referee and its corrections arrive; offline the browser announces.
   const events = stepWorld(world, dt, (o) => drag?.moved && drag.id === o.id);
   if (!net.connected) for (const event of events) onServer(event);
+  // Props knocked about move on their own: here without a server (online the server sends them).
+  if (!net.connected && world.motion && Object.keys(world.motion).length) {
+    propClock = Math.min(propClock + dt, 0.1);
+    const moved = new Set();
+    while (propClock >= 1 / 120) {
+      for (const id of stepProps(world, 1 / 120)) moved.add(id);
+      propClock -= 1 / 120;
+    }
+    for (const id of moved) {
+      const p = world.structures[id];
+      moveStructure(id, p.x, p.z, p.y || 0, p);
+    }
+  }
   if (!active.ride) updatePushing(move, dt);
   const removal = [];
   for (const pr of projectiles) {
@@ -3195,8 +3225,9 @@ function throttled(key, fn, interval = 50) {
   throttleClock[key] = now;
   fn();
 }
-// Moves a structure (or the big cube) and carries your avatar if it stands on top.
-function moveStructure(id, x, z, y = 0, tip = null) {
+// Moves a structure (or the big cube) and carries your avatar if it stands on top. pose: { yaw, ta,
+// td } — how it is turned and how far it has tipped over (see world.js).
+function moveStructure(id, x, z, y = 0, pose = null) {
   const s = mapScene.props.get(id);
   if (!s) return;
   const dy = y - (s.y || 0);
@@ -3209,8 +3240,8 @@ function moveStructure(id, x, z, y = 0, tip = null) {
     active.z += z - s.z;
     active.y += dy;
   }
-  mapScene.move(id, x, z, y, tip);
-  world.structures[id] = { x, z, ...(y ? { y } : {}), ...(tip && tip.ta ? { tx: tip.tx, tz: tip.tz, ta: tip.ta } : {}) };
+  mapScene.move(id, x, z, y, pose);
+  world.structures[id] = { x, z, ...(y ? { y } : {}), ...(pose?.yaw ? { yaw: pose.yaw } : {}), ...(pose?.ta ? { ta: pose.ta, td: pose.td || 0 } : {}) };
   world.v = (world.v || 0) + 1;
 }
 // ——— Shift: sprint, push, lift ———
@@ -3403,6 +3434,7 @@ function loadState(fresh, objs) {
     balls: fresh.balls,
     rides: fresh.rides,
     structures: fresh.structures,
+    motion: fresh.motion || {},
     scores: fresh.scores,
     timer: fresh.timer,
     match: fresh.match,
@@ -3426,7 +3458,7 @@ function loadState(fresh, objs) {
     closeTrackChooser();
   }
   else {
-    for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0, pos.ta ? pos : null);
+    for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0, pos);
     mapScene.setBalls(world.balls);
   }
   pickables = [...pickables.filter((p) => !old.has(p)), ...mapScene.pickables];
@@ -3553,7 +3585,7 @@ function onServer(m, at) {
       applyObjects(m);
       break;
     case "struct":
-      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z, m.y || 0, m.ta ? { tx: m.tx, tz: m.tz, ta: m.ta } : null);
+      if (drag?.id !== m.id) moveStructure(m.id, m.x, m.z, m.y || 0, m);
       liftedBy[m.id] = m.by || [];
       break;
     case "boom":

@@ -584,3 +584,24 @@ test("rooms on maps of different sizes stay apart: a bigger field lets you furth
   for (const x of [a, b, c, d]) x.close();
   await app.close();
 });
+
+test("a blast knocks props about on the server: everyone sees them move and come to rest", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("props-room", { name: "Аня" });
+  await b.join("props-room", { name: "Борис" });
+  a.send({ t: "map.set", id: "paintball" });
+  const reset = await b.wait((m) => m.t === "reset" && m.state.map === "paintball");
+  const can = reset.state.structures["can-a"];
+  a.send({ t: "act", k: "throw", w: "grenade", to: [can.x - 1, 0, can.z], pid: "g1" });
+  await b.wait((m) => m.t === "act" && m.k === "throw");
+  a.send({ t: "boom", kind: "grenade", x: can.x - 1, y: 0.4, z: can.z, pid: "g1" });
+  const first = await b.wait((m) => m.t === "struct" && m.id === "can-a");
+  assert(first.x !== can.x || first.ta, "it moves");
+  const rest = await b.wait((m) => m.t === "struct" && m.id === "can-a" && Math.abs((m.ta || 0) - Math.PI / 2) < 1e-6 && !(m.y > 0), 6000);
+  assert(rest.x > can.x + 1, `knocked over and away: ${rest.x}`);
+  a.close();
+  b.close();
+  await app.close();
+});

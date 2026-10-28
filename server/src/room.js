@@ -16,6 +16,8 @@ import {
   runMines,
   minesPending,
   fitRoom,
+  stepProps,
+  propsMoving,
 } from "../../dist/state.js";
 import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
@@ -369,6 +371,16 @@ export class Room {
         this.broadcast(event);
         this.markDirty();
       }
+      // Props knocked about: everyone gets them ~30 times a second, and once more at rest.
+      for (const id of stepProps(this.state, PHYS_DT)) {
+        const m = { id, ...this.state.structures[id] };
+        if (this.state.motion?.[id]) this.pendingProps.set(id, m);
+        else {
+          this.pendingProps.delete(id);
+          this.broadcast({ t: "struct", ...m });
+          this.markDirty();
+        }
+      }
       this.acc -= PHYS_DT;
       steps++;
     }
@@ -382,7 +394,7 @@ export class Room {
       this.broadcast(m);
       this.markDirty();
     }
-    let awake = pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || minesPending(this.state);
+    let awake = propsMoving(this.state) || pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || minesPending(this.state);
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;

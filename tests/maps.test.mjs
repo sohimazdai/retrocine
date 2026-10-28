@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { MAPS, mapDef } from "../dist/maps/index.js";
 import { MAZE, carve } from "../dist/maps/maze.js";
-import { mapProps, clampProp, obstacles, defaultPositions, spawnPoint, waterAt, goalsOf, hoopsOf, seesawCollider, propColliders, propInfo } from "../dist/world.js";
-import { createState, stepWorld, applyOp, dynamicObjects, packObject, unpackObject, serializeState } from "../dist/state.js";
+import { propCentre, mapProps, clampProp, obstacles, defaultPositions, spawnPoint, waterAt, goalsOf, hoopsOf, seesawCollider, propColliders, propInfo } from "../dist/world.js";
+import { createState, stepWorld, stepProps, applyOp, dynamicObjects, packObject, unpackObject, serializeState } from "../dist/state.js";
 import { inside, stepBody, surfaceOf, LIMITS, RADIUS } from "../dist/physics.js";
 import { floorBack, setRoomScale } from "../dist/layout.js";
 
@@ -296,24 +296,36 @@ test("rink: you slide down the hill on a sled and roll out at the bottom", () =>
   assert(q.y > 2.3 && q.grounded, `still on top at ${q.x.toFixed(2)}, ${q.y}`);
 });
 
-test("a strong blast topples nearby furniture onto its side; a toppled prop is a low, wider obstacle", () => {
-  const s = createState({ map: "saloon" }, newId);
-  const chair = mapProps(mapDef("saloon")).find((p) => p.id === "table-a-chair-l");
-  const pos0 = s.structures[chair.id];
-  // A grenade-strength blast right on the chair.
-  const moved = applyOp(s, { t: "boom", kind: "grenade", x: pos0.x + 0.1, y: 0.4, z: pos0.z }, { peer: "self", newId }).out.filter((m) => m.msg.t === "struct");
-  const tipped = s.structures[chair.id];
-  assert(tipped.ta > 1, `the chair is lying over: ${tipped.ta}`);
-  assert(Number.isFinite(tipped.tx) && Number.isFinite(tipped.tz), "it has a tip axis");
-  assert(moved.some((m) => m.msg.id === chair.id && m.msg.ta), "everyone is told it toppled");
-  // The upright chair is ~0.48 tall; toppled it is lower and spread wider.
-  const upright = propColliders(chair, pos0)[0].h;
-  const lying = propColliders(chair, tipped)[0];
-  assert(lying.h < upright, `lower lying down: ${lying.h} < ${upright}`);
-  const area = (c) => (c.shape === "cylinder" ? Math.PI * c.radius ** 2 : c.w * c.d);
-  assert(area(lying) > area(propColliders(chair, pos0)[0]), "wider footprint on its side");
-  // A piano is heavy (weight 3): a blast from across the room only nudges it, no topple.
-  const piano0 = s.structures.piano;
-  applyOp(s, { t: "boom", kind: "fireball", x: piano0.x + 3.6, y: 0.4, z: piano0.z + 3.6 }, { peer: "self", newId });
-  assert(!s.structures.piano.ta, "the piano stays standing");
+test("props answer to force: a blast knocks a can over and it comes to rest lying; E stands it back up; a far blast only nudges a piano", () => {
+  setRoomScale(mapDef("paintball").scale);
+  const s = createState({ map: "paintball" }, newId);
+  const can = mapProps(mapDef("paintball")).find((p) => p.id === "can-a");
+  const pos0 = { ...s.structures[can.id] };
+  const settle = () => {
+    let t = 0;
+    for (; t < 8 && s.motion?.[can.id]; t += 1 / 120) stepProps(s, 1 / 120);
+    return t;
+  };
+  applyOp(s, { t: "boom", kind: "grenade", x: pos0.x - 1, y: 0.4, z: pos0.z }, { peer: "self", newId });
+  assert(s.motion[can.id], "it moves on its own");
+  const t = settle();
+  assert(t < 8, "it comes to rest");
+  const lying = s.structures[can.id];
+  assert(Math.abs(lying.ta - Math.PI / 2) < 1e-9, `lying on its side: ${lying.ta}`);
+  assert(lying.x > pos0.x + 1, `thrown away from the blast: ${lying.x}`);
+  assert(!(lying.y > 0), "on the floor, not hanging in the air");
+  const upright = propColliders(can, pos0)[0].h;
+  assert(Math.max(...propColliders(can, lying).map((c) => c.h)) < upright, "lower lying down");
+  // E next to it: back on its feet.
+  const mid = propCentre(can, lying);
+  assert(applyOp(s, { t: "prop.kick", id: can.id, x: mid.x, z: mid.z + 1.2 }, { peer: "self", newId }), "within reach");
+  settle();
+  assert(!s.structures[can.id].ta, "standing again");
+  // A heavy piano and a blast from across the room: a nudge at most, it stays standing.
+  const saloon = createState({ map: "saloon" }, newId);
+  const piano0 = { ...saloon.structures.piano };
+  applyOp(saloon, { t: "boom", kind: "fireball", x: piano0.x + 3.2, y: 0.4, z: piano0.z + 1.6 }, { peer: "self", newId });
+  for (let i = 0; i < 120 * 4; i++) stepProps(saloon, 1 / 120);
+  assert(!saloon.structures.piano.ta && Math.hypot(saloon.structures.piano.x - piano0.x, saloon.structures.piano.z - piano0.z) < 0.6);
 });
+

@@ -2,10 +2,13 @@
 // room switches maps. Physics data (colliders, positions) comes from world.js, shared with the server.
 import * as T from "three";
 import { buildProp, buildBall, disposeOwned } from "./props.js";
-import { mapProps, obstacles, toWorld, BALLS } from "./world.js";
+import { mapProps, obstacles, toWorld, tipShape, BALLS } from "./world.js";
 
 const DECOR = new Map(),
-  STATICS = {};
+  STATICS = {},
+  UP = new T.Vector3(0, 1, 0);
+// The pose part of a prop's position: turn, tilt and the side it tips to.
+const pose = (p) => ({ yaw: p?.yaw || 0, ta: p?.ta || 0, td: p?.td || 0 });
 // A map's renderer registers how its scenery looks: fn(group, map, ctx) → optional { update(dt, t) }.
 export function registerDecor(id, fn) {
   DECOR.set(id, fn);
@@ -221,13 +224,11 @@ export class MapScene {
         waypoints: info.waypoints || [],
         movable: Number.isFinite(info.weight),
       });
-      // A prop that is already toppled (e.g. for someone joining late) starts lying over.
-      if (pos.ta) {
-        const s = this.props.get(info.id);
-        s.tipTarget = { tx: pos.tx, tz: pos.tz, ta: pos.ta };
-        s.tip = { ...s.tipTarget };
-        this.applyTip(s);
-      }
+      // Already knocked about (someone joining late): drawn as it stands or lies.
+      const s = this.props.get(info.id);
+      s.pose = pose(pos);
+      s.view = { x: s.x, z: s.z, y: s.y, ...s.pose };
+      this.applyPose(s);
       this.pickables.push(root);
     }
     this.setBalls(balls || []);
@@ -252,58 +253,63 @@ export class MapScene {
       this.pickables.push(mesh);
     }
   }
-  move(id, x, z, y = 0, tip = null) {
+  // A prop's place and pose (yaw, ta, td — see world.js). Colliders follow at once; the picture
+  // eases there (tickProps), so the 30-a-second updates of a prop in motion look smooth.
+  move(id, x, z, y = 0, p = null) {
     const s = this.props.get(id);
     if (!s) return;
     s.x = x;
     s.z = z;
     s.y = y;
-    // A toppled prop tips over about a horizontal axis; the client eases the fall (see tickTips).
-    s.tipTarget = tip && tip.ta ? { tx: tip.tx, tz: tip.tz, ta: tip.ta } : null;
-    if (!s.tip) s.tip = { tx: s.tipTarget?.tx || 1, tz: s.tipTarget?.tz || 0, ta: 0 };
-    this.applyTip(s);
+    s.pose = pose(p);
+    // Far away (dragged across, a new state): no easing.
+    if (!s.view || Math.hypot(s.view.x - x, s.view.z - z) > 3 || Math.abs((s.view.y || 0) - y) > 0.5) {
+      s.view = { x, z, y, ...s.pose };
+      this.applyPose(s);
+    }
     this.version++;
   }
-  // The height to lift a toppled prop so its base does not sink through the floor.
-  tipLift(s) {
-    if (s.lift == null) s.lift = Math.max(0.25, ...s.localColliders.map((c) => c.h || 0)) / 2;
-    return s.lift;
+  // The prop's root from its pose: turned by its rot and yaw, tipped about the bottom edge of the
+  // side it falls to.
+  applyPose(s) {
+    const v = s.view,
+      yawQ = new T.Quaternion().setFromAxisAngle(UP, v.yaw || 0),
+      rotQ = new T.Quaternion().setFromAxisAngle(UP, s.info.rot || 0),
+      at = new T.Vector3(v.x, v.y || 0, v.z);
+    if (v.ta > 1e-3) {
+      const sh = tipShape(s.info, v.td),
+        tilt = new T.Quaternion().setFromAxisAngle(new T.Vector3(sh.az, 0, -sh.ax), v.ta),
+        pivot = new T.Vector3(sh.ax * sh.edge, 0, sh.az * sh.edge);
+      // Turning about the pivot: the origin moves by pivot − tilt·pivot (in the prop's frame).
+      at.add(pivot.clone().sub(pivot.clone().applyQuaternion(tilt)).applyQuaternion(yawQ));
+      s.root.quaternion.copy(yawQ).multiply(tilt).multiply(rotQ);
+    } else s.root.quaternion.copy(yawQ).multiply(rotQ);
+    s.root.position.copy(at);
   }
-  applyTip(s) {
-    const t = s.tip;
-    if (!t || t.ta < 1e-3) {
-      s.root.quaternion.identity();
-      s.root.rotation.y = s.info.rot || 0;
-      s.root.position.set(s.x, s.y || 0, s.z);
-      return;
-    }
-    const axis = new T.Vector3(t.tx, 0, t.tz);
-    if (axis.lengthSq() < 1e-6) axis.set(1, 0, 0);
-    axis.normalize();
-    const q = new T.Quaternion().setFromAxisAngle(axis, t.ta);
-    q.multiply(new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 1, 0), s.info.rot || 0));
-    s.root.quaternion.copy(q);
-    s.root.position.set(s.x, (s.y || 0) + this.tipLift(s) * Math.sin(t.ta), s.z);
-  }
-  // Eases toppling props toward their resting angle each frame.
-  tickTips(dt) {
+  // Eases the pictures of moving props toward where they are.
+  tickProps(dt) {
+    const k = 1 - Math.exp(-dt * 22);
     for (const s of this.props.values()) {
-      const target = s.tipTarget?.ta || 0;
-      if (s.tip && s.tipTarget) {
-        s.tip.tx = s.tipTarget.tx;
-        s.tip.tz = s.tipTarget.tz;
+      const v = s.view;
+      if (!v) continue;
+      const target = { x: s.x, z: s.z, y: s.y || 0, ...s.pose };
+      const dyaw = Math.atan2(Math.sin(target.yaw - v.yaw), Math.cos(target.yaw - v.yaw));
+      // A different side to fall to: come up first, then go over the new way.
+      const sameSide = v.td === target.td || v.ta < 1e-3;
+      const goalTa = sameSide ? target.ta : 0;
+      const far = Math.abs(target.x - v.x) + Math.abs(target.z - v.z) + Math.abs(target.y - (v.y || 0)) + Math.abs(dyaw) + Math.abs(goalTa - v.ta);
+      if (far < 1e-4 && sameSide) continue;
+      v.x += (target.x - v.x) * k;
+      v.z += (target.z - v.z) * k;
+      v.y = (v.y || 0) + (target.y - (v.y || 0)) * k;
+      v.yaw += dyaw * k;
+      v.ta += (goalTa - v.ta) * k;
+      if (v.ta < 1e-3) {
+        v.ta = 0;
+        v.td = target.td;
       }
-      if (!s.tip || Math.abs(s.tip.ta - target) < 1e-3) {
-        if (s.tip && s.tip.ta !== target) {
-          s.tip.ta = target;
-          this.applyTip(s);
-        }
-        continue;
-      }
-      // Fall accelerates, stand-up is quicker.
-      const rate = target > s.tip.ta ? 7 + s.tip.ta * 6 : 14;
-      s.tip.ta += (target - s.tip.ta) * Math.min(1, rate * dt);
-      this.applyTip(s);
+      if (far < 1e-3) Object.assign(v, target);
+      this.applyPose(s);
     }
   }
   // Seesaw tilt (−1…1): changes the plank's slope in the colliders and its angle on screen.
@@ -319,6 +325,8 @@ export class MapScene {
         const p = { x: s.x, z: s.z };
         if (s.y) p.y = s.y;
         if (s.tilt != null) p.tilt = s.tilt;
+        if (s.pose?.yaw) p.yaw = s.pose.yaw;
+        if (s.pose?.ta) Object.assign(p, { ta: s.pose.ta, td: s.pose.td });
         return [id, p];
       }),
     );
@@ -332,9 +340,10 @@ export class MapScene {
   }
   path(id) {
     const s = this.props.get(id);
-    if (!s) return [];
+    // Knocked over, there is nowhere to climb onto.
+    if (!s || s.pose?.ta > 0.2) return [];
     return s.waypoints.map((p) => {
-      const o = toWorld(s.info.rot, p.x, p.z);
+      const o = toWorld((s.info.rot || 0) + (s.pose?.yaw || 0), p.x, p.z);
       return { ...p, x: s.x + o.x, z: s.z + o.z, h: p.h + (s.y || 0) };
     });
   }

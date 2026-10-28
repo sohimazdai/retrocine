@@ -29,7 +29,13 @@ import {
   checkHoop,
   zonesOf,
   inZone,
+  iceAt,
   BALLS,
+  TIP_LIE,
+  tipShape,
+  yawed,
+  propColliders,
+  propCentre,
 } from "./world.js";
 import { MAPS } from "./maps/index.js";
 import { projectile } from "./projectiles.js";
@@ -37,9 +43,6 @@ import * as match from "./match.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
-// Furniture topples when the force on it exceeds this times its weight; it ends up lying this far over.
-const TOPPLE_FORCE = 3.5,
-  TOPPLE_LIE = 1.45;
 const MAX_MINES = 16;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
@@ -51,7 +54,14 @@ export function createState(saved = {}, newId) {
   if (sameMap)
     for (const info of mapProps(map)) {
       const p = saved.structures?.[info.id] || (info.id === "big" ? saved.big : null);
-      if (p && finite(p.x) && finite(p.z)) structures[info.id] = clampProp(info, p.x, p.z);
+      if (p && finite(p.x) && finite(p.z)) {
+        structures[info.id] = clampProp(info, p.x, p.z);
+        // How it stands (or lies): its turn and how far it has tipped over.
+        if (finite(info.weight)) {
+          if (finite(p.yaw) && p.yaw) structures[info.id].yaw = Math.atan2(Math.sin(p.yaw), Math.cos(p.yaw));
+          if (finite(p.ta) && p.ta > 0.02) Object.assign(structures[info.id], { ta: clamp(p.ta, 0, TIP_LIE), td: clamp(Math.round(num(p.td, 0, 3)), 0, 3) });
+        }
+      }
     }
   const balls = defaultBalls(map);
   if (sameMap)
@@ -63,6 +73,9 @@ export function createState(saved = {}, newId) {
       }
     }
   const cubes = sameMap && saved.cubes ? saved.cubes : defaultCubes(map, newId);
+  // A prop saved half-tipped settles one way or the other once the room runs again.
+  const motion = {};
+  for (const [id, p] of Object.entries(structures)) if (p.ta && p.ta < TIP_LIE) motion[id] = { vx: 0, vz: 0, vy: 0, wy: 0, wt: 0, idle: 0 };
   const rides = defaultRides(map);
   if (sameMap)
     for (const r of rides) {
@@ -78,6 +91,7 @@ export function createState(saved = {}, newId) {
     balls,
     rides,
     structures,
+    motion,
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
     mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
@@ -387,9 +401,57 @@ export function applyOp(s, op, ctx) {
     case "struct.move": {
       const info = propInfo(stateMap(s), op.id);
       if (!info || !finite(op.x) || !finite(op.z) || s.lifts?.[op.id] || !finite(info.weight)) return null;
-      s.structures[op.id] = clampProp(info, op.x, op.z);
+      // Dragged: it keeps how it stands (or lies) and stops moving.
+      const { yaw, ta, td } = s.structures[op.id] || {};
+      s.structures[op.id] = { ...clampProp(info, op.x, op.z), ...(yaw ? { yaw } : {}), ...(ta ? { ta, td } : {}) };
+      if (s.motion) delete s.motion[op.id];
       s.v++;
       others({ t: "struct", id: op.id, ...s.structures[op.id] });
+      physics = true;
+      break;
+    }
+    case "prop.kick": {
+      // E next to a prop: a kick that shoves it (and may tip a light, tall one over); next to one
+      // that has fallen over, you lift it back onto its feet.
+      const info = propInfo(stateMap(s), op.id),
+        pos = s.structures[op.id],
+        from = ctx.pose || (finite(op.x) && finite(op.z) ? { x: op.x, y: 0, z: op.z } : null);
+      if (!movable(s, info) || !pos || !from) return null;
+      const near = propNearest(info, pos, from.x, (from.y || 0) + 0.35, from.z);
+      if (near.d > 1.3) return null;
+      if ((pos.ta || 0) > tipShape(info, pos.td).crit) raiseProp(s, op.id);
+      else {
+        const c = propCentre(info, pos),
+          dx = c.x - from.x,
+          dz = c.z - from.z,
+          len = Math.hypot(dx, dz) || 1;
+        pushProp(s, op.id, [(dx / len) * KICK_PROP, 0, (dz / len) * KICK_PROP], { x: near.x, y: (from.y || 0) + 0.4, z: near.z }, 0.6);
+      }
+      physics = true;
+      break;
+    }
+    case "prop.hit": {
+      // Something thrown, or a kart, ran into a prop: a push along the way it was going.
+      const info = propInfo(stateMap(s), op.id),
+        pos = s.structures[op.id];
+      if (!movable(s, info) || !pos || ![op.vx, op.vz].every(finite)) return null;
+      let mass;
+      if (op.kind === "kart") {
+        if (ctx.pose && !ctx.pose.kt) return null;
+        mass = 3;
+      } else {
+        const k = projectile(op.kind);
+        if (k.id !== op.kind || k.explosion || k.place) return null;
+        mass = k.mass;
+      }
+      const speed = Math.min(Math.hypot(op.vx, op.vz), op.kind === "kart" ? 14 : 30),
+        J = Math.min(mass * speed * 0.5, op.kind === "kart" ? 12 : 6);
+      if (J < 0.02) return null;
+      const dx = op.vx / (Math.hypot(op.vx, op.vz) || 1),
+        dz = op.vz / (Math.hypot(op.vx, op.vz) || 1),
+        c = propCentre(info, pos),
+        at = [op.x, op.y, op.z].every(finite) && Math.hypot(op.x - c.x, op.z - c.z) < 4 ? { x: op.x, y: clamp(op.y, 0, 6), z: op.z } : null;
+      pushProp(s, op.id, [dx * J, 0, dz * J], at, 1);
       physics = true;
       break;
     }
@@ -407,6 +469,7 @@ export function applyOp(s, op, ctx) {
       if (!map || map.id === s.map) return null;
       s.map = map.id;
       fitRoom(s);
+      s.motion = {};
       s.structures = defaultPositions(map);
       s.balls = defaultBalls(map);
       s.cubes = defaultCubes(map, ctx.newId);
@@ -541,6 +604,8 @@ export const STATE_OPS = new Set([
   "obj.drag",
   "obj.release",
   "struct.move",
+  "prop.kick",
+  "prop.hit",
   "ball.reset",
   "map.set",
   "ride.take",
@@ -658,6 +723,8 @@ export function stepPushes(s, pushers, dt) {
       moved.push({ id: prop.id, ...s.structures[prop.id], by: lift.by });
       continue;
     }
+    // Moving on its own (knocked about): hands off until it rests.
+    if (s.motion?.[prop.id]) continue;
     const sides = { "+x": [], "-x": [], "+z": [], "-z": [] };
     for (const p of pushers) {
       const { gap, dx, dz } = gapTo(prop, pos, p.x, p.z);
@@ -678,7 +745,10 @@ export function stepPushes(s, pushers, dt) {
         offset: { x: pos.x - mx, z: pos.z - mz },
         from: { x: pos.x, z: pos.z },
       };
+      // Picked up, a fallen prop comes up the right way.
       setPropPosition(s, prop.id, { y: LIFT_HEIGHT });
+      delete s.structures[prop.id].ta;
+      delete s.structures[prop.id].td;
       moved.push({ id: prop.id, ...s.structures[prop.id], by: s.lifts[prop.id].by });
       continue;
     }
@@ -695,8 +765,248 @@ export function stepPushes(s, pushers, dt) {
   return moved;
 }
 
+// ——— Props that answer to force ———
+// A push (a blast, a kick, something thrown, a kart) gives a movable prop an impulse — its weight
+// is its mass. Then it moves on its own: it hops and falls back, slides and slows by friction (hardly
+// at all on ice), spins down, and rocks on its base: tipped less than its balance angle it rocks
+// back upright, past it it falls over onto its side. It bumps into walls and props (a movable one
+// gets some of the push) and leans on whatever stops its fall. When everything has calmed down it
+// rests — standing, lying or leaning — until the next push. Several people can stand a heavy prop
+// back up together. s.motion holds the props in motion; it is not saved.
+const PROP_G = 9.8,
+  FRICTION = 0.5,
+  SOFT_FRICTION = 0.65,
+  ICE_FRICTION = 0.06;
+export const BLAST_ON_PROPS = 0.42,
+  KICK_PROP = 3.2;
+const motionOf = (s, id) => ((s.motion ||= {})[id] ||= { vx: 0, vz: 0, vy: 0, wy: 0, wt: 0, idle: 0 });
+export const propsMoving = (s) => !!s.motion && Object.keys(s.motion).length > 0;
+const movable = (s, info) => info && finite(info.weight) && !s.lifts?.[info.id];
+// The nearest point of a prop to (x, y, z) and how far it is.
+export function propNearest(info, pos, x, y, z) {
+  let best = { d: Infinity, x, y, z };
+  for (const c of propColliders(info, pos)) {
+    let nx, nz;
+    if (c.shape === "cylinder") {
+      const dx = x - c.x,
+        dz = z - c.z,
+        l = Math.hypot(dx, dz) || 1,
+        k = Math.min(1, c.radius / l);
+      nx = c.x + dx * k;
+      nz = c.z + dz * k;
+    } else {
+      nx = clamp(x, c.x - c.w / 2, c.x + c.w / 2);
+      nz = clamp(z, c.z - c.d / 2, c.z + c.d / 2);
+    }
+    const ny = clamp(y, c.y || 0, c.h),
+      d = Math.hypot(x - nx, y - ny, z - nz);
+    if (d < best.d) best = { d, x: nx, y: ny, z: nz };
+  }
+  return best;
+}
+// j: [jx, jy, jz] — the impulse (upward part only lifts); at: where it is applied (world x, y, z),
+// for the lever (high up tips more) and the spin (off-centre turns it); tip scales the tipping.
+export function pushProp(s, id, j, at = null, tip = 1) {
+  const info = propInfo(stateMap(s), id),
+    pos = s.structures[id];
+  if (!movable(s, info) || !pos) return false;
+  const m = info.weight,
+    mo = motionOf(s, id),
+    [jx, jy, jz] = j;
+  mo.vx += jx / m;
+  mo.vz += jz / m;
+  if (jy > 0) mo.vy = Math.max(mo.vy, jy / m);
+  const J = Math.hypot(jx, jz);
+  if (J > 1e-6) {
+    const yaw = pos.yaw || 0;
+    // Standing, it tips the way it is pushed: over the edge of its base nearest that way.
+    if ((pos.ta || 0) < 0.02 && Math.abs(mo.wt) < 0.3) {
+      const lx = jx * Math.cos(yaw) - jz * Math.sin(yaw),
+        lz = jx * Math.sin(yaw) + jz * Math.cos(yaw),
+        sides = [lx, lz, -lx, -lz];
+      pos.td = sides.indexOf(Math.max(...sides));
+    }
+    const sh = tipShape(info, pos.td),
+      dir = yawed(yaw, sh.ax, sh.az),
+      along = jx * dir.x + jz * dir.z,
+      hy = at ? clamp(at.y - (pos.y || 0), 0, info.h) : info.h / 2,
+      lever = 0.35 + 0.9 * (hy / Math.max(0.2, info.h));
+    mo.wt += (tip * along * lever) / (m * sh.r);
+    if (at) {
+      const c = propCentre(info, pos),
+        rx = at.x - c.x,
+        rz = at.z - c.z,
+        inertia = (m * (info.hw * info.hw + info.hd * info.hd)) / 3 + 0.02;
+      mo.wy = clamp(mo.wy + ((rz * jx - rx * jz) / inertia) * 0.6, -10, 10);
+    }
+  }
+  mo.idle = 0;
+  return true;
+}
+// Standing a fallen prop back up (E next to it): enough for one person to right a light one; a
+// heavy one needs a few at once.
+export function raiseProp(s, id) {
+  const info = propInfo(stateMap(s), id),
+    pos = s.structures[id];
+  if (!movable(s, info) || !pos) return false;
+  const sh = tipShape(info, pos.td),
+    k = (3 * PROP_G) / (4 * sh.r),
+    need = Math.sqrt(2 * k * Math.max(0.02, 1 - Math.sin(sh.crit))),
+    mo = motionOf(s, id);
+  mo.wt -= (need * 1.35) / Math.pow(info.weight, 0.75);
+  mo.idle = 0;
+  return true;
+}
+// Two colliders touching (side by side and at overlapping heights).
+function touching(a, b) {
+  if ((a.y || 0) >= b.h - 0.02 || (b.y || 0) >= a.h - 0.02) return false;
+  const ac = a.shape === "cylinder",
+    bc = b.shape === "cylinder";
+  if (ac && bc) return Math.hypot(a.x - b.x, a.z - b.z) < a.radius + b.radius;
+  if (ac || bc) {
+    const c = ac ? a : b,
+      r = ac ? b : a,
+      nx = clamp(c.x, r.x - r.w / 2, r.x + r.w / 2),
+      nz = clamp(c.z, r.z - r.d / 2, r.z + r.d / 2);
+    return Math.hypot(c.x - nx, c.z - nz) < c.radius;
+  }
+  return Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.z - b.z) < (a.d + b.d) / 2;
+}
+const offFloor = (c) => {
+  const hw = c.shape === "cylinder" ? c.radius : c.w / 2,
+    hd = c.shape === "cylinder" ? c.radius : c.d / 2;
+  return Math.abs(c.x) + hw > ROOM.halfWidth - 0.05 || c.z + hd > ROOM.front - 0.05 || c.z - hd < Math.max(floorBack(c.x - hw), floorBack(c.x + hw)) + 0.05;
+};
+export function stepProps(s, dt) {
+  if (!propsMoving(s)) return [];
+  fitRoom(s);
+  const map = stateMap(s),
+    props = mapProps(map),
+    statics = (map.statics || []).filter((b) => b.shape !== "path" && b.h > 0.15 && !b.rail),
+    moved = [];
+  for (const id of Object.keys(s.motion)) {
+    const info = propInfo(map, id),
+      pos = s.structures[id],
+      mo = s.motion[id];
+    if (!movable(s, info) || !pos) {
+      delete s.motion[id];
+      continue;
+    }
+    mo.lean = false;
+    // Whatever it already overlaps does not hold it (it started there).
+    const own = propColliders(info, pos),
+      others = props.filter((p) => p.id !== id && s.structures[p.id]).flatMap((p) => propColliders(p, s.structures[p.id]));
+    const blockers = [...statics, ...others].filter((b) => !own.some((c) => touching(c, b)));
+    const wasOff = own.some(offFloor);
+    const blockedBy = (pose) => {
+      const cs = propColliders(info, pose);
+      if (!wasOff && cs.some(offFloor)) return { wall: true };
+      return blockers.find((b) => cs.some((c) => touching(c, b))) || null;
+    };
+    // Up and down: a hop from a blast, then falling back.
+    let y = pos.y || 0;
+    const air = y > 0 || mo.vy > 0;
+    if (air) {
+      mo.vy -= PROP_G * dt;
+      y += mo.vy * dt;
+      if (y <= 0) {
+        y = 0;
+        mo.vy = mo.vy < -3 ? -mo.vy * 0.25 : 0;
+        mo.vx *= 0.8;
+        mo.vz *= 0.8;
+        mo.wy *= 0.7;
+      }
+    }
+    // Rocking and falling over: gravity rights it short of the balance angle, lays it down past it.
+    let ta = pos.ta || 0;
+    if (ta > 0 || mo.wt) {
+      const sh = tipShape(info, pos.td);
+      if (!air) mo.wt += ((3 * PROP_G) / (4 * sh.r)) * Math.sin(ta - sh.crit) * dt;
+      mo.wt *= Math.exp(-0.6 * dt);
+      ta += mo.wt * dt;
+      if (ta <= 0) {
+        ta = 0;
+        mo.wt = mo.wt < -1.2 ? -mo.wt * 0.2 : 0;
+      } else if (ta >= TIP_LIE) {
+        ta = TIP_LIE;
+        mo.wt = mo.wt > 1.2 ? -mo.wt * 0.15 : 0;
+      }
+    }
+    // Sliding: friction on the ground (little on ice), none in the air; spinning down the same way.
+    let vx = mo.vx,
+      vz = mo.vz;
+    const speed = Math.hypot(vx, vz);
+    if (!air && speed > 0) {
+      const mu = iceAt(map, pos.x, pos.z) ? ICE_FRICTION : info.local.some((c) => c.soft) ? SOFT_FRICTION : FRICTION,
+        slow = Math.min(speed, mu * PROP_G * dt);
+      vx -= (vx / speed) * slow;
+      vz -= (vz / speed) * slow;
+    }
+    if (!air) mo.wy *= Math.exp(-(iceAt(map, pos.x, pos.z) ? 0.6 : ta > 0.5 ? 5 : 3) * dt);
+    const yaw0 = pos.yaw || 0,
+      yaw = Math.atan2(Math.sin(yaw0 + mo.wy * dt), Math.cos(yaw0 + mo.wy * dt));
+    let next = { ...pos, x: pos.x + vx * dt, z: pos.z + vz * dt, y, ta, yaw };
+    // A tipped prop turns about its middle, not about where its foot was.
+    if (yaw !== yaw0 && ta > 0.02) {
+      const a = propCentre(info, { ...pos, x: 0, z: 0, ta, yaw: yaw0 }),
+        b = propCentre(info, { ...pos, x: 0, z: 0, ta, yaw });
+      next.x += a.x - b.x;
+      next.z += a.z - b.z;
+    }
+    let hit = blockedBy(next);
+    if (hit) {
+      const onlyX = { ...next, z: pos.z },
+        onlyZ = { ...next, x: pos.x };
+      let bx = false,
+        bz = false;
+      if (!blockedBy(onlyX)) {
+        next = onlyX;
+        bz = true;
+      } else if (!blockedBy(onlyZ)) {
+        next = onlyZ;
+        bx = true;
+      } else {
+        next = { ...next, x: pos.x, z: pos.z };
+        bx = bz = true;
+      }
+      // Falling or turning into it: it leans on it.
+      if (blockedBy(next)) {
+        next = { ...next, ta: pos.ta || 0, yaw: yaw0 };
+        if (blockedBy(next)) next = { ...next, y: pos.y || 0 };
+        mo.wt = 0;
+        mo.wy = 0;
+        mo.lean = true;
+      }
+      // A movable prop takes some of the push; the rest bounces back a little.
+      const other = hit.prop && propInfo(map, hit.prop);
+      if (other && movable(s, other)) {
+        const share = info.weight * 0.6;
+        pushProp(s, hit.prop, [bx ? vx * share : 0, 0, bz ? vz * share : 0], null, 0.3);
+      }
+      if (bx) vx *= -0.25;
+      if (bz) vz *= -0.25;
+    }
+    mo.vx = vx;
+    mo.vz = vz;
+    Object.assign(pos, { x: next.x, z: next.z, yaw: next.yaw, ta: next.ta });
+    if (next.y > 0) pos.y = next.y;
+    else delete pos.y;
+    if (!pos.yaw) delete pos.yaw;
+    if (!pos.ta) delete pos.ta;
+    moved.push(id);
+    // Calm for a moment: it rests.
+    const still = !(pos.y > 0) && mo.vy === 0 && Math.hypot(mo.vx, mo.vz) < 0.06 && Math.abs(mo.wy) < 0.08 && Math.abs(mo.wt) < 0.08;
+    const settled = !pos.ta || pos.ta === TIP_LIE || mo.lean;
+    mo.idle = still && settled ? mo.idle + dt : 0;
+    if (mo.idle > 0.12) delete s.motion[id];
+  }
+  if (moved.length) s.v++;
+  return moved;
+}
+
 // ——— Explosions ———
-// Pushes every loose object away from the blast and nudges movable props according to their weight.
+// Pushes every loose object and every movable prop away from the blast. The props then move on
+// their own (stepProps); nothing is returned for them here.
 export function applyBlast(s, x, y, z, radius, power) {
   fitRoom(s);
   const moved = [];
@@ -713,33 +1023,20 @@ export function applyBlast(s, x, y, z, radius, power) {
     o.spin = (o.spin || 0) + k;
     o.dragBy = null;
   }
+  // Props: pushed away from the blast from the side facing it — the nearer, the harder; low down it
+  // shoves them, a near one hops; off-centre it spins them; enough of it knocks them over.
   for (const prop of mapProps(stateMap(s))) {
-    if (!finite(prop.weight)) continue;
     const pos = s.structures[prop.id];
-    if (pos.y || s.lifts?.[prop.id]) continue;
-    const { gap, dx, dz } = gapTo(prop, pos, x, z);
-    if (gap > radius) continue;
-    const len = Math.hypot(dx, dz) || 1,
-      strength = power * (1 - Math.max(0, gap) / radius),
-      // The push is away from the blast.
-      px = -dx / len,
-      pz = -dz / len;
-    if (strength > prop.weight * TOPPLE_FORCE) {
-      // A strong enough blast topples the prop: it flies a little and lands on its side.
-      const slide = clamp(0.25 + (strength / prop.weight) * 0.05, 0, 1.1);
-      let next = clampProp(prop, pos.x + px * slide, pos.z + pz * slide);
-      if (overlapsOthers(s, prop, next)) next = { x: pos.x, z: pos.z };
-      // It tips about the horizontal axis across the push, falling in the push direction.
-      s.structures[prop.id] = { x: next.x, z: next.z, tx: -pz, tz: px, ta: TOPPLE_LIE };
-    } else {
-      const shift = (strength * 0.05) / prop.weight;
-      const next = clampProp(prop, pos.x + px * shift, pos.z + pz * shift);
-      if (overlapsOthers(s, prop, next)) continue;
-      // Keep it toppled if it already was.
-      const keep = pos.ta ? { tx: pos.tx, tz: pos.tz, ta: pos.ta } : {};
-      s.structures[prop.id] = { ...next, ...keep };
-    }
-    moved.push({ id: prop.id, ...s.structures[prop.id] });
+    if (!movable(s, prop) || !pos) continue;
+    const near = propNearest(prop, pos, x, y, z);
+    if (near.d > radius) continue;
+    const c = propCentre(prop, pos),
+      strength = power * (1 - near.d / radius),
+      dx = c.x - x,
+      dz = c.z - z,
+      len = Math.hypot(dx, dz) || 1,
+      J = strength * BLAST_ON_PROPS;
+    pushProp(s, prop.id, [(dx / len) * J, J * (near.d < radius * 0.5 ? 0.45 : 0.15), (dz / len) * J], near, 1);
   }
   return moved;
 }

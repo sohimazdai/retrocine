@@ -405,6 +405,53 @@ function updateKarts(dt) {
     }
 }
 const nearDispenser = () => (mapScene.map?.dispensers || []).find((d) => Math.hypot(d.x - active.x, d.z - active.z) < 2.6);
+const nearSelector = () => (mapScene.map?.selectors || []).find((d) => Math.hypot(d.x - active.x, d.z - active.z) < 2.2);
+// The track selector: pick one of the kart tracks; the room switches to it for everyone.
+function openTrackChooser() {
+  let box = $("#trackChooser");
+  if (!box) {
+    const style = document.createElement("style");
+    style.textContent = `#trackChooser{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:55;display:none;gap:10px;padding:12px;background:rgba(18,20,26,.92);border:1px solid rgba(255,255,255,.12);border-radius:16px;box-shadow:0 14px 40px rgba(0,0,0,.45);font:14px system-ui,sans-serif;color:#eef0f4}
+#trackChooser.on{display:flex}
+#trackChooser button{all:unset;cursor:pointer;width:168px;padding:10px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);display:flex;flex-direction:column;gap:6px}
+#trackChooser button:hover,#trackChooser button:focus-visible{background:rgba(255,255,255,.12)}
+#trackChooser button.current{border-color:#f2c14e}
+#trackChooser canvas{width:148px;height:92px;align-self:center}
+#trackChooser b{font-size:15px}#trackChooser small{opacity:.7;line-height:1.3}`;
+    document.head.appendChild(style);
+    box = document.createElement("div");
+    box.id = "trackChooser";
+    document.body.appendChild(box);
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-track]");
+      if (!b) return;
+      box.classList.remove("on");
+      if (b.dataset.track !== world.map) op({ t: "map.set", id: b.dataset.track });
+    });
+  }
+  const tracks = MAPS.filter((m) => m.kartTrack);
+  box.innerHTML = tracks
+    .map((m, k) => `<button data-track="${m.id}" class="${m.id === world.map ? "current" : ""}"><canvas width="296" height="184" data-outline="${m.id}"></canvas><b>${k + 1}. ${m.title}</b><small>${m.description}</small></button>`)
+    .join("");
+  for (const cv of box.querySelectorAll("canvas[data-outline]")) {
+    const m = mapDef(cv.dataset.outline),
+      ctx = cv.getContext?.("2d"),
+      pts = m.roadPoints || m.track?.points || [];
+    if (!ctx || !pts.length) continue;
+    ctx.fillStyle = "#1c2a1c";
+    ctx.fillRect(0, 0, 296, 184);
+    ctx.strokeStyle = m.id === world.map ? "#f2c14e" : "#e9edf3";
+    ctx.lineWidth = 9;
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, 148 + p[0] * 9.2, 98 + p[1] * 8.4));
+    ctx.closePath();
+    ctx.stroke();
+  }
+  box.classList.add("on");
+  box.querySelector("button")?.focus?.();
+}
+const closeTrackChooser = () => $("#trackChooser")?.classList.remove("on");
 // A kart appears in front of the dispenser and you are in it; if another kart stands there, a bit further on.
 function takeKart(d) {
   let spot = { ...d.spawn };
@@ -426,12 +473,19 @@ function leaveKart() {
   active.x = clamp(active.x, -LIMITS.x, LIMITS.x);
   active.z = clamp(active.z, floorBack(active.x) + 0.3, LIMITS.z);
 }
-const bestLaps = new Map();
+// Best laps per track: name → seconds.
+const bestLapsByMap = new Map();
+const lapsHere = () => {
+  if (!bestLapsByMap.has(world.map)) bestLapsByMap.set(world.map, new Map());
+  return bestLapsByMap.get(world.map);
+};
+const drawLaps = () => mapScene.decor?.setBoard?.([...lapsHere()].sort((a, b) => a[1] - b[1]).slice(0, 6).map(([n, s]) => [n, lapTime(s)]));
 const lapTime = (s) => (s >= 60 ? `${Math.floor(s / 60)}:${(s % 60).toFixed(2).padStart(5, "0")}` : s.toFixed(2)) + " с";
 function recordLap(name, seconds) {
-  if (!(seconds < (bestLaps.get(name) ?? Infinity))) return false;
-  bestLaps.set(name, seconds);
-  mapScene.decor?.setBoard?.([...bestLaps].sort((a, b) => a[1] - b[1]).slice(0, 6).map(([n, s]) => [n, lapTime(s)]));
+  const laps = lapsHere();
+  if (!(seconds < (laps.get(name) ?? Infinity))) return false;
+  laps.set(name, seconds);
+  drawLaps();
   return true;
 }
 function kartEvents(events) {
@@ -1724,6 +1778,11 @@ function kickNearest() {
     return;
   }
   if (active.climb) return;
+  // At the track selector: choose where to race.
+  if (nearSelector()) {
+    openTrackChooser();
+    return;
+  }
   // At a kart dispenser: a kart of your own, and you are in it.
   const dispenser = nearDispenser();
   if (dispenser) {
@@ -2528,6 +2587,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.code === "Escape") {
+    closeTrackChooser();
     closeContext();
     setTool("snow");
   }
@@ -3350,6 +3410,8 @@ function loadState(fresh, objs) {
       updateCamera();
     }
     mapScene.build(mapDef(world.map), world.structures, world.balls);
+    drawLaps();
+    closeTrackChooser();
   }
   else {
     for (const [id, pos] of Object.entries(world.structures)) mapScene.move(id, pos.x, pos.z, pos.y || 0, pos.ta ? pos : null);

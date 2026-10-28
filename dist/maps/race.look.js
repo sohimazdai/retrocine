@@ -23,7 +23,7 @@ function rounded(r, steps = 10) {
   s.closePath();
   return s;
 }
-function asphalt() {
+export function asphalt() {
   return canvasTexture("asphalt", 256, (c, n, r) => {
     c.fillStyle = "#3b3e44";
     c.fillRect(0, 0, n, n);
@@ -165,7 +165,7 @@ function hump(group, statics) {
   mesh(group, merge(lines), mat("#f2c14e", { roughness: 0.6 }), 0, 0, 0, false);
 }
 // A pole by the start line with five red lights that come on one by one and go out: go!
-function startLights(group, statics) {
+export function startLights(group, statics) {
   const s = statics.find((s) => s.kind === "start-lights");
   if (!s) return null;
   const steel = mat("#3a3d44", { roughness: 0.4, metal: 0.6 });
@@ -175,7 +175,7 @@ function startLights(group, statics) {
   for (let i = 0; i < 5; i++) lights.push(mesh(group, new T.SphereGeometry(0.11, 12, 8), mat("#4a1a1a", { emissive: "#ff2a1a", glow: 0 }), s.x - 0.56 + i * 0.28, s.h + 0.1, s.z + 0.12, false));
   return lights;
 }
-function board(group, s) {
+export function board(group, s) {
   mesh(group, new T.BoxGeometry(s.w + 0.2, s.h - 0.6, s.d), mat("#1d1f24", { roughness: 0.5 }), s.x, (s.h - 0.6) / 2 + 0.6, s.z);
   for (const dx of [-s.w / 2 + 0.2, s.w / 2 - 0.2]) mesh(group, new T.BoxGeometry(0.15, 0.6, 0.15), mat("#3a3d44"), s.x + dx, 0.3, s.z);
   let ctx = null,

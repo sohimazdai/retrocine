@@ -45,10 +45,12 @@ function cornerTyres() {
   return out;
 }
 export const DISPENSER = { x: 0, z: 9.55, spawn: { x: 0, z: 6.7, a: Math.PI / 2 } };
+export const SELECTOR = { x: -6.2, z: 9.55 };
 const HUMP = { x: 0, z: -5.6, d: W, h: 0.45, len: 1.6 };
 
 export default {
   id: "race",
+  kartTrack: true,
   backdrop: "speedway",
   title: "Картинг",
   description: "Трасса, карты из автомата, горб для прыжка и табло лучших кругов",
@@ -67,6 +69,7 @@ export default {
   },
   track: TRACK,
   dispensers: [DISPENSER],
+  selectors: [SELECTOR],
   spawn: [
     { x0: -4.4, x1: -1.6, z0: 8.9, z1: 9.9 },
     { x0: 1.6, x1: 4.4, z0: 8.9, z1: 9.9 },
@@ -88,6 +91,7 @@ export default {
   ],
   props: [
     { id: "dispenser", kind: "kart-dispenser", label: "Выдача картов — нажмите E рядом", x: DISPENSER.x, z: DISPENSER.z, colliders: [{ x: 0, z: 0, w: 1.6, d: 0.7, h: 2.1 }] },
+    { id: "selector", kind: "track-selector", label: "Выбор трассы — нажмите E рядом", x: SELECTOR.x, z: SELECTOR.z, colliders: [{ x: 0, z: 0, w: 1.3, d: 0.7, h: 2.0 }] },
   ],
   balls: [
     ...[

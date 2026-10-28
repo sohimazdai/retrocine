@@ -2,7 +2,7 @@
 // A/D turn — also on the spot), with grip that lets the back step out a little, grass that slows
 // you, walls and other karts you bounce off, avatars you knock flying, small jumps over humps,
 // and lap timing through checkpoints. Pure logic, run by the browser for your own kart.
-import { RADIUS, LIMITS, clamp, inside, sloped, surfaceOf } from "./physics.js";
+import { RADIUS, LIMITS, clamp, inside, sloped, surfaceOf, pathNearest, PATH_CLEARANCE } from "./physics.js";
 import { floorBack } from "./layout.js";
 import { surfaceUnder, gradient } from "./riding.js";
 
@@ -92,6 +92,17 @@ export function enterKart(body, spawn, color) {
 
 // Walls: anything taller than a kerb that the kart's two circles run into.
 function pushOut(c, b, y) {
+  if (b.shape === "path") {
+    if (!inside(c.x, c.z, b, KART.circle)) return null;
+    const n = pathNearest(b, c.x, c.z),
+      half = b.width / 2,
+      above = n.y - y;
+    // The side of an embankment or a ramp up to a bridge: a wall (but you pass under a high bridge).
+    if (above > 0.4 && (b.solid || above < PATH_CLEARANCE)) return { nx: n.nx, nz: n.nz, depth: half + KART.circle - n.d };
+    // On a raised stretch with crash barriers: they keep you on the road.
+    if (b.walls && n.y > 0.3 && Math.abs(above) <= 0.4 && n.d > half - KART.circle) return { nx: -n.nx, nz: -n.nz, depth: n.d - (half - KART.circle) };
+    return null;
+  }
   if (b.rail || sloped(b) || (b.y || 0) > y + 1.0 || b.h <= y + 0.28) return null;
   let nx, nz, d;
   if (b.shape === "cylinder") {

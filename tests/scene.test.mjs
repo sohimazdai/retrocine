@@ -111,6 +111,17 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
       return { data: new Uint8ClampedArray(width * height * 4) };
     },
     putImageData() {},
+    clearRect() {},
+    beginPath() {},
+    moveTo() {},
+    lineTo() {},
+    closePath() {},
+    stroke() {},
+    fill() {},
+    arc() {},
+    save() {},
+    restore() {},
+    setTransform() {},
     measureText(t) {
       return {
         width:
@@ -963,7 +974,7 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
 test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
-  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "rink", "race", "cinema"]) {
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "rink", "race", "race-mountain", "race-gp", "cinema"]) {
     a.run(`op({ t: "map.set", id: "${id}" })`);
     a.tick(0.3);
     assert.equal(a.run("mapScene.map.id"), id);
@@ -1380,4 +1391,38 @@ test("mine: key 9 sets it at your feet; stepped on, it blinks with a light and b
   assert.equal(a.run("world.mines.length"), 0);
   assert.equal(a.run("mineMeshes.size"), 0);
   assert.equal(a.run("active.dead"), true, "the blast at point-blank range is lethal");
+});
+
+test("kart tracks: E at the selector next to the dispenser offers the three tracks; picking one switches the room and pulls the camera back for the big ones", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "race" })');
+  a.tick(0.2);
+  const sel = a.run("mapScene.map.selectors[0]");
+  a.run(`Object.assign(active, { x: ${sel.x + 1.2}, z: ${sel.z - 0.6}, y: 0, vy: 0, grounded: true })`);
+  a.run("kickNearest()");
+  const box = a.w.document.querySelector("#trackChooser");
+  assert(box.classList.contains("on"), "the chooser opens");
+  const buttons = [...box.querySelectorAll("button[data-track]")].map((b) => b.dataset.track);
+  assert.deepEqual(buttons, ["race", "race-mountain", "race-gp"]);
+  assert(box.querySelector('[data-track="race"]').classList.contains("current"));
+  const camBefore = a.run("camera.position.length()");
+  box.querySelector('[data-track="race-gp"]').click();
+  a.tick(0.3);
+  assert.equal(a.run("world.map"), "race-gp");
+  assert(!box.classList.contains("on"), "closes after choosing");
+  assert(a.run("camera.position.length()") > camBefore * 1.2, "a bigger track: the camera moves back");
+  // A kart on the new track drives and the board belongs to this track.
+  const d = a.run("mapScene.map.dispensers[0]");
+  a.run(`Object.assign(active, { x: ${d.x + 0.6}, z: ${d.z - 1.0}, y: 0, vy: 0, grounded: true })`);
+  a.run("kickNearest()");
+  assert(a.run("!!active.kart"), "a kart from this track's dispenser");
+  a.run("keys.add('up')");
+  a.tick(1);
+  a.run("keys.clear()");
+  assert(a.run("Math.hypot(active.kart.vx, active.kart.vz)") > 3, "off it goes");
+  a.run("recordLap('Тестер', 12.3)");
+  assert.equal(a.run("lapsHere().get('Тестер')"), 12.3);
+  a.run('op({ t: "map.set", id: "race-mountain" })');
+  a.tick(0.3);
+  assert.equal(a.run("lapsHere().size"), 0, "each track keeps its own best laps");
 });

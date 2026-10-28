@@ -13,10 +13,60 @@ export function jump(body) {
   body.grounded = false;
   return true;
 }
-// Sloped colliders: "ramp" (straight wedge, height h0 → h1 along axis) and "qpipe" (quarter pipe,
-// a concave curve rising toward the dir side, as tall as h). Their top surface carries bodies and balls.
-export const sloped = (b) => b.shape === "ramp" || b.shape === "qpipe";
+// Sloped colliders: "ramp" (straight wedge, height h0 → h1 along axis), "qpipe" (quarter pipe,
+// a concave curve rising toward the dir side, as tall as h) and "path" (a road of a given width along
+// a polyline of [x, z, y] points: hills, embankments and bridges). Their top surface carries bodies
+// and balls.
+export const sloped = (b) => b.shape === "ramp" || b.shape === "qpipe" || b.shape === "path";
+// ——— Paths ———
+const pathCache = new WeakMap();
+function pathData(b) {
+  let d = pathCache.get(b);
+  if (d) return d;
+  const pts = b.points,
+    segs = [];
+  let x0 = Infinity,
+    x1 = -Infinity,
+    z0 = Infinity,
+    z1 = -Infinity;
+  for (let i = 0; i < pts.length - (b.closed ? 0 : 1); i++) {
+    const a = pts[i],
+      c = pts[(i + 1) % pts.length],
+      dx = c[0] - a[0],
+      dz = c[1] - a[1];
+    segs.push({ ax: a[0], az: a[1], ay: a[2] || 0, dx, dz, dy: (c[2] || 0) - (a[2] || 0), l2: dx * dx + dz * dz || 1e-9 });
+  }
+  for (const p of pts) {
+    x0 = Math.min(x0, p[0]);
+    x1 = Math.max(x1, p[0]);
+    z0 = Math.min(z0, p[1]);
+    z1 = Math.max(z1, p[1]);
+  }
+  const pad = b.width / 2;
+  d = { segs, x0: x0 - pad, x1: x1 + pad, z0: z0 - pad, z1: z1 + pad };
+  pathCache.set(b, d);
+  return d;
+}
+// The nearest point of a path's centreline: distance, height there, and the unit vector pointing
+// from the centreline out to (x, z).
+export function pathNearest(b, x, z) {
+  const { segs } = pathData(b);
+  let best = { d: Infinity, y: 0, nx: 1, nz: 0 };
+  for (const s of segs) {
+    const t = clamp(((x - s.ax) * s.dx + (z - s.az) * s.dz) / s.l2, 0, 1),
+      px = s.ax + s.dx * t,
+      pz = s.az + s.dz * t,
+      ox = x - px,
+      oz = z - pz,
+      d = Math.hypot(ox, oz);
+    if (d < best.d) best = { d, y: s.ay + s.dy * t, nx: d > 1e-6 ? ox / d : -s.dz / Math.sqrt(s.l2), nz: d > 1e-6 ? oz / d : s.dx / Math.sqrt(s.l2) };
+  }
+  return best;
+}
+// Under a bridge (a path well above you that is not solid ground beneath) you pass freely.
+export const PATH_CLEARANCE = 1.5;
 export function surfaceOf(b, x, z) {
+  if (b.shape === "path") return pathNearest(b, x, z).y;
   if (!sloped(b)) return b.h;
   const u = clamp(b.axis === "x" ? (x - (b.x - b.w / 2)) / b.w : (z - (b.z - b.d / 2)) / b.d, 0, 1);
   if (b.shape === "ramp") return b.h0 + (b.h1 - b.h0) * u;
@@ -25,8 +75,14 @@ export function surfaceOf(b, x, z) {
 }
 // Downhill direction and steepness on a sloped collider at (x, z): { x, z, slope }.
 export function downhill(b, x, z) {
-  const e = 0.05,
-    ax = b.axis === "x";
+  const e = 0.05;
+  if (b.shape === "path") {
+    const gx = (surfaceOf(b, x + e, z) - surfaceOf(b, x - e, z)) / (2 * e),
+      gz = (surfaceOf(b, x, z + e) - surfaceOf(b, x, z - e)) / (2 * e),
+      g = Math.hypot(gx, gz) || 1;
+    return { x: -gx / g, z: -gz / g, slope: Math.hypot(gx, gz) };
+  }
+  const ax = b.axis === "x";
   const hi = surfaceOf(b, x + (ax ? e : 0), z + (ax ? 0 : e)),
     lo = surfaceOf(b, x - (ax ? e : 0), z - (ax ? 0 : e));
   const slope = (hi - lo) / (2 * e);
@@ -35,6 +91,11 @@ export function downhill(b, x, z) {
 export function inside(x, z, b, pad = 0) {
   if (b.shape === "cylinder")
     return Math.hypot(x - b.x, z - b.z) < b.radius + pad;
+  if (b.shape === "path") {
+    const d = pathData(b);
+    if (x < d.x0 - pad || x > d.x1 + pad || z < d.z0 - pad || z > d.z1 + pad) return false;
+    return pathNearest(b, x, z).d < b.width / 2 + pad;
+  }
   return Math.abs(x - b.x) < b.w / 2 + pad && Math.abs(z - b.z) < b.d / 2 + pad;
 }
 export function resolveHorizontal(body, box) {
@@ -154,6 +215,8 @@ export function stepBody(body, move, boxes, dt, speedScale = 1, ice = false) {
   for (const b of boxes) {
     if (!sloped(b) || !inside(body.x, body.z, b)) continue;
     const rise = surfaceOf(b, body.x, body.z) - oldY;
+    // A road's edge low enough to step onto; a bridge high overhead you walk under.
+    if (b.shape === "path" && (rise <= STEP_UP || (!b.solid && rise > PATH_CLEARANCE))) continue;
     if (rise > 0.55 || rise > Math.max(0.004, moved * 1.2)) {
       const ok = (x, z) => !inside(x, z, b) || surfaceOf(b, x, z) - oldY <= Math.min(0.55, Math.max(0.004, Math.hypot(x - oldX, z - oldZ) * 1.2));
       if (ok(oldX, body.z)) body.x = oldX;
@@ -249,6 +312,31 @@ export function stepCube(c, boxes, dt, grip = 1) {
   let surface = 0,
     support = null;
   for (const b of boxes) {
+    if (b.shape === "path") {
+      if (!inside(c.x, c.z, b, c.size / 2)) continue;
+      const n = pathNearest(b, c.x, c.z),
+        bottom = c.y - c.size / 2;
+      if (bottom >= n.y - 0.45) {
+        // On the road (or rolling up a gentle rise onto it).
+        if (n.d < b.width / 2 && bottom < n.y + 0.25 && n.y >= surface) {
+          surface = n.y;
+          support = b;
+        }
+      } else if (b.solid || n.y - bottom < PATH_CLEARANCE) {
+        // Against the side of an embankment: bounce off it.
+        const push = b.width / 2 + c.size / 2 - n.d;
+        if (push > 0) {
+          c.x += n.nx * push;
+          c.z += n.nz * push;
+          const vn = c.vx * n.nx + c.vz * n.nz;
+          if (vn < 0) {
+            c.vx -= (1 + (c.restitution ?? 0.4)) * vn * n.nx;
+            c.vz -= (1 + (c.restitution ?? 0.4)) * vn * n.nz;
+          }
+        }
+      }
+      continue;
+    }
     if (sloped(b)) {
       if (!inside(c.x, c.z, b)) continue;
       const h = surfaceOf(b, c.x, c.z);

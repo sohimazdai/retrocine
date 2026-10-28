@@ -46,7 +46,7 @@ export function surfaceUnder(boxes, x, z, y) {
 function wallAt(boxes, x, z, y, pad = RADIUS * 0.9) {
   for (const b of boxes) {
     if (!inside(x, z, b, pad) || (b.y || 0) > y + 1.4) continue;
-    const top = sloped(b) ? surfaceOf(b, clamp(x, b.x - b.w / 2, b.x + b.w / 2), clamp(z, b.z - b.d / 2, b.z + b.d / 2)) : b.h;
+    const top = b.shape === "path" ? surfaceOf(b, x, z) : sloped(b) ? surfaceOf(b, clamp(x, b.x - b.w / 2, b.x + b.w / 2), clamp(z, b.z - b.d / 2, b.z + b.d / 2)) : b.h;
     if (top > y + STEP + (sloped(b) ? 0.2 : 0)) return b;
   }
   return null;

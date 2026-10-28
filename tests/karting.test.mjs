@@ -202,3 +202,84 @@ test("a simple driver gets round the whole track and sets a lap time", () => {
   assert(laps[0] > 6 && laps[0] < 14, `lap time ${laps[0]}`);
   assert(stuck < 0.5, "never stuck");
 });
+
+// A driver that follows its own progress round the centreline (so at a crossing it does not jump to
+// the other road), aiming a few metres ahead and braking for sharp bends.
+function autopilot(map, seconds) {
+  const P = map.roadPoints,
+    n = P.length,
+    boxes = obstacles(map, defaultPositions(map)),
+    d = map.dispensers[0],
+    b = { x: 0, z: 0, y: 0, angle: 0 };
+  enterKart(b, d.spawn, "#e4573f");
+  let idx = P.reduce((best, p, i) => (Math.hypot(p[0] - b.x, p[1] - b.z) < Math.hypot(P[best][0] - b.x, P[best][1] - b.z) ? i : best), 0);
+  const log = { laps: [], stuck: 0, crashes: [], maxY: 0, underBridge: false, overBridge: false, offRoad: 0, t: 0 };
+  for (let s = 0; s < seconds / DT; s++) {
+    // Advance the progress index to the nearest point a little ahead.
+    for (let k = 1; k < 6; k++) {
+      const j = (idx + k) % n;
+      if (Math.hypot(P[j][0] - b.x, P[j][1] - b.z) < Math.hypot(P[idx][0] - b.x, P[idx][1] - b.z)) idx = j;
+    }
+    const look = (idx + 5) % n,
+      want = Math.atan2(P[look][0] - b.x, P[look][1] - b.z),
+      diff = Math.atan2(Math.sin(want - b.angle), Math.cos(want - b.angle));
+    // How much the road turns over the next few metres.
+    const ahead = Math.abs(Math.atan2(Math.sin(Math.atan2(P[(idx + 12) % n][0] - P[(idx + 6) % n][0], P[(idx + 12) % n][1] - P[(idx + 6) % n][1]) - Math.atan2(P[(idx + 6) % n][0] - P[idx][0], P[(idx + 6) % n][1] - P[idx][1])), Math.cos(Math.atan2(P[(idx + 12) % n][0] - P[(idx + 6) % n][0], P[(idx + 12) % n][1] - P[(idx + 6) % n][1]) - Math.atan2(P[(idx + 6) % n][0] - P[idx][0], P[(idx + 6) % n][1] - P[idx][1]))));
+    const v = Math.hypot(b.kart.vx, b.kart.vz),
+      limit = ahead > 1.4 ? 3.6 : ahead > 0.8 ? 5.5 : ahead > 0.4 ? 7.5 : 99;
+    const input = { gas: Math.abs(diff) < 0.6 && v < limit ? 1 : 0, brake: v > limit + 1 ? 1 : 0, turn: Math.max(-1, Math.min(1, diff * 3)) };
+    const was = { x: b.x, z: b.z };
+    const ev = stepKart(b, input, { boxes, track: map.track, now: log.t }, DT);
+    log.t += DT;
+    const r = lapStep(b.kart.lap, map.track, was, b, log.t);
+    if (r?.lap) log.laps.push(r.lap);
+    if (v < 0.4 && log.t > 2) log.stuck += DT;
+    for (const e of ev) if (e.t === "wall" && e.speed > 5) log.crashes.push(`${e.speed.toFixed(1)} at ${b.x.toFixed(1)},${b.z.toFixed(1)}`);
+    log.maxY = Math.max(log.maxY, b.y);
+    // Height matches the road where you are on it.
+    if (Math.abs(b.y - P[idx][2]) > 0.6 && b.grounded) log.offRoad += DT;
+  }
+  return { log, b };
+}
+for (const id of ["race-mountain", "race-gp"]) {
+  test(`${id}: a careful driver laps the whole track — up and down, round the hairpins — without getting stuck`, () => {
+    const map = mapDef(id);
+    const { log } = autopilot(map, 50);
+    assert(log.laps.length >= 2, `laps: ${log.laps.map((l) => l.toFixed(1))}`);
+    assert(log.laps[0] > 8 && log.laps[0] < 25, `lap time ${log.laps[0]}`);
+    assert(log.stuck < 0.6, `stuck for ${log.stuck}s`);
+    assert(log.crashes.length === 0, `hard crashes: ${log.crashes}`);
+    assert(log.offRoad < 0.3, `kart height off the road for ${log.offRoad}s`);
+    assert(log.maxY > Math.max(...map.roadPoints.map((p) => p[2])) - 0.25, `reached the top: ${log.maxY}`);
+  });
+}
+
+test("race-gp: under the bridge you drive at ground level; on it you are 2 m up; the bridge's ramp sides are walls", () => {
+  const map = mapDef("race-gp"),
+    boxes = obstacles(map, defaultPositions(map));
+  const bridge = boxes.find((b) => b.shape === "path");
+  // Up the road towards the loop: straight under the bridge at x = 3.6.
+  const under = { x: 0, z: 0, y: 0, angle: 0 };
+  enterKart(under, { x: 3.6, z: 4.6, a: Math.PI }, "#fff");
+  under.kart.vz = -6;
+  let maxY = 0;
+  // (Past the bridge this same road starts climbing into the loop, so only look until then.)
+  run(under, 0.9, GAS, { boxes, track: map.track }, (k) => k.z > 0.6 && (maxY = Math.max(maxY, k.y)));
+  assert(maxY < 0.05, `stayed on the ground under the bridge: ${maxY}`);
+  assert(under.z < 1.2, `drove on through: ${under.z}`);
+  // On the bridge going east above the same spot.
+  const over = { x: 0, z: 0, y: 1.95, angle: 0 };
+  enterKart(over, { x: 2.0, z: 2.4, a: Math.PI / 2 }, "#fff");
+  over.y = 1.95;
+  over.kart.vx = 5;
+  run(over, 0.5, GAS, { boxes, track: map.track });
+  assert(over.y > 1.6 && over.x > 3.6, `stayed up on the bridge: y ${over.y} at x ${over.x}`);
+  // Driving at the side of the climbing ramp from the ground bounces you off.
+  const side = { x: 0, z: 0, y: 0, angle: 0 };
+  enterKart(side, { x: -5.6, z: -0.6, a: Math.PI / 2 }, "#fff");
+  side.kart.vx = 7;
+  const ev = run(side, 1, GAS, { boxes, track: map.track });
+  assert(side.x < -2.4 - 1.7 + 0.3 && side.y < 0.1, `kept out of the ramp: ${side.x}, ${side.y}`);
+  assert(ev.some((e) => e.t === "wall"));
+  assert(bridge.solid === false && bridge.walls === true);
+});

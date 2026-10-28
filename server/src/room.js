@@ -245,6 +245,8 @@ export class Room {
           out.to = msg.to.map((v) => r3(clamp(v, -40, 40)));
           out.w = kind.id;
           out.pw = Number.isFinite(msg.pw) ? Math.round(clamp(msg.pw, 1, 1.6) * 100) / 100 : 1;
+          // The thrower's own velocity, carried into the shot.
+          if (Array.isArray(msg.vel) && msg.vel.length === 2 && msg.vel.every(Number.isFinite)) out.vel = msg.vel.map((v) => r3(clamp(v, -12, 12)));
           if (typeof msg.pid === "string") {
             out.pid = msg.pid.slice(0, 24);
             if (kind.explosion) {

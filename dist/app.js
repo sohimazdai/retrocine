@@ -1149,9 +1149,10 @@ function throwSnow(hit, power = 1) {
     to.set(p.x, p.y + 1.05, p.z);
   }
   const pid = projectileId();
-  if (startAction(active, "throw", worldTime, { to, w: kind.id, pw: power, pid })) {
+  const vel = [r3(active.velocityX || 0), r3(active.velocityZ || 0)];
+  if (startAction(active, "throw", worldTime, { to, w: kind.id, pw: power, pid, vel })) {
     cooldownUntil[kind.id] = now + kind.cooldown * 1000;
-    net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid });
+    net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid, vel });
     renderCooldowns();
   }
 }
@@ -1167,6 +1168,9 @@ function releaseSnow(player, payload) {
   from.addScaledVector(direction, 0.5);
   const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1),
     v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g);
+  // Throwing on the move carries the avatar's own momentum into the shot.
+  v.x += payload.vel?.[0] ?? player.velocityX ?? 0;
+  v.z += payload.vel?.[1] ?? player.velocityZ ?? 0;
   const mesh = projectileMesh(kind);
   mesh.position.copy(from);
   scene.add(mesh);

@@ -955,7 +955,7 @@ test("Settings → Хитбоксы shows colliders, avatars, balls and blasts; 
 test("every map builds in the browser; switching maps puts you at the new map's entrance", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
-  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "cinema"]) {
+  for (const id of ["maze", "playground", "river", "paintball", "saloon", "skatepark", "ropepark", "rink", "cinema"]) {
     a.run(`op({ t: "map.set", id: "${id}" })`);
     a.tick(0.3);
     assert.equal(a.run("mapScene.map.id"), id);
@@ -1083,4 +1083,31 @@ test("rope park: hold W into a tree to climb up through the hatch; E rides the z
   assert.equal(a.run("active.climb"), null);
   assert(a.run("active.grounded"));
   assert(a.run("trolleys.size") === 0);
+});
+
+test("winter rink: you skate and glide on the ice, ride a sled down the hill, shoot the puck with E", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "rink" })');
+  a.tick(0.2);
+  // Skating: a push, then letting go — you keep gliding, in a skating pose.
+  a.run("Object.assign(active, { x: -5, z: 2.5, y: 0, vy: 0, grounded: true, ivx: 0, ivz: 0 }); keys.add('right')");
+  a.tick(1);
+  a.run("keys.clear()");
+  const let_go = a.run("active.x");
+  a.tick(0.6);
+  assert(a.run("active.x") - let_go > 1.2, "glides on after letting go");
+  assert(a.run("skating(active)"));
+  // Sledding: on the run a sled appears under you and others are told.
+  a.run("const r = mapScene.map.statics.find((s) => s.kind === 'sled-run'); Object.assign(active, { x: r.x, z: r.z - r.d / 2 + 0.5, y: r.h0, vy: 0, grounded: true, kx: 0, kz: 0 })");
+  a.tick(0.3);
+  assert(a.run("sledding(active)"));
+  assert.equal(a.run("sleds.size"), 1);
+  assert.equal(a.run("currentPose().sd"), 1);
+  assert(Math.abs(a.run("active.angle")) < 0.3, "facing down the slope");
+  a.tick(3);
+  assert.equal(a.run("sleds.size"), 0, "the sled is gone at the bottom");
+  // E next to the puck strikes it along the ice.
+  a.run("const k = world.balls.find((b) => b.kind === 'puck'); Object.assign(k, { x: 0, z: 0, vx: 0, vz: 0, vy: 0 }); Object.assign(active, { x: 0.9, z: 0, y: 0, vy: 0, grounded: true, ivx: 0, ivz: 0 }); kickNearest()");
+  a.tick(1.2);
+  assert(a.run("world.balls.find((b) => b.kind === 'puck').x") < -3, "the puck slid away across the ice");
 });

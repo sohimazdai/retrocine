@@ -118,6 +118,8 @@ export function animateRig(rig, state, dt) {
   }
   if (state.ride) applyRide(rig, state.ride, t, dt);
   if (state.climb) applyClimb(rig, state.climb, t);
+  if (state.sled) applySled(rig, t);
+  else if (state.skate > 0.05 && state.grounded !== false) applySkate(rig, state.skate, motion.phase);
   const action = state.action;
   if (action) {
     const age = t - action.started,
@@ -255,6 +257,33 @@ function applyRide(rig, ride, t, dt) {
   if (ride.grind) rig.model.rotation.z += Math.sin(t * 20) * 0.03;
 }
 
+// Sitting on a sled: legs out in front, hands on the rope.
+function applySled(rig, t) {
+  rig.model.position.set(0, -0.36, -0.12);
+  rig.model.rotation.set(-0.12, 0, Math.sin(t * 9) * 0.015);
+  rig.torso.rotation.x = -0.1;
+  for (let i = 0; i < 2; i++) {
+    rig.legs[i].rotation.set(-1.45, 0, (i ? -1 : 1) * 0.1);
+    rig.knees[i].rotation.x = 0.35;
+    rig.feet[i].rotation.x = -0.3;
+    rig.arms[i].rotation.set(-0.9, 0, (i ? -1 : 1) * 0.25);
+    rig.elbows[i].rotation.x = -0.5;
+  }
+}
+// Skating: long sideways pushes, a forward lean, arms swinging across.
+function applySkate(rig, k, phase) {
+  rig.model.rotation.x += 0.12 * k;
+  rig.torso.rotation.x += 0.18 * k;
+  for (let i = 0; i < 2; i++) {
+    const s = i ? 1 : -1,
+      push = Math.max(0, Math.sin(phase * 0.6 + i * Math.PI));
+    rig.legs[i].rotation.x *= 0.35;
+    rig.legs[i].rotation.z = s * (0.06 + push * 0.42 * k);
+    rig.knees[i].rotation.x = 0.35 + (1 - push) * 0.3 * k;
+    rig.arms[i].rotation.x = Math.sin(phase * 0.6 + i * Math.PI) * 0.55 * k;
+    rig.arms[i].rotation.z = s * -0.25 * k;
+  }
+}
 // Hands over hands up a rope, a trunk or a wall; hanging from a zip line's handle.
 function applyClimb(rig, climb, t) {
   rig.model.position.set(0, 0, 0);

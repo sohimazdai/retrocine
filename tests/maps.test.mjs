@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { MAPS, mapDef } from "../dist/maps/index.js";
 import { MAZE, carve } from "../dist/maps/maze.js";
 import { mapProps, clampProp, obstacles, defaultPositions, spawnPoint, waterAt, goalsOf, hoopsOf, seesawCollider, propColliders, propInfo } from "../dist/world.js";
-import { createState, stepWorld, applyOp, dynamicObjects } from "../dist/state.js";
+import { createState, stepWorld, applyOp, dynamicObjects, packObject, unpackObject, serializeState } from "../dist/state.js";
 import { inside, stepBody, surfaceOf, LIMITS, RADIUS } from "../dist/physics.js";
 import { floorBack } from "../dist/layout.js";
 
@@ -197,4 +197,98 @@ test("paintball: inflatables bounce you a little and calm down; one person shift
   assert(p.grounded && Math.abs(p.y - 1.0) < 0.01);
   assert.equal(propInfo(map, "dorito-a").weight, 1);
   assert.equal(propInfo(map, "hay-a").weight, 2);
+});
+
+test("rink: on ice you build up speed and glide on; on snow you stop at once", () => {
+  const rink = mapDef("rink");
+  const boxes = obstacles(rink, defaultPositions(rink));
+  const run = (ice) => {
+    const p = { x: -4, z: 2.5, y: 0, vy: 0, grounded: true };
+    let early = null;
+    for (let i = 0; i < 120 * 1.2; i++) {
+      stepBody(p, { x: 1, z: 0 }, boxes, 1 / 120, 1, ice);
+      if (i === 24) early = p.x;
+    }
+    const pressed = p.x;
+    for (let i = 0; i < 120; i++) stepBody(p, { x: 0, z: 0 }, boxes, 1 / 120, 1, ice);
+    return { early: early + 4, glide: p.x - pressed };
+  };
+  const ice = run(true),
+    snow = run(false);
+  assert(ice.early < snow.early * 0.6, `slow start on ice: ${ice.early} vs ${snow.early}`);
+  assert(ice.glide > 2.5, `glides ${ice.glide} m after letting go`);
+  assert(snow.glide < 0.05, `stops on snow, ${snow.glide}`);
+  // The boards stop you; you can't skate through them.
+  const p = { x: 6.5, z: 2.5, y: 0, vy: 0, grounded: true };
+  for (let i = 0; i < 240; i++) stepBody(p, { x: 1, z: 0 }, boxes, 1 / 120, 1, true);
+  assert(p.x < 8 - 0.2, `stopped by the boards at ${p.x}`);
+});
+
+test("rink: a struck puck slides across the ice into the net; it is a goal, and the puck comes back to the centre", () => {
+  const s = createState({ map: "rink" }, newId);
+  const puck = s.balls.find((b) => b.kind === "puck");
+  assert(puck.y < 0.25, "the puck lies flat");
+  applyOp(s, { t: "obj.kick", id: "puck", x: 1.0, z: 0.05, a: 0, power: 7 }, { uid: "u", peer: "p", name: "n", now: 0, newId });
+  assert(puck.vy < 1, "struck along the ice, not into the air");
+  const events = [];
+  for (let i = 0; i < 120 * 4; i++) events.push(...stepWorld(s, 1 / 120));
+  const goal = events.find((e) => e.t === "goal");
+  assert(goal, "scored: " + JSON.stringify({ x: puck.x, z: puck.z }));
+  assert.equal(goal.goal, "net-left");
+  applyOp(s, { t: "ball.reset" }, { uid: "u", peer: "p", name: "n", now: 0, newId });
+  assert(Math.hypot(puck.x, puck.z) < 0.01);
+  // On snow the same strike barely gets anywhere.
+  Object.assign(puck, { x: 0, z: 7.5, vx: 7, vz: 0, vy: 0 });
+  for (let i = 0; i < 240; i++) stepWorld(s, 1 / 120);
+  assert(puck.x < 4, `on snow the puck stopped at ${puck.x}`);
+});
+
+test("rink: snowballs grow as you roll them over snow, not on ice; size travels with the object and resets", () => {
+  const s = createState({ map: "rink" }, newId);
+  const ball = s.balls.find((b) => b.id === "snow-1");
+  const start = ball.size;
+  for (let k = 0; k < 8; k++) {
+    ball.vx = 3;
+    for (let i = 0; i < 60; i++) stepWorld(s, 1 / 120);
+  }
+  assert(ball.size > start + 0.15, `grew from ${start} to ${ball.size}`);
+  assert(Math.abs(ball.y - ball.size / 2) < 0.03, "still resting on the snow");
+  const packed = packObject(ball);
+  assert.equal(unpackObject(packed).size, Math.round(ball.size * 1000) / 1000);
+  assert.equal(packObject(s.balls.find((b) => b.kind === "puck")).length, 9, "others keep the short form");
+  const saved = createState(JSON.parse(JSON.stringify(serializeState(s))), newId);
+  assert(Math.abs(saved.balls.find((b) => b.id === "snow-1").size - ball.size) < 1e-9, "size survives a restart");
+  // Rolled on the ice it stays the same.
+  Object.assign(ball, { x: 0, z: 3, y: ball.size / 2 });
+  const before = ball.size;
+  ball.vx = 3;
+  for (let i = 0; i < 120; i++) stepWorld(s, 1 / 120);
+  assert.equal(ball.size, before);
+  applyOp(s, { t: "ball.reset", id: "snow-1" }, { uid: "u", peer: "p", name: "n", now: 0, newId });
+  assert.equal(ball.size, start);
+});
+
+test("rink: you slide down the hill on a sled and roll out at the bottom", () => {
+  const rink = mapDef("rink");
+  const boxes = obstacles(rink, defaultPositions(rink));
+  const run = rink.statics.find((x) => x.kind === "sled-run");
+  const p = { x: run.x, z: run.z - run.d / 2 + 0.4, y: run.h0, vy: 0, grounded: true };
+  let max = 0,
+    t = 0;
+  while (p.z < run.z + run.d / 2 && t < 6) {
+    stepBody(p, { x: 0, z: 0 }, boxes, 1 / 120);
+    max = Math.max(max, Math.hypot(p.kx || 0, p.kz || 0));
+    t += 1 / 120;
+    if (p.z < run.z + run.d / 2 - 0.3) assert(p.support?.slide, "on the run all the way down");
+  }
+  assert(t < 4, `reached the bottom in ${t.toFixed(1)} s`);
+  assert(max > 5, `top speed ${max.toFixed(1)} m/s`);
+  // And the steps take you back up.
+  const steps = rink.statics.find((x) => x.kind === "snow-steps");
+  const q = { x: steps.x - steps.w / 2 - 0.5, z: steps.z, y: 0, vy: 0, grounded: true };
+  for (let i = 0; i < 120 * 1.1; i++) stepBody(q, { x: 1, z: 0 }, boxes, 1 / 120);
+  assert(q.y > 2.3, `climbed the steps to ${q.y}`);
+  // The top reaches the edge of the room: walking on, you stay up there.
+  for (let i = 0; i < 120 * 1.5; i++) stepBody(q, { x: 1, z: 0 }, boxes, 1 / 120);
+  assert(q.y > 2.3 && q.grounded, `still on top at ${q.x.toFixed(2)}, ${q.y}`);
 });

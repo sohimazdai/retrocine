@@ -37,7 +37,7 @@ import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG } from "./cl
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, hoopsOf } from "./world.js";
+import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, iceAt, hoopsOf } from "./world.js";
 import {
   PROJECTILES,
   projectile,
@@ -285,6 +285,57 @@ function slopePitch(p) {
   const d = gradient(g.support, p.x, p.z);
   return Math.atan(d.x * Math.sin(p.angle) + d.z * Math.cos(p.angle));
 }
+// Sleds under whoever rides down a snow slope (yours from the physics, others' from their pose).
+const sleds = new Map();
+const sledding = (p) => (p.remote ? !!p.flags?.sd : !!(p.grounded && p.support?.slide && !p.ride && !p.climb));
+const skating = (p) => !p.ride && !p.climb && p.y < 0.2 && !!iceAt(mapScene.map, p.x, p.z);
+function buildSled() {
+  const g = new T.Group();
+  const wood = material("#c0392b", 0.5),
+    metal = material("#d9dde3", 0.25);
+  for (let i = 0; i < 4; i++) {
+    const slat = new T.Mesh(new T.BoxGeometry(0.62, 0.04, 0.16), wood);
+    slat.position.set(0, 0.2, -0.36 + i * 0.22);
+    g.add(slat);
+  }
+  for (const x of [-0.27, 0.27]) {
+    const runner = new T.Mesh(new T.BoxGeometry(0.04, 0.05, 1.05), metal);
+    runner.position.set(x, 0.03, 0);
+    g.add(runner);
+    const tip = new T.Mesh(new T.TorusGeometry(0.1, 0.02, 6, 12, Math.PI), metal);
+    tip.rotation.y = Math.PI / 2;
+    tip.position.set(x, 0.13, 0.52);
+    g.add(tip);
+    for (const z of [-0.3, 0.3]) {
+      const leg = new T.Mesh(new T.BoxGeometry(0.04, 0.16, 0.04), metal);
+      leg.position.set(x, 0.11, z);
+      g.add(leg);
+    }
+  }
+  return g;
+}
+function updateSleds() {
+  const on = new Set();
+  for (const p of players) {
+    if (!sledding(p)) continue;
+    on.add(p);
+    let g = sleds.get(p);
+    if (!g) {
+      g = buildSled();
+      g.rotation.order = "YXZ";
+      scene.add(g);
+      sleds.set(p, g);
+    }
+    g.position.set(p.x, p.y, p.z);
+    g.rotation.y = p.angle;
+    g.rotation.x = -slopePitch(p);
+  }
+  for (const [p, g] of sleds)
+    if (!on.has(p)) {
+      scene.remove(g);
+      sleds.delete(p);
+    }
+}
 // Zip line handles above whoever hangs from one.
 const trolleys = new Map();
 function updateTrolleys() {
@@ -320,6 +371,7 @@ function updateTrolleys() {
 }
 function updateRides(dt) {
   updateTrolleys();
+  updateSleds();
   for (const r of world.rides || []) {
     const g = rideMeshes.get(r.id);
     if (!g) continue;
@@ -2085,7 +2137,9 @@ function physics(dt) {
         p.z += (water.flow?.z || 0) * (water.drift ?? 0.5) * dt;
         if ((move.x || move.z) && Math.random() < dt * 9) effects.puff(new T.Vector3(p.x, 0.15, p.z), "#d9f0ff", 3, 1.6, 0.03);
       }
-      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1));
+      // Ice: you skate — speed builds up, and you glide on when you let go.
+      const ice = p.y < 0.2 && !!iceAt(mapScene.map, p.x, p.z);
+      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1), ice);
       p.velocityX = (p.x - oldX) / dt;
       p.velocityZ = (p.z - oldZ) / dt;
       if (!wasGrounded && p.grounded) p.land = 0.2;
@@ -2236,7 +2290,13 @@ function visual(dt) {
   for (const p of players) if (p.remote) updateRemote(p, dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
-    if (!p.remote && !p.ride && !p.climb) {
+    if (!p.remote && sledding(p)) {
+      // On a sled you face down the slope.
+      const d = gradient(p.support, p.x, p.z),
+        desired = Math.atan2(-d.x, -d.z),
+        delta = Math.atan2(Math.sin(desired - p.angle), Math.cos(desired - p.angle));
+      p.angle += delta * (1 - Math.exp(-12 * dt));
+    } else if (!p.remote && !p.ride && !p.climb) {
       // You face your cursor; others face where their owners look (sent with their pose).
       const desired = Math.atan2(pointerWorld.x - p.x, pointerWorld.z - p.z),
         delta = Math.atan2(
@@ -2250,7 +2310,7 @@ function visual(dt) {
     // Riders lean with the slope they roll on.
     const riding = p.ride || (p.remote && p.flags?.rd);
     p.root.rotation.order = "YXZ";
-    p.root.rotation.x = riding ? -(p.ride ? p.ride.pitch : p.pitch || 0) : 0;
+    p.root.rotation.x = riding ? -(p.ride ? p.ride.pitch : p.pitch || 0) : sledding(p) ? -slopePitch(p) : 0;
     const vx = p.velocityX || 0,
       vz = p.velocityZ || 0,
       speed = Math.hypot(vx, vz);
@@ -2271,6 +2331,8 @@ function visual(dt) {
         hit: p.hit,
         pushing: p === active ? pushState : p.flags?.ps || 0,
         ride: riding ? rideState(p) : null,
+        sled: sledding(p),
+        skate: skating(p) ? Math.min(1, speed / 5) : 0,
         climb: p.climb ? { zip: p.climb.c.kind === "zip", phase: p.y * 5 + (p.climb.around || 0) * 2 + p.x + p.z } : p.remote && (p.flags?.cl || p.flags?.zp) ? { zip: !!p.flags.zp, phase: p.y * 5 + p.x + p.z } : null,
         charge: p === active ? chargeLevel() : p.flags?.c || 0,
         seed: p.x * 0.13,
@@ -2527,6 +2589,7 @@ function currentPose() {
   if (pushState) pose.ps = pushState;
   if (charge) pose.c = Math.round(chargeLevel() * 10) / 10;
   if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
+  if (sledding(active)) pose.sd = 1;
   if (active.ride) {
     pose.rd = active.ride.id;
     if (active.ride.flip >= 0) pose.fl = Math.round(active.ride.flip * 100) / 100;
@@ -2693,7 +2756,7 @@ function onServer(m, at) {
       const p = remotes.get(m.id);
       if (!p) break;
       p.buffer.push(m, m.s, clockNow());
-      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0 };
+      p.flags = { ps: m.ps || 0, c: m.c || 0, rd: m.rd || null, fl: m.fl ?? -1, gr: m.gr || 0, cl: m.cl || 0, zp: m.zp || 0, sd: m.sd || 0 };
       break;
     }
     case "profile":

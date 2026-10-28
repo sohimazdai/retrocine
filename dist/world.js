@@ -15,9 +15,13 @@ export const PUSH_SPEED = 1.9;
 
 // Loose physical objects other than cubes.
 export const BALLS = {
-  football: { size: 0.84, restitution: 0.64, friction: 1.15, label: "Футбольный мяч" },
+  // goal: scores in goals; main: the one a goal's "ball back" button returns.
+  football: { size: 0.84, restitution: 0.64, friction: 1.15, label: "Футбольный мяч", goal: true, main: true },
   basketball: { size: 0.74, restitution: 0.8, friction: 0.9, label: "Баскетбольный мяч" },
-  playball: { size: 0.6, restitution: 0.78, friction: 1, label: "Мяч" },
+  playball: { size: 0.6, restitution: 0.78, friction: 1, label: "Мяч", goal: true },
+  puck: { size: 0.42, restitution: 0.45, friction: 3.5, label: "Шайба", goal: true, main: true, slides: true },
+  // Rolled across snow it picks up snow and grows.
+  snowroll: { size: 0.5, restitution: 0.05, friction: 4.2, label: "Снежный ком", grows: { max: 1.7, rate: 0.055 } },
   stone: { size: 0.5, restitution: 0.15, friction: 5, label: "Камень" },
   boulder: { size: 0.95, restitution: 0.08, friction: 6, label: "Валун" },
   pebble: { size: 0.3, restitution: 0.2, friction: 4.5, label: "Камешек" },
@@ -117,6 +121,7 @@ export function makeBall(def) {
     size,
     restitution: kind.restitution,
     friction: kind.friction,
+    flat: !!kind.slides,
     color: def.color,
     vx: 0,
     vy: 0,
@@ -146,10 +151,13 @@ export const toWorld = (rot, lx, lz) => ({
 export function goalsOf(map, positions) {
   return mapProps(map)
     .filter((p) => p.goal)
-    .map((p) => ({ id: p.id, label: p.label, rot: p.rot || 0, ...(positions?.[p.id] || p), spot: p.ballSpot || { x: 0, z: 4.3 } }));
+    .map((p) => ({ id: p.id, label: p.label, rot: p.rot || 0, ...(positions?.[p.id] || p), spot: p.ballSpot || { x: 0, z: 4.3 }, mouth: p.mouth || FOOTBALL_MOUTH }));
 }
+// Inner width and height of a goal's mouth (football goals; hockey nets are smaller).
+export const FOOTBALL_MOUTH = { w: 4.05, h: 2.4 };
 // Crossing the goal line inside the mouth counts once until the ball leaves the goal area.
 export function checkGoal(ball, previous, goal, flags) {
+  const mouth = goal.mouth || FOOTBALL_MOUTH;
   const now = toLocal(goal.rot, ball.x - goal.x, ball.z - goal.z),
     before = toLocal(goal.rot, previous.x - goal.x, previous.z - goal.z);
   const line = -0.15,
@@ -158,7 +166,7 @@ export function checkGoal(ball, previous, goal, flags) {
     const t = (before.z - line) / (before.z - now.z);
     const x = before.x + (now.x - before.x) * t;
     const y = previous.y + (ball.y - previous.y) * t;
-    if (Math.abs(x) < 2.025 - ball.size / 2 && y + ball.size / 2 < 2.4) {
+    if (Math.abs(x) < mouth.w / 2 - ball.size / 2 && y + ball.size / 2 < mouth.h) {
       flags[key] = true;
       return true;
     }
@@ -168,7 +176,7 @@ export function checkGoal(ball, previous, goal, flags) {
 }
 export function ballResetPosition(map, positions, ball) {
   const def = (map.balls || []).find((b) => b.id === ball.id);
-  const goal = ball.kind === "football" && !def?.home && goalsOf(map, positions)[0];
+  const goal = BALLS[ball.kind]?.main && !def?.home && goalsOf(map, positions)[0];
   let x = def?.x ?? 0,
     z = def?.z ?? 4;
   if (goal) {
@@ -176,7 +184,9 @@ export function ballResetPosition(map, positions, ball) {
     x = goal.x + o.x;
     z = goal.z + o.z;
   }
-  return { x, z, y: ball.size / 2, vx: 0, vy: 0, vz: 0, spin: 0 };
+  // A grown snowball goes back as a small one.
+  const size = BALLS[ball.kind]?.grows ? BALLS[ball.kind].size : ball.size;
+  return { x, z, y: size / 2, size, vx: 0, vy: 0, vz: 0, spin: 0 };
 }
 // Basketball hoops: props with hoop: { x, z, y, r } in local coordinates.
 export function hoopsOf(map, positions) {
@@ -206,6 +216,7 @@ export function checkHoop(ball, previous, hoop, flags) {
 export const zonesOf = (map) => map.zones || [];
 export const inZone = (zone, x, z) => x >= zone.x0 && x <= zone.x1 && z >= zone.z0 && z <= zone.z1;
 // Water an avatar stands in (river): slows you down and carries you with the flow.
+export const iceAt = (map, x, z) => zonesOf(map).find((zone) => zone.kind === "ice" && inZone(zone, x, z)) || null;
 export const waterAt = (map, x, z) => zonesOf(map).find((zone) => zone.kind === "water" && inZone(zone, x, z)) || null;
 // Where newcomers appear: a random free spot in one of the map's spawn areas.
 export function spawnPoint(map, random = Math.random, positions) {

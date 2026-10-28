@@ -2,7 +2,7 @@
 // room switches maps. Physics data (colliders, positions) comes from world.js, shared with the server.
 import * as T from "three";
 import { buildProp, buildBall, disposeOwned } from "./props.js";
-import { mapProps, obstacles, toWorld } from "./world.js";
+import { mapProps, obstacles, toWorld, BALLS } from "./world.js";
 
 const DECOR = new Map();
 // A map's renderer registers how its scenery looks: fn(group, map, ctx) → optional { update(dt, t) }.
@@ -104,6 +104,20 @@ function floorTexture(kind) {
         for (let i = 0; i < 2000; i++) {
           c.fillStyle = ["#7a9a50", "#5d7d3c", "#86a85a", "#6b8a45"][i % 4];
           c.fillRect(rnd() * 256, rnd() * 256, 1.5, 3 + rnd() * 3);
+        }
+      },
+      snow() {
+        c.fillStyle = "#e9eff7";
+        c.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 40; i++) {
+          c.fillStyle = ["#dde6f2", "#f4f7fb", "#d3dded"][i % 3] + "aa";
+          c.beginPath();
+          c.ellipse(rnd() * 256, rnd() * 256, 10 + rnd() * 30, 6 + rnd() * 18, rnd() * 3, 0, Math.PI * 2);
+          c.fill();
+        }
+        for (let i = 0; i < 1400; i++) {
+          c.fillStyle = ["#ffffff", "#cfdbec", "#e2eaf5", "#b9c9e0"][i % 4];
+          c.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
         }
       },
       gravel() {
@@ -212,7 +226,7 @@ export class MapScene {
         if (o.isMesh) o.castShadow = true;
       });
       this.root.add(mesh);
-      this.ballMeshes.set(b.id, { mesh, ball: b });
+      this.ballMeshes.set(b.id, { mesh, ball: b, base: b.size, slides: !!BALLS[b.kind]?.slides });
       this.pickables.push(mesh);
     }
   }
@@ -258,10 +272,14 @@ export class MapScene {
     });
   }
   update(dt, t) {
-    for (const { mesh, ball } of this.ballMeshes.values()) {
+    for (const { mesh, ball, base, slides } of this.ballMeshes.values()) {
       mesh.position.set(ball.x + (ball.ox || 0), ball.y + (ball.oy || 0), ball.z + (ball.oz || 0));
+      // Snowballs grow as they roll.
+      if (ball.size !== base) mesh.scale.setScalar(ball.size / base);
       const speed = Math.hypot(ball.vx, ball.vz);
-      if (speed > 0.001) mesh.rotateOnWorldAxis(new T.Vector3(ball.vz, 0, -ball.vx).normalize(), (speed * dt) / (ball.size / 2));
+      // A puck slides and spins flat; balls roll.
+      if (slides) mesh.rotation.y += (ball.spin || speed * 0.8) * dt;
+      else if (speed > 0.001) mesh.rotateOnWorldAxis(new T.Vector3(ball.vz, 0, -ball.vx).normalize(), (speed * dt) / (ball.size / 2));
     }
     this.decor?.update?.(dt, t);
     // Props that move on their own (fountain water, seesaw plank) update their meshes here.

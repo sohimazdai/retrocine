@@ -29,6 +29,7 @@ import {
   checkHoop,
   zonesOf,
   inZone,
+  BALLS,
 } from "./world.js";
 import { MAPS } from "./maps/index.js";
 import { projectile } from "./projectiles.js";
@@ -50,7 +51,10 @@ export function createState(saved = {}, newId) {
   if (sameMap)
     for (const b of balls) {
       const p = (saved.balls || []).find((x) => x.id === b.id) || (b.id === "football" ? saved.ball : null);
-      if (p && finite(p.x) && finite(p.z)) Object.assign(b, { x: p.x, z: p.z, y: Math.max(b.size / 2, num(p.y, 0, 20, b.size / 2)) });
+      if (p && finite(p.x) && finite(p.z)) {
+        if (BALLS[b.kind]?.grows && finite(p.size)) b.size = clamp(p.size, BALLS[b.kind].size, BALLS[b.kind].grows.max);
+        Object.assign(b, { x: p.x, z: p.z, y: Math.max(b.size / 2, num(p.y, 0, 20, b.size / 2)) });
+      }
     }
   const cubes = sameMap && saved.cubes ? saved.cubes : defaultCubes(map, newId);
   const rides = defaultRides(map);
@@ -107,7 +111,7 @@ export function serializeState(s) {
     map: s.map,
     notes: s.notes,
     cubes: s.cubes.map(({ id, x, y, z, color, size }) => ({ id, x, y, z, color, size })),
-    balls: s.balls.map(({ id, kind, x, y, z }) => ({ id, kind, x, y, z })),
+    balls: s.balls.map(({ id, kind, x, y, z, size }) => (BALLS[kind]?.grows ? { id, kind, x, y, z, size } : { id, kind, x, y, z })),
     rides: (s.rides || []).map(({ id, kind, x, z, a, by }) => ({ id, kind, x, z, a, by })),
     structures: s.structures,
     scores: s.scores,
@@ -141,12 +145,17 @@ export function dynamicObjects(s) {
 export function findObject(s, id) {
   return s.balls.find((b) => b.id === id) || s.cubes.find((c) => c.id === id);
 }
+// Growing snowballs also send their size.
 export function packObject(o) {
   const r = (v) => Math.round(v * 1000) / 1000;
-  return [o.id, r(o.x), r(o.y), r(o.z), r(o.vx), r(o.vy), r(o.vz), r(o.spin || 0), r(o.rotation || 0)];
+  const packed = [o.id, r(o.x), r(o.y), r(o.z), r(o.vx), r(o.vy), r(o.vz), r(o.spin || 0), r(o.rotation || 0)];
+  if (BALLS[o.kind]?.grows) packed.push(r(o.size));
+  return packed;
 }
-export function unpackObject([id, x, y, z, vx, vy, vz, spin, rotation]) {
-  return { id, x, y, z, vx, vy, vz, spin, rotation };
+export function unpackObject([id, x, y, z, vx, vy, vz, spin, rotation, size]) {
+  const o = { id, x, y, z, vx, vy, vz, spin, rotation };
+  if (finite(size)) o.size = size;
+  return o;
 }
 export function timerLeft(timer, now) {
   return timer.running ? Math.max(0, Math.ceil((timer.endAt - now) / 1000)) : timer.remaining;
@@ -174,8 +183,10 @@ export function stepWorld(s, dt, skip = () => false) {
   const previous = s.balls.map((b) => ({ x: b.x, y: b.y, z: b.z }));
   for (const o of objects) {
     if (skip(o)) continue;
+    let grip = 1;
     for (const zone of zones) {
       if (!inZone(zone, o.x, o.z)) continue;
+      if (zone.grip != null) grip = zone.grip;
       if (zone.flow && o.y < (zone.depth ?? 0.6) + o.size / 2) {
         const k = 1 - Math.exp(-(zone.drag ?? 1.5) * dt);
         o.vx += ((zone.flow.x || 0) - o.vx) * k;
@@ -188,7 +199,17 @@ export function stepWorld(s, dt, skip = () => false) {
         else if (o.vz < 0 && next < floorBack(o.x) + o.size / 2 + 0.05) o.z = LIMITS.z - o.size / 2 - 0.3;
       }
     }
-    stepCube(o, obs, dt);
+    stepCube(o, obs, dt, grip);
+    // A snowball rolled over snow (not ice) picks it up and grows, slower as it gets big.
+    const grows = BALLS[o.kind]?.grows;
+    if (grows && grip === 1 && o.y <= o.size / 2 + 0.02 && o.size < grows.max) {
+      const speed = Math.hypot(o.vx, o.vz);
+      if (speed > 0.4) {
+        const before = o.size;
+        o.size = Math.min(grows.max, o.size + (speed * dt * grows.rate) / o.size);
+        o.y += (o.size - before) / 2;
+      }
+    }
   }
   for (let i = 0; i < objects.length; i++)
     for (let j = i + 1; j < objects.length; j++) collideCubes(objects[i], objects[j]);
@@ -196,7 +217,7 @@ export function stepWorld(s, dt, skip = () => false) {
     hoops = hoopsOf(map, s.structures);
   s.balls.forEach((ball, i) => {
     if (skip(ball)) return;
-    if (ball.kind === "football" || ball.kind === "playball")
+    if (BALLS[ball.kind]?.goal)
       for (const goal of goals)
         if (checkGoal(ball, previous[i], goal, s.flags)) {
           s.scores[goal.id] = (s.scores[goal.id] || 0) + 1;
@@ -356,7 +377,7 @@ export function applyOp(s, op, ctx) {
     }
     case "ball.reset": {
       const map = stateMap(s);
-      const list = op.id ? s.balls.filter((b) => b.id === op.id) : s.balls.filter((b) => b.kind === "football");
+      const list = op.id ? s.balls.filter((b) => b.id === op.id) : s.balls.filter((b) => BALLS[b.kind]?.main);
       if (!list.length) return null;
       for (const b of list) Object.assign(b, ballResetPosition(map, s.structures, b), { dragBy: null });
       s.flags = {};

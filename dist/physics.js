@@ -89,24 +89,34 @@ export function resolveHorizontal(body, box) {
 }
 // speedScale > 1 is a sprint (Shift). kx/kz is knockback from hits and explosions: it carries the
 // body on its own and fades, quickly on the ground and slowly in the air.
-export const STEP_UP = 0.35;
-export function stepBody(body, move, boxes, dt, speedScale = 1) {
+// ice: skating — you speed up and slow down gradually and glide on; ivx/ivz carry the momentum.
+export const STEP_UP = 0.35,
+  ICE = { accel: 5.2, glide: 1.3, top: 1.25 };
+export function stepBody(body, move, boxes, dt, speedScale = 1, ice = false) {
   let oldY = body.y;
   const oldX = body.x,
     oldZ = body.z;
   const len = Math.hypot(move.x, move.z) || 1;
-  const kx = body.kx || 0,
+  let kx = body.kx || 0,
     kz = body.kz || 0;
-  body.x = clamp(
-    body.x + (move.x / Math.max(1, len)) * SPEED * speedScale * dt + kx * dt,
-    -LIMITS.x,
-    LIMITS.x,
-  );
-  body.z = clamp(
-    body.z + (move.z / Math.max(1, len)) * SPEED * speedScale * dt + kz * dt,
-    floorBack(body.x) + RADIUS,
-    LIMITS.z,
-  );
+  let vx = (move.x / Math.max(1, len)) * SPEED * speedScale,
+    vz = (move.z / Math.max(1, len)) * SPEED * speedScale;
+  if (ice) {
+    // Knocks join the glide; you steer by pushing, not by stopping dead.
+    let ivx = (body.ivx || 0) + kx,
+      ivz = (body.ivz || 0) + kz;
+    kx = kz = body.kx = body.kz = 0;
+    const tx = vx * ICE.top,
+      tz = vz * ICE.top,
+      dvx = (move.x || move.z ? tx : 0) - ivx,
+      dvz = (move.x || move.z ? tz : 0) - ivz,
+      dl = Math.hypot(dvx, dvz),
+      k = dl > 0 ? Math.min(1, ((move.x || move.z ? ICE.accel : ICE.glide) * dt) / dl) : 0;
+    vx = ivx + dvx * k;
+    vz = ivz + dvz * k;
+  }
+  body.x = clamp(body.x + vx * dt + kx * dt, -LIMITS.x, LIMITS.x);
+  body.z = clamp(body.z + vz * dt + kz * dt, floorBack(body.x) + RADIUS, LIMITS.z);
   if (kx || kz) {
     const fade = Math.exp(-(body.grounded ? 6 : 1.1) * dt);
     body.kx = kx * fade;
@@ -196,6 +206,9 @@ export function stepBody(body, move, boxes, dt, speedScale = 1) {
     }
   }
   body.support = support;
+  // What you actually moved by (after walls and boards) is the momentum you carry onto the ice.
+  body.ivx = (body.x - oldX) / dt;
+  body.ivz = (body.z - oldZ) / dt;
   return body;
 }
 export function kickCube(cube, from, power = 6) {
@@ -209,10 +222,12 @@ export function kickCube(cube, from, power = 6) {
   }
   cube.vx += (dx / len) * power;
   cube.vz += (dz / len) * power;
-  cube.vy = Math.max(cube.vy, 2.7);
+  // A puck is struck along the ice; a ball or a cube hops a little.
+  cube.vy = Math.max(cube.vy, cube.flat ? 0.3 : 2.7);
   cube.spin = (cube.spin || 0) + 3.5;
 }
-export function stepCube(c, boxes, dt) {
+// grip < 1: slippery ground (ice) — loose things slide much farther.
+export function stepCube(c, boxes, dt, grip = 1) {
   c.x += c.vx * dt;
   c.z += c.vz * dt;
   c.vy -= GRAVITY * dt;
@@ -279,7 +294,7 @@ export function stepCube(c, boxes, dt) {
       c.vx += d.x * a * dt;
       c.vz += d.z * a * dt;
     }
-    const f = Math.exp(-(c.friction ?? 3.2) * dt);
+    const f = Math.exp(-(c.friction ?? 3.2) * grip * dt);
     c.vx *= f;
     c.vz *= f;
     c.spin *= f;

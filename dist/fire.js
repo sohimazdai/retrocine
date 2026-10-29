@@ -1,57 +1,83 @@
-// A fire shader and flowing-flame hair. Each lock is a tapering tube bent along a curve; a shader
-// gives it a core-to-edge heat gradient, flicker and a licking, winding sway that grows toward the
-// tip. Built for the fire princess's hair — fire that grows thick on the head and streams like a
-// river rather than standing up in spikes.
 import * as T from "three";
+import { scalpGeometry } from "./sculpt.js";
 
+// One coherent mantle plus swept flames. All fragments share a world-like 3D
+// flow field, so neighbouring locks read as fire rather than blinking tubes.
 const VERT = `
 precision highp float;
 uniform float uTime;
-attribute float aT;      // 0 at the root of a lock, 1 at its tip
-attribute float aPhase;  // a per-lock phase so locks move out of step
-attribute float aSway;   // how far this lock licks about
+uniform float uSpeed;
+uniform float uWind;
+attribute float aT;
+attribute float aPhase;
+attribute float aSway;
 varying float vT;
-varying float vPhase;
+varying vec3 vPosition;
+varying vec3 vViewPosition;
+varying vec3 vViewNormal;
 void main() {
   vT = aT;
-  vPhase = aPhase;
   vec3 pos = position;
   float t = aT;
-  float wind = uTime * 1.7 + aPhase * 6.2831;
-  // Hardly any motion at the root, a lot at the tip: a lick that winds as it rises.
-  float amp = aSway * (t * t * 0.95 + t * 0.12);
-  pos.x += sin(wind + t * 3.3) * amp + sin(wind * 2.1 + t * 6.0) * amp * 0.35;
-  pos.z += cos(wind * 0.8 + t * 2.4) * amp * 0.7;
-  pos.y += sin(wind * 1.3 + t * 4.2) * amp * 0.3;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  float clock = uTime * uSpeed;
+  float wave = clock * 2.1 + aPhase * 6.2831;
+  float amp = aSway * t * t;
+  pos.x += (sin(wave - t * 4.0) + sin(wave * 1.7 - t * 7.0) * 0.25 + uWind) * amp;
+  pos.z += cos(wave * 0.8 - t * 3.0) * amp * 0.65;
+  pos.y += sin(wave * 1.1 - t * 5.0) * amp * 0.24;
+  vPosition = pos;
+  vViewNormal = normalize(normalMatrix * normal);
+  vec4 mv = modelViewMatrix * vec4(pos, 1.0);
+  vViewPosition = mv.xyz;
+  gl_Position = projectionMatrix * mv;
 }
 `;
 
 const FRAG = `
 precision highp float;
 uniform float uTime;
+uniform float uSpeed;
+uniform float uIntensity;
 uniform vec3 uCore;
 uniform vec3 uMid;
 uniform vec3 uEdge;
 varying float vT;
-varying float vPhase;
-float hash(float n) { return fract(sin(n) * 43758.5453123); }
-float noise(float x) {
-  float i = floor(x), f = fract(x);
-  return mix(hash(i), hash(i + 1.0), f * f * (3.0 - 2.0 * f));
+varying vec3 vPosition;
+varying vec3 vViewPosition;
+varying vec3 vViewNormal;
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + vec3(0.13, 0.37, 0.71));
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float noise(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash(i), hash(i + vec3(1,0,0)), f.x),
+                 mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
+                 mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y), f.z);
+}
+float flow(vec3 p) {
+  return noise(p) * 0.57 + noise(p * 2.03 + 11.7) * 0.29 + noise(p * 4.1 + 21.3) * 0.14;
 }
 void main() {
-  float t = vT;
-  // Flicker travelling up the flame.
-  float flick = noise(t * 6.0 + uTime * 5.0 + vPhase * 10.0) * 0.5 + noise(t * 14.0 - uTime * 3.2) * 0.5;
-  float tt = clamp(t + (flick - 0.5) * 0.14, 0.0, 1.0);
-  vec3 col = mix(uCore, uMid, smoothstep(0.0, 0.5, tt));
-  col = mix(col, uEdge, smoothstep(0.5, 1.0, tt));
-  col *= 1.0 + (1.0 - tt) * 0.35; // a warm, glowing core (not white-hot)
-  // Wispy: fades out toward the tip and flickers; the very root is softened to hide the seam.
-  float alpha = (1.0 - smoothstep(0.5, 1.0, tt)) * (0.5 + flick * 0.45);
-  alpha *= smoothstep(0.0, 0.07, t);
+  vec3 p = vPosition * vec3(4.5, 3.0, 4.5);
+  p.y -= uTime * uSpeed * 1.6;
+  float turbulence = flow(p + vec3(0.0, flow(p * 0.55), 0.0));
+  vec3 n = normalize(vViewNormal);
+  float facing = abs(dot(n, normalize(-vViewPosition)));
+  float heat = clamp(0.15 + facing * 0.06 + smoothstep(0.22, 0.8, turbulence) * 0.9 - vT * 0.32, 0.0, 1.0);
+  vec3 col = mix(uEdge, uMid, smoothstep(0.08, 0.58, heat));
+  col = mix(col, uCore, smoothstep(0.58, 0.96, heat));
+  col *= uIntensity;
+  // Solid roots close the scalp; only the ends and silhouette become wisps.
+  float tip = 1.0 - smoothstep(0.72 + turbulence * 0.13, 1.0, vT);
+  float alpha = tip * mix(0.4, 0.96, smoothstep(0.0, 0.6, facing));
+  alpha *= smoothstep(0.0, 0.12, vT) * mix(0.55, 1.0, smoothstep(0.2, 0.65, turbulence));
   gl_FragColor = vec4(col, alpha);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
 }
 `;
 
@@ -59,132 +85,76 @@ export function createFireMaterial() {
   return new T.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
-      uCore: { value: new T.Color("#ffd874") },
-      uMid: { value: new T.Color("#ff6f1c") },
-      uEdge: { value: new T.Color("#cf2418") },
+      uSpeed: { value: 0.8 },
+      uWind: { value: 0.15 },
+      uIntensity: { value: 1.15 },
+      uCore: { value: new T.Color("#ffe88b") },
+      uMid: { value: new T.Color("#ff8c28") },
+      uEdge: { value: new T.Color("#cd361a") },
     },
     vertexShader: VERT,
     fragmentShader: FRAG,
     transparent: true,
     depthWrite: false,
-    blending: T.AdditiveBlending,
+    blending: T.NormalBlending,
     side: T.DoubleSide,
     toneMapped: false,
   });
 }
 
-// Adds one tapering tube along a curve to the shared arrays.
-function addLock(points, baseR, phase, sway, A, rings = 14, radial = 6) {
+function addLock(points, radius, phase, sway, arrays, rings = 24, radial = 20) {
   const curve = new T.CatmullRomCurve3(points.map((p) => new T.Vector3(...p)));
   const frames = curve.computeFrenetFrames(rings, false);
-  const start = A.ringStart;
-  const v = new T.Vector3();
+  const start = arrays.aT.length, v = new T.Vector3();
   for (let i = 0; i <= rings; i++) {
-    const t = i / rings,
-      center = curve.getPointAt(t),
-      r = baseR * (1 - t) * (1 - t * 0.25) + 0.004,
-      n = frames.normals[i],
-      b = frames.binormals[i];
-    for (let j = 0; j < radial; j++) {
-      const a = (j / radial) * Math.PI * 2;
-      v.copy(n).multiplyScalar(Math.cos(a) * r).addScaledVector(b, Math.sin(a) * r).add(center);
-      A.pos.push(v.x, v.y, v.z);
-      A.aT.push(t);
-      A.aPhase.push(phase);
-      A.aSway.push(sway);
+    const t = i / rings, center = curve.getPointAt(t);
+    const r = radius * Math.pow(1 - t, 0.85) * (0.9 + Math.sin(t * Math.PI) * 0.22) + 0.001;
+    for (let j = 0; j <= radial; j++) {
+      const a = j / radial * Math.PI * 2;
+      v.copy(center).addScaledVector(frames.normals[i], Math.cos(a) * r)
+        .addScaledVector(frames.binormals[i], Math.sin(a) * r * 0.78);
+      arrays.pos.push(v.x, v.y, v.z);
+      arrays.aT.push(t); arrays.aPhase.push(phase); arrays.aSway.push(sway);
+      if (i < rings && j < radial) {
+        const q = start + i * (radial + 1) + j, b = q + radial + 1;
+        arrays.idx.push(q, q + 1, b, q + 1, b + 1, b);
+      }
     }
   }
-  for (let i = 0; i < rings; i++)
-    for (let j = 0; j < radial; j++) {
-      const a = start + i * radial + j,
-        b = start + i * radial + ((j + 1) % radial),
-        c = start + (i + 1) * radial + j,
-        d = start + (i + 1) * radial + ((j + 1) % radial);
-      A.idx.push(a, c, b, b, c, d);
-    }
-  A.ringStart += (rings + 1) * radial;
 }
 
-// Builds the whole head of flowing fire and returns { mesh, material }.
 export function buildFireHair() {
-  const A = { pos: [], aT: [], aPhase: [], aSway: [], idx: [], ringStart: 0 };
-  const rnd = (() => {
-    let s = 7;
-    return () => ((s = (s * 9301 + 49297) % 233280) / 233280);
-  })();
-  // A thick crown of short-to-medium flames rising off the whole top of the head and licking over.
-  for (let i = 0; i < 26; i++) {
-    const a = i * 2.3994,
-      rad = 0.07 + rnd() * 0.33,
-      x = Math.sin(a) * rad,
-      z = Math.cos(a) * rad - 0.02,
-      rootY = 0.3 + (0.42 - rad) * 0.5,
-      len = 0.42 + rnd() * 0.5,
-      curl = (rnd() - 0.5) * 0.3;
-    addLock(
-      [
-        [x, rootY, z],
-        [x * 1.3, rootY + len * 0.45, z * 1.3 + 0.02],
-        [x * 1.5 + curl, rootY + len * 0.8, z * 1.4 - 0.03],
-        [x * 1.5 + curl * 1.8, rootY + len, z * 1.3 - 0.05],
-      ],
-      0.08 + rnd() * 0.05,
-      rnd(),
-      0.08 + rnd() * 0.07,
-      A,
-      12,
-    );
+  const a = { pos: [], aT: [], aPhase: [], aSway: [], idx: [] };
+  // Broad upward sweeping crown with a taller centre, readable at thumbnail size.
+  for (let i = 0; i < 13; i++) {
+    const angle = i * 2.39996, radius = 0.09 + (i % 4) * 0.078;
+    const x = Math.sin(angle) * radius, z = Math.cos(angle) * radius - 0.06;
+    const height = 0.77 - radius * 0.6 + Math.sin(i * 1.7) * 0.08;
+    addLock([[x, 0.28, z], [x * 1.1, 0.5, z * 1.15], [x * 0.8 + 0.07, height, z - 0.03], [x * 0.6 + 0.12, height + 0.28, z - 0.08]], 0.15, i / 13, 0.07, a);
   }
-  // Big voluminous locks flowing off the temples and sides: up and out, then sweeping down in a wave.
-  for (let i = 0; i < 12; i++) {
-    const s = i % 2 ? 1 : -1,
-      row = Math.floor(i / 2),
-      ry = 0.28 - row * 0.12,
-      out = 0.42 + row * 0.03,
-      drop = 0.55 + row * 0.12 + rnd() * 0.2;
-    addLock(
-      [
-        [s * 0.3, ry, 0.05],
-        [s * (out + 0.08), ry + 0.18, -0.02],
-        [s * (out + 0.22), ry - 0.05, -0.12],
-        [s * (out + 0.18), ry - drop * 0.55, -0.16 - rnd() * 0.1],
-        [s * (out - 0.02 + (rnd() - 0.5) * 0.2), ry - drop, -0.1],
-      ],
-      0.15 + rnd() * 0.05,
-      rnd(),
-      0.14 + rnd() * 0.08,
-      A,
-      16,
-    );
+  // A continuous fiery mane behind the face, curling upward at its ends.
+  for (let i = 0; i < 9; i++) {
+    const angle = Math.PI * 0.5 + i / 8 * Math.PI;
+    const x = Math.sin(angle) * 0.35, z = Math.cos(angle) * 0.29 - 0.04;
+    addLock([[x, 0.23, z], [x * 1.2, -0.03, z * 1.25], [x * 1.4, -0.36, z * 1.4], [x * 1.6, -0.52, z * 1.4], [x * 1.75, -0.3, z * 1.5]], 0.16, i / 9, 0.09, a);
   }
-  // A few long locks streaming down the back.
-  for (let i = 0; i < 5; i++) {
-    const x = -0.26 + i * 0.13,
-      drop = 0.7 + rnd() * 0.35;
-    addLock(
-      [
-        [x, 0.3, -0.26],
-        [x * 1.2, 0.42, -0.34],
-        [x * 1.1, 0.0, -0.4],
-        [x * 0.9 + (rnd() - 0.5) * 0.2, -drop, -0.32],
-      ],
-      0.13 + rnd() * 0.04,
-      rnd(),
-      0.1 + rnd() * 0.06,
-      A,
-      15,
-    );
-  }
+  const geometry = new T.BufferGeometry();
+  geometry.setAttribute("position", new T.Float32BufferAttribute(a.pos, 3));
+  geometry.setAttribute("aT", new T.Float32BufferAttribute(a.aT, 1));
+  geometry.setAttribute("aPhase", new T.Float32BufferAttribute(a.aPhase, 1));
+  geometry.setAttribute("aSway", new T.Float32BufferAttribute(a.aSway, 1));
+  geometry.setIndex(a.idx);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  // Account for maximum vertex displacement when framing portraits.
+  geometry.boundingBox.expandByScalar(0.14);
+  geometry.computeBoundingSphere();
+  geometry.boundingSphere.radius += 0.14;
+  const material = createFireMaterial(), mesh = new T.Mesh(geometry, material);
+  const mantle = new T.Mesh(scalpGeometry(), new T.MeshStandardMaterial({
+    color: "#ed681f", emissive: "#b83e12", emissiveIntensity: 0.45, roughness: 0.8,
+  }));
 
-  const g = new T.BufferGeometry();
-  g.setAttribute("position", new T.Float32BufferAttribute(A.pos, 3));
-  g.setAttribute("aT", new T.Float32BufferAttribute(A.aT, 1));
-  g.setAttribute("aPhase", new T.Float32BufferAttribute(A.aPhase, 1));
-  g.setAttribute("aSway", new T.Float32BufferAttribute(A.aSway, 1));
-  g.setIndex(A.idx);
-  g.computeBoundingSphere();
-  const material = createFireMaterial();
-  const mesh = new T.Mesh(g, material);
-  mesh.frustumCulled = false;
+  mesh.add(mantle);
   return { mesh, material };
 }

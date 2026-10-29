@@ -257,13 +257,13 @@ export const CHARACTERS = [
   },
   {
     id: "little-sister", name: "Сестричка", subtitle: "Little Sister · BioShock",
-    category: "heroes", color: "#788b9e", skin: "#d1c6ae",
-    pantsColor: "#d1c6ae", shoeColor: "#493b32", hairColor: "#342b26",
+    category: "heroes", color: "#a293b6", skin: "#e1ceaa",
+    pantsColor: "#e1ceaa", shoeColor: "#e1ceaa", hairColor: "#402329",
   },
   {
     id: "ciri", name: "Цири", subtitle: "Ciri · The Witcher",
-    category: "fantasy", color: "#ece4d0", skin: "#e5c4ac",
-    pantsColor: "#695246", shoeColor: "#463b33", hairColor: "#dedbd2",
+    category: "fantasy", color: "#87916a", skin: "#e8c4b4",
+    pantsColor: "#727d55", shoeColor: "#59402f", hairColor: "#e6dfad",
   },
   {
     id: "anton-chigurh", name: "Антон Чигур", subtitle: "Старикам тут не место · Anton Chigurh",
@@ -292,9 +292,9 @@ export const CHARACTERS = [
     pantsColor: "#b17b48", shoeColor: "#895a35", hairColor: "#78492f",
   },
   {
-    id: "winnie-pooh", name: "Винни-Пух", subtitle: "Winnie the Pooh · Мишка и мёд",
-    category: "creatures", color: "#ad7e44", skin: "#ad7e44",
-    pantsColor: "#ad7e44", shoeColor: "#694a2f",
+    id: "winnie-pooh", name: "Винни-Пух", subtitle: "Winnie the Pooh · Красный шарик",
+    category: "creatures", color: "#a22c29", skin: "#c9a761",
+    pantsColor: "#c9a761", shoeColor: "#c9a761",
   },
   {
     id: "carlson", name: "Карлсон", subtitle: "Малыш и Карлсон · Пропеллер за спиной",
@@ -316,7 +316,13 @@ export const CHARACTERS = [
 // Original procedural toy interpretations. Every accessory is a mesh attached
 // to the existing joint hierarchy, so all room actions use the same rig.
 export function dressCharacter(rig, p, primitives) {
-  const { box, ball, material, cylinder, pivot } = primitives;
+  const { box: rigidBox, ball, material, cylinder, pivot, soft, strand, garment: loft, sculptHair, surfaceMaterial, scalp } = primitives;
+  // Soft garments keep their attachment points and palette, but use a convex
+  // tailored surface instead of a flat-fronted block. Hardware stays rigid.
+  const box = (parent, w, h, d, color, x = 0, y = 0, z = 0, radius = 0.06) =>
+    parent.userData.softGarment && Math.min(w, h, d) > 0.12
+      ? soft(parent, w, h, d, typeof color === "string" ? surfaceMaterial(color) : color, x, y, z, 0.75)
+      : rigidBox(parent, w, h, d, color, x, y, z, radius);
   const id = p.character;
   if (!CHARACTERS.some((c) => c.id === id)) return;
   const { head, torso, face, arms, elbows, legs, knees, feet } = rig;
@@ -379,7 +385,9 @@ export function dressCharacter(rig, p, primitives) {
     group.children.filter((c) => c.isMesh).forEach((c) => (c.visible = false));
   const garment = (name = "costume") => {
     hideMeshes(torso);
-    return part(name, torso);
+    const g = part(name, torso);
+    g.userData.softGarment = true;
+    return g;
   };
   const softBody = (color = p.color, belly = null) => {
     const g = garment();
@@ -390,13 +398,15 @@ export function dressCharacter(rig, p, primitives) {
   const newFace = (color, width = 0.88, height = 0.78, depth = 0.72) => {
     face.visible = false;
     const g = part("face");
-    box(g, width, height, depth, color, 0, 0, 0, 0.17);
+    if (["robot", "lego-boy", "spongebob"].includes(id))
+      box(g, width, height, depth, color, 0, 0, 0, 0.17);
+    else soft(g, width, height, depth, surfaceMaterial(color, "skin"), 0, 0, 0, 0.72);
     rig.eyes = [];
     rig.brows = [];
     for (const s of [-1, 1]) {
       const eye = pivot(g, s * 0.205, 0.055, depth / 2 + 0.015);
-      ball(eye, "#171a25", 0, 0, 0, 0.135, 0.155, 0.065, 0.12);
-      ball(eye, "#fff8e9", -0.03, 0.045, 0.06, 0.032, 0.035, 0.012);
+      ball(eye, surfaceMaterial("#171a25", "eyes"), 0, 0, 0, 0.12, 0.132, 0.057);
+      ball(eye, "#fff8e9", -0.03, 0.04, 0.053, 0.013, 0.017, 0.007);
       rig.eyes.push(eye);
       rig.brows.push(
         box(
@@ -549,13 +559,12 @@ export function dressCharacter(rig, p, primitives) {
       box(g, 0.47, 0.22, 0.1, "#241f15", 0, -0.025, 0.28, 0.06);
       box(g, 0.09, 0.012, 0.015, "#876b4b", 0.02, -0.25, 0.315, 0.004);
       // A rounded shell closing the back and sides.
-      box(g, 0.92, 0.9, 0.5, p.color, 0, 0.06, -0.24, 0.22);
+      soft(g, 0.92, 0.9, 0.5, surfaceMaterial(p.color), 0, 0.06, -0.24, 0.85);
     }
     if (signatureBody) {
       const g = garment();
       // A long yellow slicker: wide at the hem, past the hips, with a seam and two pockets.
-      const coat = cylinder(g, p.color, 0.22, 0.41, 0.72, 0, -0.14, 0);
-      coat.scale.z = 0.74;
+      loft(g, [[-0.5, 0, 0], [-0.49, 0.39, 0.28], [-0.36, 0.35, 0.26], [-0.08, 0.27, 0.2], [0.16, 0.22, 0.16], [0.22, 0.1, 0.1], [0.23, 0, 0]], p.color, 0.035);
       box(g, 0.03, 0.66, 0.025, "#c28f1f", 0, -0.12, 0.3, 0.008);
       for (const y of [0.1, -0.08, -0.26]) {
         box(g, 0.11, 0.045, 0.04, "#e8cb43", 0.035, y, 0.31, 0.012);
@@ -570,73 +579,160 @@ export function dressCharacter(rig, p, primitives) {
     paws(p.skin);
   }
   if (id === "little-sister") {
-    const g = part("glowing-eyes", face);
+    arms.forEach((arm, i) => (arm.position.x = (i ? 1 : -1) * 0.26));
+    part("glowing-eyes", face);
     rig.eyes.forEach((eye) => {
-      eye.children[0].material = glow("#f5d965");
-      rig.secondary.push({ object: eye.children[0], type: "light" });
+      eye.children[0].material = new T.MeshStandardMaterial({ color: "#f4d121", emissive: "#dcae0b", emissiveIntensity: 0.35, roughness: 0.33 });
+      eye.children[0].scale.set(0.1, 0.107, 0.05);
+      eye.children.slice(1).forEach((child) => (child.visible = false));
     });
-    // Keep the eyes on the facial rig so blinking and emotions still work.
-    ball(g, "#988774", 0.13, -0.17, 0.35, 0.055, 0.018, 0.012);
     if (signatureHead) {
-      const hair = part("sister-hair");
-      box(hair, 0.86, 0.24, 0.73, p.hairColor, 0, 0.31, -0.04, 0.1);
-      box(hair, 0.8, 0.55, 0.2, p.hairColor, 0, 0.03, -0.32, 0.08);
-      for (const s of [-1, 1]) {
-        ball(hair, p.hairColor, s * 0.38, 0.28, -0.16, 0.2, 0.22, 0.19);
-        box(hair, 0.2, 0.07, 0.1, "#c6b5a1", s * 0.39, 0.29, 0.02, 0.02);
+      const hair = part("sister-hair"), mat = surfaceMaterial(p.hairColor, "hair");
+      scalp(hair, mat);
+      soft(hair, 0.83, 0.38, 0.7, mat, 0, 0.28, -0.03, 0.7);
+      soft(hair, 0.79, 0.63, 0.25, mat, 0, -0.02, -0.32, 0.85);
+      for (let i = 0; i < 8; i++) {
+        const d = i * 0.025;
+        strand(hair, [[0.2, 0.37 + d * 0.3, 0.2 - d], [-0.05, 0.34 + d * 0.5, 0.34 - d], [-0.32, 0.22 + d, 0.3 - d], [-0.42, -0.01, 0.13 - d]], mat, 0.047, 0.025);
+        if (i < 5) strand(hair, [[0.2, 0.38, 0.22 - d], [0.35, 0.27 + d * 0.5, 0.28 - d], [0.43, 0.02, 0.04 - d]], mat, 0.05, 0.028);
+      }
+      for (const side of [-1, 1]) {
+        soft(hair, 0.22, 0.22, 0.19, mat, side * 0.29, 0.35, -0.26, 0.9);
+        for (const flip of [-1, 1])
+          soft(hair, 0.13, 0.09, 0.045, "#d8d1d2", side * 0.29 + flip * 0.05, 0.43, -0.23, 0.9).rotation.z = flip * 0.3;
       }
     }
     if (signatureBody) {
       const dress = garment("sister-dress");
-      cylinder(dress, p.color, 0.21, 0.36, 0.56, 0, -0.06, 0).scale.z = 0.7;
-      box(dress, 0.25, 0.4, 0.04, "#d8cbb4", 0, -0.08, 0.21, 0.03);
-      for (const s of [-1, 1]) {
-        ball(dress, "#e4d7c3", s * 0.085, 0.17, 0.16, 0.1, 0.055, 0.04);
-        ball(arms[s === -1 ? 0 : 1], p.color, 0, -0.04, 0, 0.13, 0.13, 0.13);
+      loft(dress, [[-0.3, 0, 0], [-0.29, 0.28, 0.21], [-0.2, 0.24, 0.18], [-0.06, 0.165, 0.13], [0.12, 0.18, 0.135], [0.19, 0.08, 0.07], [0.2, 0, 0]], p.color, 0.11);
+      for (const side of [-1, 1]) {
+        soft(dress, 0.075, 0.24, 0.035, "#ded7df", side * 0.105, 0.055, 0.135, 0.7).rotation.z = -side * 0.13;
+        strand(dress, [[side * 0.045, 0.2, 0.09], [side * 0.075, 0.15, 0.14], [side * 0.015, 0.1, 0.155]], "#ded7df", 0.025, 0.012);
       }
-      box(dress, 0.5, 0.055, 0.34, "#d8cbb4", 0, -0.3, 0, 0.018);
+      for (const y of [0.09, 0.035, -0.02]) ball(dress, "#ded7df", 0, y, 0.148, 0.013, 0.013, 0.008);
+      loft(dress, [[-0.08, 0, 0], [-0.078, 0.18, 0.145], [-0.03, 0.175, 0.14], [-0.028, 0, 0]], "#ddd3df", 0);
+      arms.forEach((arm, i) => {
+        hideMeshes(arm); hideMeshes(elbows[i]);
+        soft(arm, 0.145, 0.15, 0.16, surfaceMaterial(p.color), 0, -0.025, 0, 0.85);
+        soft(arm, 0.105, 0.14, 0.12, surfaceMaterial(p.skin, "skin"), 0, -0.12, 0, 0.9);
+        soft(elbows[i], 0.1, 0.15, 0.11, surfaceMaterial(p.skin, "skin"), 0, -0.055, 0, 0.9);
+        rig.hands[i].visible = true;
+        rig.hands[i].scale.set(0.055, 0.07, 0.05);
+      });
+      legs.forEach((leg, i) => {
+        hideMeshes(leg); hideMeshes(knees[i]);
+        const skin = surfaceMaterial(p.skin, "skin");
+        loft(leg, [[-0.19, 0, 0], [-0.18, 0.052, 0.057], [-0.06, 0.063, 0.068], [0.035, 0.06, 0.065], [0.04, 0, 0]], skin, 0);
+        loft(knees[i], [[-0.15, 0, 0], [-0.13, 0.043, 0.046], [-0.04, 0.052, 0.055], [0.035, 0.052, 0.057], [0.04, 0, 0]], skin, 0);
+      });
+      const syringe = part("adam-syringe", elbows[0]);
+      syringe.position.set(-0.03, -0.13, 0.08);
+      syringe.rotation.z = -0.25;
+      const brass = "#7d6844";
+      cylinder(syringe, brass, 0.033, 0.033, 0.31, 0, -0.06, 0);
+      cylinder(syringe, "#b02c29", 0.055, 0.055, 0.14, 0, 0.06, 0);
+      for (const y of [0.14, -0.015]) cylinder(syringe, "#b39a58", 0.06, 0.06, 0.026, 0, y, 0);
+      cylinder(syringe, "#a6aaa1", 0.009, 0.006, 0.19, 0, -0.3, 0);
+      tube(syringe, [[-0.035, 0.05, 0], [-0.11, 0.03, 0], [-0.1, -0.12, 0], [-0.03, -0.15, 0]], brass, 0.014);
     }
-    paws(p.shoeColor);
+    if (signatureFeet) feet.forEach((foot) => {
+      hideMeshes(foot);
+      soft(foot, 0.14, 0.08, 0.23, surfaceMaterial(p.skin, "skin"), 0, -0.015, 0.045, 0.85);
+    });
   }
   if (id === "ciri") {
+    head.scale.x = 1.1;
+    arms.forEach((arm, i) => (arm.position.x = (i ? 1 : -1) * 0.26));
     const scar = part("cheek-scar", face);
-    tube(scar, [[-0.28, 0.19, 0.36], [-0.25, 0.02, 0.414], [-0.13, -0.18, 0.36]], "#ac746a", 0.012);
-    rig.eyes.forEach((eye) => ball(eye, "#739e69", 0, 0, 0.067, 0.055, 0.073, 0.017));
+    strand(scar, [[-0.29, 0.11, 0.34], [-0.28, -0.035, 0.37], [-0.23, -0.14, 0.35]], material("#c69a90"), 0.006, 0.003);
+    for (const [i, eye] of rig.eyes.entries()) {
+      const side = i ? 1 : -1;
+      for (let j = 0; j < 3; j++)
+        strand(eye, [[side * 0.077, 0.07 - j * 0.017, 0.027], [side * 0.12, 0.1 - j * 0.022, 0.026], [side * (0.145 - j * 0.005), 0.117 - j * 0.025, 0.01]], material("#242322"), 0.009, 0.004);
+    }
     if (signatureHead) {
-      const hair = part("ashen-hair");
-      box(hair, 0.86, 0.22, 0.72, p.hairColor, 0, 0.33, -0.03, 0.1);
-      ball(hair, p.hairColor, 0, 0.15, -0.39, 0.28, 0.28, 0.15);
-      for (const s of [-1, 1]) {
-        const lock = box(hair, 0.16, 0.65, 0.16, p.hairColor, s * 0.36, 0.01, 0.25, 0.07);
-        lock.rotation.z = -s * 0.2;
+      const hair = part("ashen-hair"), mat = surfaceMaterial(p.hairColor, "hair");
+      scalp(hair, mat);
+      soft(hair, 0.83, 0.67, 0.28, mat, 0, -0.015, -0.29, 0.85);
+      // Centre part with overlapping swept locks, rather than a helmet rim.
+      for (const side of [-1, 1]) {
+        for (let i = 0; i < 6; i++) {
+          // Follow the cap surface so the relief cannot float above the scalp.
+          const points = [0.015, 0.4, 0.85, 1.3, 1.6].map((angle) => {
+            const phi = 0.98 - i * 0.12 + angle * 0.32;
+            const r = Math.pow(Math.sin(phi), 0.7);
+            return [side * Math.pow(Math.sin(angle), 0.7) * r * 0.445,
+              Math.sign(Math.cos(phi)) * Math.pow(Math.abs(Math.cos(phi)), 0.7) * 0.43 + 0.02,
+              Math.sign(Math.cos(angle)) * Math.pow(Math.abs(Math.cos(angle)), 0.7) * r * 0.365 - 0.03];
+          });
+          strand(hair, points, mat, 0.046, 0.026);
+        }
+        strand(hair, [[side * 0.34, 0.27, 0.22], [side * 0.43, 0.04, 0.23], [side * 0.43, -0.21, 0.18], [side * 0.38, -0.36, 0.23], [side * 0.42, -0.49, 0.2], [side * 0.35, -0.6, 0.17]], mat, 0.066, 0.045);
+        // Three interlaced strands form each braid behind the shoulders.
+        for (let k = 0; k < 3; k++) {
+          const points = [];
+          for (let j = 0; j <= 16; j++) {
+            const t = j / 16, a = t * Math.PI * 6 + k * Math.PI * 2 / 3;
+            points.push([side * 0.31 + Math.cos(a) * 0.041, 0.04 - t * 0.66, -0.28 + Math.sin(a) * 0.04]);
+          }
+          strand(hair, points, mat, 0.045, 0.033);
+        }
+        soft(hair, 0.105, 0.055, 0.1, "#75604b", side * 0.31, -0.54, -0.28, 0.85);
       }
-      box(hair, 0.4, 0.17, 0.14, p.hairColor, -0.13, 0.25, 0.33, 0.06).rotation.z = -0.3;
     }
     if (signatureBody) {
       const body = garment("witcher-outfit");
-      box(body, 0.47, 0.45, 0.34, p.color, 0, -0.02, 0, 0.07);
-      polygon(body, [[-0.08, 0.2], [0.08, 0.2], [0, -0.02]], p.skin, 0.02, 0.18);
-      belt(body, "#654c37");
-      box(body, 0.12, 0.23, 0.08, "#715741", 0.2, -0.2, 0.12, 0.02);
-      elbows.forEach((e) => box(e, 0.16, 0.18, 0.18, "#795e43", 0, -0.07, 0, 0.035));
+      loft(body, [[-0.32, 0, 0], [-0.3, 0.245, 0.17], [-0.16, 0.2, 0.15], [0.04, 0.22, 0.16], [0.17, 0.19, 0.14], [0.2, 0.08, 0.08], [0.21, 0, 0]], p.color, 0.035);
+      const leather = surfaceMaterial("#705039", "leather");
+      loft(body, [[-0.13, 0, 0], [-0.13, 0.21, 0.17], [0.02, 0.22, 0.18], [0.15, 0.195, 0.15], [0.16, 0, 0]], leather, 0.015);
+      // Visible collar, stitched edges and a separate diagonal sword belt.
+      for (const side of [-1, 1]) {
+        strand(body, [[side * 0.06, 0.21, 0.11], [side * 0.1, 0.15, 0.16], [0, 0.08, 0.19]], p.color, 0.022, 0.012);
+        strand(body, [[side * 0.17, 0.14, 0.15], [side * 0.19, -0.02, 0.16], [side * 0.15, -0.12, 0.16]], material("#99724e"), 0.006, 0.004);
+      }
+      const beltMesh = soft(body, 0.46, 0.095, 0.37, surfaceMaterial("#523d2d", "leather"), 0, -0.19, 0, 0.65);
+      beltMesh.rotation.z = -0.09;
+      mesh(body, new T.TorusGeometry(0.035, 0.008, 8, 16), "#b4b5a6", 0.055, -0.19, 0.197).scale.y = 1.15;
+      for (const [i, arm] of arms.entries()) {
+        hideMeshes(arm); hideMeshes(elbows[i]);
+        soft(arm, 0.19, 0.25, 0.21, surfaceMaterial(p.color), 0, -0.065, 0, 0.85);
+        loft(elbows[i], [[-0.13, 0, 0], [-0.13, 0.073, 0.08], [-0.03, 0.08, 0.088], [0.02, 0.075, 0.08], [0.025, 0, 0]], leather, 0.035);
+        rig.hands[i].visible = true;
+        // A small palm and four rounded fingers, all carried by the elbow joint.
+        rig.hands[i].scale.set(0.06, 0.075, 0.06);
+        for (let j = 0; j < 4; j++)
+          soft(elbows[i], 0.023, 0.064, 0.033, surfaceMaterial(p.skin, "skin"), -0.034 + j * 0.023, -0.19, 0.018, 0.9);
+      }
       const sword = part("witcher-sword", torso);
-      sword.position.set(-0.12, 0.03, -0.28);
-      sword.rotation.z = -0.5;
-      box(sword, 0.09, 0.76, 0.07, "#50493f", 0, -0.12, 0, 0.018);
-      box(sword, 0.23, 0.04, 0.09, "#bdc3c2", 0, 0.27, 0, 0.012);
-      cylinder(sword, "#564031", 0.035, 0.035, 0.2, 0, 0.38, 0);
-      ball(sword, "#bdc3c2", 0, 0.49, 0, 0.045);
+      sword.position.set(0.19, -0.08, -0.2);
+      sword.rotation.z = 0.5;
+      soft(sword, 0.085, 0.57, 0.065, leather, 0, -0.17, 0, 0.65);
+      box(sword, 0.18, 0.025, 0.07, "#b5b7af", 0, 0.13, 0, 0.01);
+      cylinder(sword, "#57422e", 0.027, 0.027, 0.16, 0, 0.22, 0);
+      ball(sword, "#b5b7af", 0, 0.31, 0, 0.033);
     }
-    paws(p.shoeColor);
+    if (signatureFeet) {
+      const leather = surfaceMaterial(p.shoeColor, "leather");
+      feet.forEach((foot, i) => {
+        hideMeshes(foot); hideMeshes(knees[i]);
+        soft(foot, 0.2, 0.135, 0.34, leather, 0, -0.005, 0.065, 0.75);
+        loft(knees[i], [[-0.14, 0, 0], [-0.13, 0.08, 0.085], [-0.04, 0.09, 0.09], [0.055, 0.1, 0.095], [0.06, 0, 0]], leather, 0.05);
+        for (const y of [-0.08, -0.015, 0.04])
+          strand(knees[i], [[-0.07, y, 0.065], [0, y - 0.015, 0.096], [0.07, y + 0.004, 0.06]], leather, 0.013, 0.009);
+      });
+    }
   }
   if (id === "anton-chigurh") {
     if (signatureHead) {
       const hair = part("chigurh-bob");
-      box(hair, 0.94, 0.3, 0.79, p.hairColor, 0, 0.3, -0.035, 0.13);
-      box(hair, 0.88, 0.58, 0.22, p.hairColor, 0, 0, -0.31, 0.07);
-      for (const s of [-1, 1])
-        box(hair, 0.18, 0.58, 0.55, p.hairColor, s * 0.43, -0.015, -0.035, 0.08);
-      box(hair, 0.68, 0.14, 0.1, p.hairColor, 0, 0.28, 0.36, 0.04);
+      const mat = surfaceMaterial(p.hairColor, "hair");
+      soft(hair, 0.92, 0.37, 0.79, mat, 0, 0.28, -0.035, 0.78);
+      soft(hair, 0.87, 0.6, 0.25, mat, 0, -0.015, -0.3, 0.85);
+      for (const side of [-1, 1])
+        for (let i = 0; i < 4; i++)
+          strand(hair, [[side * 0.29, 0.34, 0.08 - i * 0.1], [side * 0.45, 0.12, 0.07 - i * 0.1], [side * 0.44, -0.14, 0.08 - i * 0.1], [side * 0.36, -0.28, 0.1 - i * 0.1]], mat, 0.075, 0.06);
+      for (let i = 0; i < 7; i++)
+        strand(hair, [[-0.3 + i * 0.1, 0.38, 0.1], [-0.3 + i * 0.1, 0.31, 0.31], [-0.3 + i * 0.1, 0.21, 0.34]], mat, 0.055, 0.035);
     }
     if (signatureBody) {
       const jacket = garment("chigurh-jacket");
@@ -654,15 +750,24 @@ export function dressCharacter(rig, p, primitives) {
   if (id === "elastigirl") {
     if (signatureHead) {
       const mask = part("hero-mask");
-      // Rings leave the animated eyes visible through the black domino mask.
-      for (const s of [-1, 1]) {
-        mesh(mask, new T.TorusGeometry(0.15, 0.035, 8, 24), "#25232a", s * 0.215, 0.02, 0.37).scale.y = 0.85;
-        box(mask, 0.14, 0.5, 0.45, p.hairColor, s * 0.4, 0.01, -0.09, 0.06);
+      // One thin domino mask with eye openings, rather than two goggle rims.
+      const shape = new T.Shape();
+      shape.moveTo(-0.4, 0.07);
+      for (const [cx, cy, x, y] of [[-0.34, 0.22, -0.2, 0.18], [-0.08, 0.16, 0, 0.09], [0.08, 0.16, 0.2, 0.18], [0.34, 0.22, 0.4, 0.07], [0.33, -0.16, 0.2, -0.13], [0.08, -0.12, 0, -0.02], [-0.08, -0.12, -0.2, -0.13], [-0.33, -0.16, -0.4, 0.07]])
+        shape.quadraticCurveTo(cx, cy, x, y);
+      for (const side of [-1, 1]) {
+        const hole = new T.Path();
+        hole.absellipse(side * 0.215, 0.02, 0.118, 0.119, 0, Math.PI * 2, true);
+        shape.holes.push(hole);
+        strand(mask, [[side * 0.29, 0.34, -0.06], [side * 0.43, 0.05, -0.06], [side * 0.35, -0.28, -0.02]], p.hairColor, 0.12, 0.1);
       }
-      box(mask, 0.14, 0.055, 0.05, "#25232a", 0, 0.02, 0.39, 0.015);
-      box(mask, 0.87, 0.25, 0.74, p.hairColor, 0, 0.33, -0.05, 0.1);
-      box(mask, 0.83, 0.55, 0.2, p.hairColor, 0, 0.02, -0.32, 0.08);
-      box(mask, 0.54, 0.16, 0.18, p.hairColor, -0.15, 0.27, 0.3, 0.06).rotation.z = -0.22;
+      mesh(mask, new T.ExtrudeGeometry(shape, { depth: 0.018, bevelEnabled: true, bevelSize: 0.006, bevelThickness: 0.006, bevelSegments: 2, curveSegments: 16 }), "#25232a", 0, 0, 0.36);
+      scalp(mask, p.hairColor);
+      soft(mask, 0.83, 0.55, 0.23, surfaceMaterial(p.hairColor, "hair"), 0, 0.02, -0.3, 0.85);
+      for (let i = 0; i < 5; i++) {
+        const offset = i * 0.035;
+        strand(mask, [[0.28, 0.36, 0.2 - offset], [-0.04, 0.38 + offset * 0.25, 0.31 - offset], [-0.33, 0.22 + offset, 0.31 - offset], [-0.4, 0.02, 0.12 - offset]], p.hairColor, 0.07, 0.045);
+      }
     }
     if (signatureBody) {
       const suit = garment("incredibles-suit");
@@ -700,8 +805,8 @@ export function dressCharacter(rig, p, primitives) {
   if (id === "eleven") {
     if (signatureHead) {
       const hair = part("buzz-cut");
-      box(hair, 0.83, 0.18, 0.7, p.hairColor, 0, 0.32, -0.025, 0.08);
-      box(hair, 0.82, 0.4, 0.12, p.hairColor, 0, 0.08, -0.32, 0.05);
+      soft(hair, 0.84, 0.24, 0.7, surfaceMaterial(p.hairColor, "hair"), 0, 0.29, -0.025, 0.85);
+      soft(hair, 0.82, 0.42, 0.17, surfaceMaterial(p.hairColor, "hair"), 0, 0.08, -0.29, 0.85);
     }
     if (signatureBody) {
       const dress = garment("eleven-dress");
@@ -732,10 +837,10 @@ export function dressCharacter(rig, p, primitives) {
       paws(p.shoeColor);
     }
   }
-  if (["alf", "winnie-pooh", "cheburashka"].includes(id)) {
+  if (["alf", "cheburashka"].includes(id)) {
     const g = newFace(p.skin, 0.88, 0.78, 0.74);
     const fur = part("fur-head");
-    box(fur, 1, 0.88, 0.72, p.color, 0, 0.015, -0.12, 0.2);
+    soft(fur, 1, 0.88, 0.72, surfaceMaterial(p.color), 0, 0.015, -0.12, 0.85);
     g.position.z = 0.08;
     const ears = part("round-ears");
     for (const s of [-1, 1]) {
@@ -761,35 +866,56 @@ export function dressCharacter(rig, p, primitives) {
         softBody(p.color, "#c08e55");
         tail(p.color, p.color);
       }
-    } else if (id === "winnie-pooh") {
-      for (let i = 0; i < 2; i++) {
-        const s = i ? 1 : -1;
-        ball(g, "#64452e", s * 0.205, 0.06, 0.39, 0.185, 0.22, 0.03);
-        rig.eyes[i].position.z = 0.43;
-        rig.eyes[i].scale.setScalar(0.72);
-      }
-      ball(g, "#d0a363", 0, -0.16, 0.41, 0.24, 0.15, 0.09);
-      ball(g, "#312c25", 0, -0.08, 0.5, 0.11, 0.08, 0.055);
-      rig.mouth.position.z = 0.49;
-      if (signatureBody) {
-        softBody(p.color, "#c79a59");
-        const honey = part("honey-pot", elbows[0]);
-        cylinder(honey, "#8e5a32", 0.1, 0.08, 0.16, 0, -0.2, 0.1);
-        cylinder(honey, "#e6b54b", 0.1, 0.1, 0.035, 0, -0.115, 0.1);
-      }
     } else {
       ball(g, "#443025", 0, -0.09, 0.415, 0.075, 0.05, 0.045);
       if (signatureBody) softBody(p.color, "#ad8054");
     }
     paws(p.shoeColor);
   }
+  if (id === "winnie-pooh") {
+    const fur = surfaceMaterial(p.skin, "fur");
+    const g = newFace(p.skin, 0.92, 0.78, 0.72);
+    g.children.find((o) => o.isMesh).material = fur;
+    rig.brows.forEach((brow) => (brow.visible = false));
+    rig.eyes.forEach((eye, i) => {
+      eye.position.set(i ? 0.225 : -0.225, -0.025, 0.346);
+      eye.children[0].scale.set(0.085, 0.095, 0.04);
+      eye.children.slice(1).forEach((child) => (child.visible = false));
+    });
+    soft(g, 0.15, 0.1, 0.095, surfaceMaterial("#514637", "skin"), 0, -0.13, 0.383, 0.85);
+    rig.mouth.visible = false;
+    const ears = part("round-ears");
+    for (const side of [-1, 1]) {
+      const ear = soft(ears, 0.25, 0.28, 0.15, fur, side * 0.34, 0.4, -0.09, 0.9);
+      ear.rotation.z = -side * 0.22;
+    }
+    if (signatureBody) {
+      const body = garment("costume");
+      soft(body, 0.5, 0.6, 0.41, fur, 0, -0.02, 0, 0.9);
+      const shirt = surfaceMaterial(p.color);
+      loft(body, [[-0.015, 0, 0], [-0.01, 0.26, 0.215], [0.16, 0.23, 0.19], [0.23, 0.11, 0.09], [0.235, 0, 0]], shirt, 0.025);
+      strand(body, [[-0.21, -0.01, 0.12], [0, -0.025, 0.217], [0.21, -0.01, 0.12]], material(p.color), 0.012, 0.009);
+      arms.forEach((arm, i) => {
+        hideMeshes(arm); hideMeshes(elbows[i]);
+        soft(arm, 0.18, 0.18, 0.2, shirt, 0, -0.025, 0, 0.9);
+        soft(arm, 0.16, 0.17, 0.17, fur, 0, -0.12, 0, 0.9);
+        soft(elbows[i], 0.16, 0.22, 0.18, fur, 0, -0.07, 0, 0.9);
+      });
+      const balloon = part("balloon", torso);
+      tube(balloon, [[0.36, -0.11, 0.07], [0.46, 0.34, 0.08], [0.51, 0.77, 0.06], [0.56, 1.03, 0.05]], "#b7ab7e", 0.007);
+      soft(balloon, 0.53, 0.62, 0.49, surfaceMaterial("#b41c25", "eyes"), 0.56, 1.32, 0.05, 1);
+      cone(balloon, "#9e1b22", 0.035, 0.055, 0.56, 1.015, 0.05, 12);
+      rig.secondary.push({ object: balloon, type: "balloon" });
+    }
+    if (signatureFeet) feet.forEach((foot) => {
+      hideMeshes(foot);
+      soft(foot, 0.21, 0.14, 0.27, fur, 0, -0.005, 0.045, 0.85);
+    });
+  }
   if (id === "carlson") {
     if (signatureHead) {
       const hair = part("ginger-hair");
-      box(hair, 0.83, 0.2, 0.68, p.hairColor, 0, 0.31, -0.05, 0.09);
-      box(hair, 0.8, 0.33, 0.16, p.hairColor, 0, 0.14, -0.32, 0.07);
-      for (let i = 0; i < 5; i++)
-        ball(hair, p.hairColor, -0.27 + i * 0.12, 0.35 + Math.sin(i) * 0.06, 0.25, 0.12, 0.13, 0.12);
+      sculptHair(hair, p.hairColor, "curly");
     }
     if (signatureBody) {
       const body = softBody(p.color);
@@ -886,7 +1012,7 @@ export function dressCharacter(rig, p, primitives) {
   if (id === "labubu") {
     const g = newFace(p.skin, 0.86, 0.76, 0.73);
     const fur = part("fur-head");
-    box(fur, 1.02, 0.88, 0.76, p.color, 0, 0.01, -0.095, 0.23);
+    soft(fur, 1.02, 0.88, 0.76, surfaceMaterial(p.color), 0, 0.01, -0.095, 0.85);
     // Face projects beyond the fur shell; the fringe is a separate ring of tufts.
     g.position.z = 0.12;
     furryEars(fur, p.color, "#d7b8a0", true);
@@ -1303,7 +1429,7 @@ export function dressCharacter(rig, p, primitives) {
     }
     if (signatureBody) {
       const g = garment();
-      cylinder(g, p.color, 0.2, 0.37, 0.57, 0, -0.09, 0).scale.z = 0.8;
+      loft(g, [[-0.39, 0, 0], [-0.38, 0.36, 0.26], [-0.24, 0.29, 0.22], [-0.04, 0.2, 0.15], [0.17, 0.19, 0.14], [0.2, 0.09, 0.08], [0.21, 0, 0]], surfaceMaterial(p.color), 0.04);
       box(g, 0.4, 0.055, 0.31, "#f3bc52", 0, 0.04, 0, 0.01);
     }
     paws(p.skin);
@@ -1656,6 +1782,7 @@ export function animateCharacter(rig, time) {
       object.rotation.z = base + Math.sin(time * 2.5 + seed) * 0.1;
     if (type === "light")
       object.material.emissiveIntensity = 0.65 + Math.sin(time * 3) * 0.25;
+    if (type === "balloon") object.rotation.z = Math.sin(time * 1.3) * 0.025;
     if (type === "propeller") object.rotation.z = time * 18;
   }
 }

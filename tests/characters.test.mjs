@@ -35,14 +35,14 @@ test("all 34 characters keep identity across selecting, saving and returning to 
 test("new characters can replace signature clothing without losing their identity", () => {
   const signatureParts = {
     six: ["raincoat-hood", "costume"],
-    "little-sister": ["sister-hair", "sister-dress"],
+    "little-sister": ["sister-hair", "sister-dress", "adam-syringe"],
     ciri: ["ashen-hair", "witcher-outfit", "witcher-sword"],
     "anton-chigurh": ["chigurh-bob", "chigurh-jacket", "coin"],
     elastigirl: ["hero-mask", "incredibles-suit"],
     "scarlet-witch": ["scarlet-crown", "scarlet-costume", "chaos-magic-1", "cape"],
     eleven: ["buzz-cut", "eleven-dress", "waffle"],
     alf: ["costume", "tail"],
-    "winnie-pooh": ["costume", "honey-pot"],
+    "winnie-pooh": ["costume", "balloon"],
     carlson: ["ginger-hair", "costume", "propeller"],
     spongebob: ["square-pants"],
     cheburashka: ["costume"],

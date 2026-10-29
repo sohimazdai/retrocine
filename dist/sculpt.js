@@ -121,7 +121,7 @@ export function facialHairGeometry(style = "short-beard") {
     for (let i = 0; i <= across; i++) {
       const x = (i / across * 2 - 1) * 0.205, edge = Math.abs(x) / 0.205;
       for (let j = 0; j <= rows; j++) {
-        const v = j / rows, y = T.MathUtils.lerp(-0.105 + 0.018 * edge, -0.2 + 0.035 * edge, v);
+        const v = j / rows, y = T.MathUtils.lerp(-0.137 + 0.018 * edge, -0.18 + 0.035 * edge, v);
         positions.push(x, y, surfaceZ(x, y) + Math.sin(v * Math.PI) * 0.008);
         if (i < across && j < rows) {
           const a = i * (rows + 1) + j, b = a + rows + 1;
@@ -134,17 +134,19 @@ export function facialHairGeometry(style = "short-beard") {
   } else {
     const full = style === "full-beard", bottom = full ? -0.55 : -0.415;
     const shape = new T.Shape();
-    shape.moveTo(-0.38, 0.11);
-    shape.quadraticCurveTo(-0.29, 0.14, -0.27, -0.02);
-    shape.quadraticCurveTo(-0.23, -0.13, 0, -0.165);
-    shape.quadraticCurveTo(0.23, -0.13, 0.27, -0.02);
-    shape.quadraticCurveTo(0.29, 0.14, 0.38, 0.11);
+    // Sideburns begin outside the eye. The upper edge then drops below the
+    // lower eyelid before crossing each cheek toward the bare upper lip.
+    shape.moveTo(-0.418, 0.035);
+    shape.bezierCurveTo(-0.43, -0.085, -0.39, -0.18, -0.285, -0.2);
+    shape.quadraticCurveTo(-0.18, -0.15, 0, -0.168);
+    shape.quadraticCurveTo(0.18, -0.15, 0.285, -0.2);
+    shape.bezierCurveTo(0.39, -0.18, 0.43, -0.085, 0.418, 0.035);
     shape.quadraticCurveTo(0.46, -0.18, 0.32, -0.34);
     shape.quadraticCurveTo(0.18, bottom, 0, bottom);
     shape.quadraticCurveTo(-0.18, bottom, -0.32, -0.34);
-    shape.quadraticCurveTo(-0.46, -0.18, -0.38, 0.11);
+    shape.quadraticCurveTo(-0.46, -0.18, -0.418, 0.035);
     const mouth = new T.Path();
-    mouth.absellipse(0, -0.233, 0.165, 0.065, 0, Math.PI * 2, true);
+    mouth.absellipse(0, -0.255, 0.175, 0.075, 0, Math.PI * 2, true);
     shape.holes.push(mouth);
     const flat = new T.ShapeGeometry(shape, 16), attr = flat.attributes.position;
     let vertices = Array.from({ length: attr.count }, (_, i) => [attr.getX(i), attr.getY(i)]);

@@ -86,6 +86,29 @@ test("facial hair, hood and animal tails remain continuous surfaces across their
   tail.dispose();
 });
 
+test("beard stays below both eyes and leaves the lips uncovered", () => {
+  for (const style of ["short-beard", "full-beard", "beard-only"]) {
+    const geometry = facialHairGeometry(style), p = geometry.attributes.position, index = geometry.index;
+    let leftSideburn = false, rightSideburn = false, chin = false;
+    for (let i = 0; i < index.count; i += 3) {
+      const ids = [index.getX(i), index.getX(i + 1), index.getX(i + 2)];
+      const x = ids.reduce((sum, id) => sum + p.getX(id), 0) / 3;
+      const y = ids.reduce((sum, id) => sum + p.getY(id), 0) / 3;
+      for (const side of [-1, 1]) {
+        const eye = Math.pow((x - side * 0.215) / 0.117, 2) + Math.pow((y - 0.02) / 0.125, 2);
+        assert(eye >= 1, `${style}: hair crosses the ${side < 0 ? "left" : "right"} eye`);
+      }
+      const lips = Math.pow(x / 0.16, 2) + Math.pow((y + 0.255) / 0.065, 2);
+      assert(lips >= 1, `${style}: hair covers the lips`);
+      leftSideburn ||= x < -0.39 && y > -0.16;
+      rightSideburn ||= x > 0.39 && y > -0.16;
+      chin ||= Math.abs(x) < 0.14 && y < -0.36;
+    }
+    assert(leftSideburn && rightSideburn && chin, `${style}: missing continuous cheeks or chin`);
+    geometry.dispose();
+  }
+});
+
 test("beard and hairstyle choices survive profile serialization and use one face-attached patch", () => {
   for (const [style] of FACIAL_HAIR) {
     const p = JSON.parse(JSON.stringify({ id: "player", hairstyle: "parted", facialHair: style, hairColor: "#493339" }));

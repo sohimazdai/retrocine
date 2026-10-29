@@ -236,7 +236,70 @@ export const HEADWEAR = [
   ["cowboy", "Ковбойская"],
   ["cap", "Кепка"],
   ["bear", "Голова медведя"],
+  ["trex", "Ти-рекс"],
+  ["moose", "Лось"],
+  ["monkey", "Обезьяна"],
+  ["fox", "Лиса"],
 ];
+const fullHeadwear = new Set(["bear", "trex", "moose", "monkey", "fox"]);
+
+function animalHeadwear(head, face, style) {
+  if (!fullHeadwear.has(style) || style === "bear") return;
+  face.visible = false;
+  const mask = pivot(head, 0, 0.015, 0.035);
+  mask.name = `headwear:${style}`;
+  const palette = {
+    trex: ["#568c55", "#9bc780", "#315839"],
+    moose: ["#78513a", "#b98b67", "#50372d"],
+    monkey: ["#77513d", "#cb9c73", "#47352e"],
+    fox: ["#c9783f", "#f2d6ad", "#583b35"],
+  }[style];
+  const [main, light, dark] = palette;
+  soft(mask, 1.02, 0.87, 0.82, surfaceMaterial(main, "fur"), 0, 0, 0, 0.75);
+  if (style === "trex") {
+    soft(mask, 0.58, 0.28, 0.62, surfaceMaterial(main), 0, -0.12, 0.42, 0.72);
+    soft(mask, 0.55, 0.11, 0.38, surfaceMaterial(light), 0, -0.25, 0.42, 0.72);
+    for (const side of [-1, 1]) {
+      ball(mask, dark, side * 0.24, 0.11, 0.405, 0.082, 0.086, 0.045);
+      ball(mask, dark, side * 0.14, -0.11, 0.72, 0.022, 0.018, 0.01);
+      for (let i = 0; i < 3; i++) {
+        const tooth = new T.Mesh(new T.ConeGeometry(0.027, 0.1, 9), material("#f5e7ce"));
+        tooth.position.set(side * (0.06 + i * 0.065), -0.248, 0.665 - i * 0.014);
+        tooth.rotation.z = Math.PI;
+        mask.add(tooth);
+      }
+    }
+    for (let i = 0; i < 3; i++) soft(mask, 0.14, 0.18, 0.19, surfaceMaterial(dark), 0, 0.39 - i * 0.08, -0.17 - i * 0.13, 0.7);
+  } else if (style === "moose") {
+    soft(mask, 0.52, 0.38, 0.43, surfaceMaterial(light, "fur"), 0, -0.18, 0.38, 0.78);
+    ball(mask, dark, 0, -0.15, 0.6, 0.12, 0.075, 0.052);
+    for (const side of [-1, 1]) {
+      soft(mask, 0.16, 0.23, 0.14, surfaceMaterial(main), side * 0.48, 0.14, 0.02, 0.78).rotation.z = side * 0.55;
+      strand(mask, [[side * 0.27, 0.31, -0.1], [side * 0.39, 0.58, -0.11], [side * 0.6, 0.75, -0.12]], "#cba573", 0.07, 0.048);
+      for (let i = 0; i < 3; i++) strand(mask, [[side * (0.39 + i * 0.07), 0.56 + i * 0.07, -0.11], [side * (0.46 + i * 0.085), 0.76 + i * 0.055, -0.12]], "#cba573", 0.048, 0.034);
+      ball(mask, dark, side * 0.23, 0.04, 0.398, 0.085, 0.09, 0.045);
+    }
+  } else if (style === "monkey") {
+    soft(mask, 0.7, 0.59, 0.12, surfaceMaterial(light, "fur"), 0, -0.08, 0.39, 0.8);
+    soft(mask, 0.38, 0.25, 0.19, surfaceMaterial(light), 0, -0.2, 0.46, 0.8);
+    ball(mask, dark, 0, -0.14, 0.57, 0.075, 0.052, 0.035);
+    for (const side of [-1, 1]) {
+      soft(mask, 0.28, 0.31, 0.18, surfaceMaterial(main, "fur"), side * 0.51, 0.1, -0.02, 0.78);
+      soft(mask, 0.17, 0.19, 0.06, surfaceMaterial(light), side * 0.55, 0.1, 0.1, 0.78);
+      ball(mask, dark, side * 0.21, 0.065, 0.495, 0.083, 0.095, 0.038);
+    }
+    strand(mask, [[-0.11, -0.27, 0.56], [0, -0.29, 0.59], [0.11, -0.27, 0.56]], dark, 0.014, 0.009);
+  } else if (style === "fox") {
+    soft(mask, 0.67, 0.34, 0.14, surfaceMaterial(light, "fur"), 0, -0.16, 0.38, 0.8);
+    soft(mask, 0.34, 0.22, 0.44, surfaceMaterial(main), 0, -0.17, 0.52, 0.7);
+    ball(mask, dark, 0, -0.15, 0.75, 0.09, 0.06, 0.04);
+    for (const side of [-1, 1]) {
+      strand(mask, [[side * 0.23, 0.28, -0.06], [side * 0.4, 0.7, -0.04], [side * 0.48, 0.19, 0.08]], surfaceMaterial(main, "fur"), 0.13, 0.09);
+      strand(mask, [[side * 0.32, 0.36, 0.06], [side * 0.4, 0.57, 0.075], [side * 0.42, 0.3, 0.12]], surfaceMaterial(light), 0.057, 0.035);
+      ball(mask, dark, side * 0.22, 0.08, 0.408, 0.085, 0.08, 0.039);
+    }
+  }
+}
 export const OUTFITS = [
   ["hoodie", "Худи"],
   ["tshirt", "Футболка"],
@@ -548,13 +611,13 @@ export function avatar(input) {
   const coveredHair =
     p.headwear === "signature" &&
     ["builder", "miner", "doctor", "samurai", "astronaut"].includes(p.character);
-  if (p.hairstyle === "flame" && p.headwear !== "bear" && !coveredHair) {
+  if (p.hairstyle === "flame" && !fullHeadwear.has(p.headwear) && !coveredHair) {
     // Flowing fire grown thick on the head, driven by a shader (see fire.js).
     const built = buildFireHair();
     fireHair = built.mesh;
     fireMaterial = built.material;
     head.add(fireHair);
-  } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
+  } else if (p.hairstyle !== "bald" && !fullHeadwear.has(p.headwear) && !coveredHair) {
     sculptHair(head, hair, p.hairstyle);
   }
 
@@ -595,7 +658,7 @@ export function avatar(input) {
       box(head, 0.03, 0.18, 0.18, "#d9c7ed", side * 0.53, -0.025, -0.01, 0.025);
     }
   }
-  if (p.glasses && p.headwear !== "bear") {
+  if (p.glasses && !fullHeadwear.has(p.headwear)) {
     for (const side of [-1, 1]) {
       const rim = new T.Mesh(
         new T.TorusGeometry(0.167, 0.018, 8, 30),
@@ -621,6 +684,7 @@ export function avatar(input) {
     ball(bear, "#30222a", 0, -0.09, 0.565, 0.12, 0.075, 0.045);
     box(bear, 0.02, 0.09, 0.015, "#704e42", 0, -0.2, 0.575, 0.006);
   }
+  animalHeadwear(head, face, headwear);
   root.userData = { kind: "avatar", id: p.id };
   const rig = {
     root,

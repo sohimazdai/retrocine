@@ -2,7 +2,7 @@ import * as T from "three";
 import { RoundedBoxGeometry } from "./vendor/RoundedBoxGeometry.js";
 import { CHARACTERS, dressCharacter, animateCharacter } from "./characters.js";
 import { buildFireHair } from "./fire.js";
-import { sculptGeometry, sculptGeometries, strandGeometry, garmentGeometry, scalpGeometry } from "./sculpt.js";
+import { sculptGeometry, sculptGeometries, strandGeometry, garmentGeometry, scalpGeometry, facialHairGeometry } from "./sculpt.js";
 
 const geometries = new Map(),
   materials = new Map();
@@ -142,30 +142,78 @@ export function scalp(parent, color) {
 export function sculptHair(parent, color, style = "short") {
   const g = pivot(parent, 0, 0, 0), mat = surfaceMaterial(color, "hair");
   scalp(g, mat);
-  soft(g, 0.8, style === "long" ? 0.8 : 0.5, 0.23, mat, 0, style === "long" ? -0.06 : 0.08, -0.3, 0.8);
-  for (let i = 0; i < 7; i++) {
-    const x = -0.3 + i * 0.1;
-    strand(g, [[x * 0.7, 0.37, -0.17], [x, 0.43, 0.03], [x + 0.04, 0.34, 0.27], [x + 0.06, 0.22 + i * 0.014, 0.34]], mat, 0.07, 0.045);
-  }
-  for (const s of [-1, 1]) {
-    if (style === "long") {
+  const long = ["long", "wavy"].includes(style);
+  soft(g, 0.79, long ? 0.77 : 0.46, 0.25, mat, 0, long ? -0.08 : 0.07, -0.31, 0.78);
+  // Locks start inside the scalp surface. Their low relief reads as combed
+  // volume rather than detached tubes hovering over the forehead.
+  if (style === "swept") {
+    for (let i = 0; i < 7; i++) {
+      const d = i * 0.035;
+      strand(g, [[-0.34, 0.32 + d, 0.04 - d], [-0.18, 0.4 + d * 0.3, 0.19 - d], [0.08, 0.36 + d * 0.25, 0.28 - d], [0.37, 0.21 + d * 0.15, 0.22 - d]], mat, 0.053, 0.027);
+    }
+  } else if (style === "parted" || style === "wavy") {
+    for (const side of [-1, 1])
       for (let i = 0; i < 4; i++) {
-        const z = 0.07 - i * 0.11;
-        strand(g, [[s * 0.3, 0.31, z], [s * 0.43, 0.05, z], [s * 0.44, -0.25, z], [s * 0.38, -0.57, z + 0.04]], mat, 0.09, 0.07);
+        const d = i * 0.04;
+        strand(g, [[side * 0.015, 0.33 + d, 0.29 - d], [side * 0.18, 0.38 + d * 0.25, 0.29 - d], [side * 0.35, 0.26 + d * 0.1, 0.25 - d], [side * 0.41, 0.09, 0.08 - d]], mat, style === "wavy" ? 0.05 : 0.039, 0.026);
       }
-    } else strand(g, [[s * 0.32, 0.32, -0.03], [s * 0.41, 0.12, -0.02], [s * 0.39, -0.12, 0]], mat, 0.075, 0.055);
+  } else if (style === "textured") {
+    for (let i = 0; i < 10; i++) {
+      const x = -0.31 + i * 0.068, d = (i % 3) * 0.027;
+      strand(g, [[x, 0.37, -0.08], [x - 0.027, 0.39 + d, 0.1], [x + 0.025, 0.31 + d, 0.27], [x + 0.04, 0.23, 0.31]], mat, 0.045, 0.03);
+    }
+  } else {
+    for (let i = 0; i < 7; i++) {
+      const x = -0.29 + i * 0.095;
+      strand(g, [[x * 0.75, 0.37, -0.09], [x, 0.41, 0.1], [x + 0.025, 0.31, 0.27], [x + 0.035, 0.23, 0.31]], mat, 0.052, 0.03);
+    }
+  }
+  for (const side of [-1, 1]) {
+    if (long) {
+      for (let i = 0; i < 3; i++) {
+        const z = 0.1 - i * 0.11;
+        const points = style === "wavy"
+          ? [[side * 0.3, 0.3, z], [side * 0.44, 0.11, z + 0.01], [side * 0.37, -0.1, z + 0.06], [side * 0.47, -0.34, z + 0.01], [side * 0.39, -0.57, z + 0.06]]
+          : [[side * 0.3, 0.3, z], [side * 0.43, 0.07, z + 0.01], [side * (0.43 + i * 0.014), -0.22, z], [side * 0.38, -0.57, z + 0.02]];
+        strand(g, points, mat, style === "wavy" ? 0.075 : 0.09, 0.052);
+      }
+    } else {
+      strand(g, [[side * 0.33, 0.31, -0.04], [side * 0.42, 0.09, -0.015], [side * 0.39, -0.13, 0.01]], mat, 0.08, 0.05);
+    }
   }
   if (style === "bun") {
-    soft(g, 0.37, 0.33, 0.33, mat, 0, 0.43, -0.3, 0.9);
-    for (let i = 0; i < 5; i++)
-      strand(g, [[-0.14, 0.4, -0.3], [0, 0.56, -0.37 + i * 0.027], [0.15, 0.4, -0.3]], mat, 0.04, 0.035);
+    soft(g, 0.32, 0.28, 0.26, mat, 0, 0.28, -0.41, 0.82);
   }
-  if (style === "curly")
-    for (let i = 0; i < 14; i++) {
-      const a = i * 2.4, x = Math.sin(a) * 0.32, z = Math.cos(a) * 0.27;
-      strand(g, [[x - 0.08, 0.3, z], [x, 0.48, z + 0.06], [x + 0.09, 0.37, z], [x + 0.02, 0.29, z - 0.04]], mat, 0.06);
+  if (style === "curly") {
+    for (let i = 0; i < 8; i++) {
+      const x = -0.28 + i * 0.08;
+      strand(g, [[x, 0.37, 0.03], [x + 0.04, 0.41, 0.15], [x - 0.02, 0.31, 0.29], [x + 0.035, 0.24, 0.31]], mat, 0.064, 0.043);
     }
+  }
   return g;
+}
+
+export const FACIAL_HAIR = [
+  ["none", "Без бороды"],
+  ["short-beard", "Короткая борода с усами"],
+  ["full-beard", "Полная борода с усами"],
+  ["beard-only", "Борода без усов"],
+  ["mustache", "Только усы"],
+];
+
+export function addFacialHair(rig, style, color) {
+  if (!style || style === "none") return;
+  const parent = rig.features?.face || rig.face;
+  const group = pivot(parent, 0, 0, 0), mat = surfaceMaterial(color, "hair");
+  group.name = `${rig.profile.character || "avatar"}:facial-hair`;
+  if (rig.features) rig.features["facial-hair"] = group;
+  const add = (geometry) => {
+    const mesh = new T.Mesh(geometry, mat);
+    mesh.castShadow = mesh.receiveShadow = true;
+    group.add(mesh);
+  };
+  if (style !== "mustache") add(facialHairGeometry(style));
+  if (style !== "beard-only") add(facialHairGeometry("mustache"));
 }
 
 export const HAIRSTYLES = [
@@ -173,6 +221,10 @@ export const HAIRSTYLES = [
   ["long", "Длинные"],
   ["bun", "Пучок"],
   ["curly", "Кудри"],
+  ["parted", "Боковой пробор"],
+  ["swept", "Зачёс набок"],
+  ["textured", "Короткая текстурная"],
+  ["wavy", "Длинные волны"],
   ["flame", "Живой огонь"],
   ["bald", "Без волос"],
 ];
@@ -275,6 +327,7 @@ export function applyLook(profile, lookId) {
     character: null,
     skin: "#e4b59b",
     hairColor: "#493339",
+    facialHair: "none",
     shoeColor: "#f0e9f0",
     glasses: false,
     ...look,
@@ -292,6 +345,7 @@ export function normalizeProfile(profile) {
   const legacy = profile.hat || "headphones";
   return {
     ...profile,
+    facialHair: profile.facialHair || "none",
     hairstyle:
       profile.hairstyle ||
       (["long", "bun", "bald"].includes(legacy) ? legacy : "short"),
@@ -590,6 +644,7 @@ export function avatar(input) {
     profile: p,
   };
   dressCharacter(rig, p, { box, ball, material, cylinder, pivot, soft, strand, garment, sculptHair, surfaceMaterial, scalp });
+  addFacialHair(rig, p.facialHair, hair);
   return rig;
 }
 

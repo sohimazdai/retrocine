@@ -570,6 +570,10 @@ test("avatar editor previews equipment live and cancellation preserves the avata
     .click();
   a.tick(0.2);
   assert(a.run("!!avatarEditor.rig.fireHair"));
+  a.w.document.querySelector('[data-choice="hairstyle"][data-value="wavy"]').click();
+  a.w.document.querySelector('[data-choice="facialHair"][data-value="full-beard"]').click();
+  assert.equal(a.run("avatarEditor.rig.profile.hairstyle"), "wavy");
+  assert(a.run('!!avatarEditor.rig.root.getObjectByName("avatar:facial-hair")'));
   assert.equal(a.run("active.profile"), before);
   a.run('$("#modal").close()');
   assert.equal(a.run("avatarEditor"), null);

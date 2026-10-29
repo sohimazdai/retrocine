@@ -4,6 +4,7 @@ import {
   normalizeProfile,
   applyLook,
   HAIRSTYLES,
+  FACIAL_HAIR,
   HEADWEAR,
   OUTFITS,
   FOOTWEAR,
@@ -283,7 +284,7 @@ export class AvatarEditor {
       this.renderGallery();
     } else this.thumbnailQueue = [];
     if (this.tab === "head")
-      panel.innerHTML = `<label class="field-label">Кожа</label>${swatches("skin", ["#edbda1", "#e4b59b", "#bd8f70", "#90634d", "#5e4135"], p)}<label class="field-label">Причёска</label>${options("hairstyle", HAIRSTYLES, p)}<label class="field-label">Цвет волос</label>${swatches("hairColor", ["#493339", "#292530", "#a16d44", "#d6ae6c", "#a88cae"], p)}<label class="field-label">Головной убор</label>${options("headwear", p.character ? [["signature", "Оригинальный"], ...HEADWEAR] : HEADWEAR, p)}<label class="field-label">Очки</label>${options(
+      panel.innerHTML = `<label class="field-label">Кожа</label>${swatches("skin", ["#edbda1", "#e4b59b", "#bd8f70", "#90634d", "#5e4135"], p)}<label class="field-label">Причёска</label>${options("hairstyle", HAIRSTYLES, p)}<label class="field-label">Борода и усы</label>${options("facialHair", FACIAL_HAIR, p)}<label class="field-label">Цвет волос</label>${swatches("hairColor", ["#493339", "#292530", "#a16d44", "#d6ae6c", "#a88cae"], p)}<label class="field-label">Головной убор</label>${options("headwear", p.character ? [["signature", "Оригинальный"], ...HEADWEAR] : HEADWEAR, p)}<label class="field-label">Очки</label>${options(
         "glasses",
         [
           ["false", "Без очков"],

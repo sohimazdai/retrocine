@@ -1,4 +1,5 @@
 import * as T from "three";
+import { hoodGeometry, tailGeometry } from "./sculpt.js";
 
 export const CHARACTER_CATEGORIES = [
   ["all", "Все"],
@@ -11,6 +12,7 @@ export const CHARACTER_CATEGORIES = [
 ];
 const defaults = {
   hairstyle: "bald",
+  facialHair: "none",
   headwear: "signature",
   outfit: "signature",
   footwear: "signature",
@@ -83,11 +85,12 @@ export const CHARACTERS = [
   {
     id: "soldier",
     name: "Солдат",
-    subtitle: "Шлем и походное снаряжение",
+    subtitle: "Soldier · Team Fortress 2",
     category: "jobs",
-    color: "#6c7952",
-    pantsColor: "#626f4b",
-    shoeColor: "#3b3e31",
+    color: "#b64134",
+    skin: "#d4a47e",
+    pantsColor: "#5b5149",
+    shoeColor: "#302c2b",
   },
   {
     id: "robot",
@@ -145,6 +148,8 @@ export const CHARACTERS = [
     id: "ice-king",
     name: "Ледяной король",
     subtitle: "Корона и белая борода",
+    facialHair: "full-beard",
+    hairColor: "#f2f1ec",
     category: "fantasy",
     color: "#487dd1",
     skin: "#99cee7",
@@ -211,7 +216,7 @@ export const CHARACTERS = [
     skin: "#e8b074",
     pantsColor: "#23304e",
     shoeColor: "#23242a",
-    hairstyle: "short",
+    hairstyle: "swept",
     hairColor: "#e8d08a",
   },
   {
@@ -223,7 +228,8 @@ export const CHARACTERS = [
     skin: "#d9a173",
     pantsColor: "#2a2d36",
     shoeColor: "#d64f7a",
-    hairstyle: "short",
+    hairstyle: "textured",
+    facialHair: "short-beard",
     hairColor: "#2d2420",
   },
   {
@@ -247,7 +253,8 @@ export const CHARACTERS = [
     skin: "#d7a981",
     pantsColor: "#2a2622",
     shoeColor: "#211d1a",
-    hairstyle: "curly",
+    hairstyle: "wavy",
+    facialHair: "full-beard",
     hairColor: "#241c1d",
   },
   {
@@ -514,12 +521,14 @@ export function dressCharacter(rig, p, primitives) {
       if (tall) rig.secondary.push({ object: ear, type: "ear", side: s });
     }
   };
-  const tail = (color, tipColor) => {
+  const tail = (color, tipColor, shape = "wolf") => {
     const g = part("tail", torso);
-    g.position.set(0, -0.24, -0.15);
-    const stem = ball(g, color, 0, 0.02, -0.23, 0.105, 0.1, 0.3);
-    stem.rotation.x = -0.3;
-    ball(g, tipColor, 0, 0.12, -0.48, 0.12, 0.115, 0.16);
+    g.position.set(0, -0.22, -0.21);
+    const points = shape === "lion"
+      ? [[0, 0, 0], [0, -0.1, -0.2], [0.04, -0.24, -0.41], [0.07, -0.17, -0.61], [0.08, -0.03, -0.69]]
+      : [[0, 0, 0], [0, -0.02, -0.19], [0.05, -0.06, -0.43], [0.08, 0.06, -0.65], [0.08, 0.15, -0.72]];
+    const radii = shape === "lion" ? [0.07, 0.065, 0.055, 0.12, 0.008] : [0.13, 0.16, 0.2, 0.145, 0.008];
+    mesh(g, tailGeometry(points, radii, color, tipColor), new T.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.94, sheen: 0.65 }));
     rig.secondary.push({ object: g, type: "tail" });
   };
 
@@ -530,48 +539,28 @@ export function dressCharacter(rig, p, primitives) {
       // The face is lost in the shadow of the hood.
       face.visible = false;
       const g = part("raincoat-hood");
-      // A tall pointed hood facing forward, framing a dark opening — Six's signature silhouette.
-      const outer = new T.Shape();
-      outer.moveTo(0.1, 0.82);
-      outer.bezierCurveTo(-0.04, 0.64, -0.42, 0.3, -0.57, -0.04);
-      outer.quadraticCurveTo(-0.65, -0.2, -0.43, -0.38);
-      outer.quadraticCurveTo(0, -0.52, 0.43, -0.38);
-      outer.quadraticCurveTo(0.62, -0.24, 0.5, 0.08);
-      outer.quadraticCurveTo(0.37, 0.53, 0.1, 0.82);
-      const hole = new T.Path();
-      hole.moveTo(-0.37, -0.28);
-      hole.quadraticCurveTo(0, -0.43, 0.36, -0.28);
-      hole.quadraticCurveTo(0.42, -0.14, 0.29, 0.07);
-      hole.quadraticCurveTo(0.16, 0.2, 0.04, 0.26);
-      hole.quadraticCurveTo(-0.3, 0.1, -0.37, -0.28);
-      outer.holes.push(hole);
-      mesh(
-        g,
-        new T.ExtrudeGeometry(outer, { depth: 0.66, bevelEnabled: true, bevelSize: 0.025, bevelThickness: 0.035, bevelSegments: 3 }),
-        p.color,
-        0,
-        0.02,
-        -0.22,
-      );
-      // The shadowed inside of the hood and a hint of the little chin.
-      box(g, 0.83, 0.73, 0.12, "#241f15", 0, -0.04, 0.05, 0.06);
-      ball(g, p.skin, 0, -0.22, 0.23, 0.18, 0.11, 0.09);
-      box(g, 0.47, 0.22, 0.1, "#241f15", 0, -0.025, 0.28, 0.06);
-      box(g, 0.09, 0.012, 0.015, "#876b4b", 0.02, -0.25, 0.315, 0.004);
-      // A rounded shell closing the back and sides.
-      soft(g, 0.92, 0.9, 0.5, surfaceMaterial(p.color), 0, 0.06, -0.24, 0.85);
+      const mat = surfaceMaterial(p.color, "cloth");
+      const { geometry, edges } = hoodGeometry();
+      mesh(g, geometry, new T.MeshPhysicalMaterial({ color: p.color, roughness: 0.82, side: T.DoubleSide }));
+      // The opening sits in shadow under the curved brow, with a small face
+      // recessed inside. The rim follows the actual 3D shell boundary.
+      soft(g, 0.7, 0.51, 0.09, "#231e14", 0, -0.095, 0.22, 0.82);
+      soft(g, 0.17, 0.095, 0.055, p.skin, 0.04, -0.24, 0.273, 0.82);
+      strand(g, [[-0.075, -0.255, 0.315], [0, -0.26, 0.322], [0.075, -0.255, 0.315]], "#796449", 0.006, 0.004);
+      for (const edge of edges)
+        strand(g, edge.slice(10).filter((_, i) => i % 3 === 0), mat, 0.043, 0.029);
     }
     if (signatureBody) {
       const g = garment();
       // A long yellow slicker: wide at the hem, past the hips, with a seam and two pockets.
-      loft(g, [[-0.5, 0, 0], [-0.49, 0.39, 0.28], [-0.36, 0.35, 0.26], [-0.08, 0.27, 0.2], [0.16, 0.22, 0.16], [0.22, 0.1, 0.1], [0.23, 0, 0]], p.color, 0.035);
-      box(g, 0.03, 0.66, 0.025, "#c28f1f", 0, -0.12, 0.3, 0.008);
-      for (const y of [0.1, -0.08, -0.26]) {
+      loft(g, [[-0.34, 0, 0], [-0.33, 0.37, 0.27], [-0.24, 0.35, 0.26], [-0.08, 0.27, 0.2], [0.16, 0.22, 0.16], [0.22, 0.1, 0.1], [0.23, 0, 0]], p.color, 0.035);
+      box(g, 0.03, 0.48, 0.025, "#c28f1f", 0, -0.07, 0.3, 0.008);
+      for (const y of [0.1, -0.05, -0.2]) {
         box(g, 0.11, 0.045, 0.04, "#e8cb43", 0.035, y, 0.31, 0.012);
         ball(g, "#a78d25", 0.07, y, 0.337, 0.018, 0.018, 0.01);
       }
       for (const s of [-1, 1]) {
-        box(g, 0.15, 0.14, 0.04, "#d9b02f", s * 0.17, -0.26, 0.28, 0.03);
+        box(g, 0.15, 0.14, 0.04, "#d9b02f", s * 0.17, -0.19, 0.28, 0.03);
         // Sleeve cuffs.
         box(arms[s === -1 ? 0 : 1], 0.2, 0.16, 0.2, p.color, 0, -0.07, 0, 0.05);
       }
@@ -837,39 +826,52 @@ export function dressCharacter(rig, p, primitives) {
       paws(p.shoeColor);
     }
   }
-  if (["alf", "cheburashka"].includes(id)) {
+  if (id === "alf") {
+    const g = newFace(p.skin, 0.82, 0.76, 0.69);
+    g.position.z = 0.055;
+    const fur = part("fur-head"), mat = surfaceMaterial(p.color, "fur");
+    soft(fur, 0.98, 0.87, 0.72, mat, 0, 0.015, -0.11, 0.8);
+    const ears = part("melmac-ears");
+    for (const side of [-1, 1]) {
+      const ear = soft(ears, 0.37, 0.2, 0.16, mat, side * 0.49, 0.12, -0.05, 0.75);
+      ear.rotation.z = -side * 0.23;
+      soft(ears, 0.22, 0.11, 0.035, "#80523d", side * 0.52, 0.12, 0.046, 0.8);
+    }
+    rig.eyes.forEach((eye) => {
+      eye.children.forEach((child) => (child.visible = false));
+      soft(eye, 0.17, 0.17, 0.05, "#e7cfb6", 0, 0, -0.002, 0.9);
+      soft(eye, 0.075, 0.105, 0.025, "#332622", 0.006, 0.005, 0.037, 0.9);
+    });
+    rig.brows.forEach((brow) => (brow.visible = false));
+    for (const side of [-1, 1])
+      soft(g, 0.2, 0.08, 0.075, mat, side * 0.205, 0.17, 0.34, 0.8);
+    const snout = part("alf-snout");
+    soft(snout, 0.35, 0.25, 0.53, mat, 0, -0.1, 0.55, 0.7);
+    soft(snout, 0.22, 0.12, 0.08, "#694432", 0, -0.035, 0.823, 0.85);
+    rig.mouth.position.set(0, -0.23, 0.72);
+    for (const child of rig.mouth.children) child.visible = false;
+    strand(rig.mouth, [[-0.075, 0.008, 0], [0, -0.018, 0.02], [0.075, 0.008, 0]], "#704736", 0.008, 0.005);
+    for (let i = 0; i < 4; i++) {
+      const x = -0.13 + i * 0.086;
+      strand(fur, [[x, 0.36, 0.1], [x + 0.025, 0.49, 0.12], [x + 0.06, 0.39, 0.2]], mat, 0.065, 0.045);
+    }
+    if (signatureBody) softBody(p.color, "#c08e55");
+    paws(p.shoeColor);
+  }
+  if (id === "cheburashka") {
     const g = newFace(p.skin, 0.88, 0.78, 0.74);
     const fur = part("fur-head");
     soft(fur, 1, 0.88, 0.72, surfaceMaterial(p.color), 0, 0.015, -0.12, 0.85);
     g.position.z = 0.08;
     const ears = part("round-ears");
-    for (const s of [-1, 1]) {
-      const big = id === "cheburashka";
-      const ear = pivot(ears, s * (big ? 0.67 : 0.43), big ? 0.03 : 0.37, -0.08);
-      ball(ear, p.color, 0, 0, 0, big ? 0.34 : 0.18, big ? 0.36 : 0.2, 0.14);
-      ball(ear, big ? "#aa7b50" : "#694831", 0, 0, 0.12, big ? 0.25 : 0.1, big ? 0.27 : 0.12, 0.035);
-      rig.secondary.push({ object: ear, type: "ear", side: s });
+    for (const side of [-1, 1]) {
+      const ear = pivot(ears, side * 0.67, 0.03, -0.08);
+      ball(ear, p.color, 0, 0, 0, 0.34, 0.36, 0.14);
+      ball(ear, "#aa7b50", 0, 0, 0.12, 0.25, 0.27, 0.035);
+      rig.secondary.push({ object: ear, type: "ear", side });
     }
-    if (id === "alf") {
-      // Long ridged muzzle and the swept tuft distinguish ALF from the bears.
-      const snout = part("alf-snout");
-      ball(snout, p.color, 0, -0.07, 0.53, 0.22, 0.17, 0.29);
-      ball(snout, "#684730", 0, -0.015, 0.78, 0.12, 0.075, 0.055);
-      for (const z of [0.49, 0.58, 0.67])
-        tube(snout, [[-0.16, 0, z], [0, 0.08, z], [0.16, 0, z]], "#906036", 0.012);
-      for (let i = 0; i < 5; i++) {
-        const tuft = cone(fur, p.hairColor, 0.085, 0.28, -0.16 + i * 0.08, 0.51, -0.04, 7);
-        tuft.rotation.z = -0.35;
-      }
-      rig.mouth.position.set(0, -0.23, 0.57);
-      if (signatureBody) {
-        softBody(p.color, "#c08e55");
-        tail(p.color, p.color);
-      }
-    } else {
-      ball(g, "#443025", 0, -0.09, 0.415, 0.075, 0.05, 0.045);
-      if (signatureBody) softBody(p.color, "#ad8054");
-    }
+    ball(g, "#443025", 0, -0.09, 0.415, 0.075, 0.05, 0.045);
+    if (signatureBody) softBody(p.color, "#ad8054");
     paws(p.shoeColor);
   }
   if (id === "winnie-pooh") {
@@ -915,7 +917,10 @@ export function dressCharacter(rig, p, primitives) {
   if (id === "carlson") {
     if (signatureHead) {
       const hair = part("ginger-hair");
-      sculptHair(hair, p.hairColor, "curly");
+      sculptHair(hair, p.hairColor, "swept");
+      const mat = surfaceMaterial(p.hairColor, "hair");
+      for (let i = 0; i < 4; i++)
+        strand(hair, [[-0.23 + i * 0.08, 0.36, 0.18], [-0.16 + i * 0.08, 0.47, 0.2], [-0.07 + i * 0.08, 0.35, 0.3]], mat, 0.053, 0.038);
     }
     if (signatureBody) {
       const body = softBody(p.color);
@@ -1010,44 +1015,28 @@ export function dressCharacter(rig, p, primitives) {
       });
   }
   if (id === "labubu") {
-    const g = newFace(p.skin, 0.86, 0.76, 0.73);
-    const fur = part("fur-head");
-    soft(fur, 1.02, 0.88, 0.76, surfaceMaterial(p.color), 0, 0.01, -0.095, 0.85);
-    // Face projects beyond the fur shell; the fringe is a separate ring of tufts.
-    g.position.z = 0.12;
-    furryEars(fur, p.color, "#d7b8a0", true);
-    for (let i = 0; i < 13; i++) {
-      const a = (i / 13) * Math.PI * 2;
-      ball(
-        fur,
-        p.color,
-        Math.sin(a) * 0.45,
-        Math.cos(a) * 0.36,
-        0.17,
-        0.12,
-        0.1,
-        0.12,
-      );
+    const g = newFace(p.skin, 0.88, 0.75, 0.72);
+    const fur = part("fur-head"), furMat = surfaceMaterial(p.color, "fur");
+    soft(fur, 1.02, 0.9, 0.77, furMat, 0, 0.01, -0.11, 0.78);
+    g.position.z = 0.075;
+    for (const side of [-1, 1]) {
+      const ear = pivot(fur, side * 0.34, 0.56, -0.04);
+      ear.rotation.z = -side * 0.16;
+      soft(ear, 0.21, 0.7, 0.16, furMat, 0, 0, 0, 0.82);
+      soft(ear, 0.115, 0.49, 0.03, "#cdac9a", 0, 0.025, 0.084, 0.82);
+      rig.secondary.push({ object: ear, type: "ear", side });
+      soft(g, 0.11, 0.048, 0.024, "#d8a7a0", side * 0.29, -0.12, 0.361, 0.8);
     }
-    rig.mouth.position.set(0, -0.24, 0.43);
-    rig.mouth.children.forEach((c) => (c.visible = false));
-    box(rig.mouth, 0.51, 0.135, 0.05, "#4e302b", 0, 0, 0, 0.045);
+    rig.brows.forEach((brow) => (brow.visible = false));
+    const mouth = rig.mouth;
+    mouth.position.set(0, -0.205, 0.342);
+    mouth.children.forEach((child) => (child.visible = false));
+    soft(mouth, 0.53, 0.16, 0.035, "#593934", 0, 0, 0, 0.85);
     for (let i = 0; i < 9; i++) {
-      const tooth = cone(
-        rig.mouth,
-        "#fff4d8",
-        0.031,
-        0.085,
-        -0.216 + i * 0.054,
-        0.006,
-        0.043,
-        3,
-      );
-      tooth.rotation.z = Math.PI;
+      const x = -0.21 + i * 0.0525;
+      const tooth = soft(mouth, 0.043, 0.075, 0.026, "#fff4dd", x, 0.025, 0.024, 0.75);
       tooth.userData.tooth = true;
     }
-    for (const s of [-1, 1])
-      ball(g, "#dba79e", s * 0.28, -0.14, 0.41, 0.075, 0.045, 0.018);
     if (signatureBody) softBody(p.color, "#decab2");
     paws(p.color);
   }
@@ -1057,10 +1046,19 @@ export function dressCharacter(rig, p, primitives) {
     if (signatureHead) {
       const g = newFace("#2c303f", 0.9, 0.8, 0.77);
       // The exposed chin and set mouth.
-      box(g, 0.44, 0.24, 0.07, p.skin, 0, -0.26, 0.39, 0.07);
-      rig.mouth.position.set(0, -0.2, 0.46);
+      const cowl = g.children.find((child) => child.isMesh);
+      cowl.geometry = cowl.geometry.clone();
+      const pos = cowl.geometry.attributes.position, skinTone = new T.Color(p.skin), maskTone = new T.Color("#2c303f"), colors = [];
+      for (let i = 0; i < pos.count; i++) {
+        const exposed = (1 - T.MathUtils.smoothstep(pos.getY(i), -0.65, -0.38)) * T.MathUtils.smoothstep(pos.getZ(i), 0.1, 0.4);
+        const shade = maskTone.clone().lerp(skinTone, exposed);
+        colors.push(shade.r, shade.g, shade.b);
+      }
+      cowl.geometry.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+      cowl.material = new T.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.63 });
+      rig.mouth.position.set(0, -0.255, 0.373);
       rig.mouth.children.forEach((c) => (c.visible = false));
-      box(rig.mouth, 0.2, 0.028, 0.03, "#7a5247", 0, 0, 0, 0.01);
+      strand(rig.mouth, [[-0.09, 0.005, 0], [0, -0.012, 0.008], [0.09, 0.005, 0]], "#6d4640", 0.009, 0.005);
       // Angled white eye lenses.
       rig.eyes.forEach((e, i) => {
         const s = i ? 1 : -1;
@@ -1140,16 +1138,18 @@ export function dressCharacter(rig, p, primitives) {
   if (id === "lego-boy") {
     const g = newFace(p.skin, 0.01, 0.01, 0.01);
     g.children.filter((c) => c.isMesh).forEach((c) => (c.visible = false));
-    cylinder(g, p.skin, 0.39, 0.39, 0.66, 0, 0, 0);
-    cylinder(g, p.skin, 0.16, 0.16, 0.13, 0, 0.395, 0);
+    // Rounded vertical rim keeps the minifigure silhouette without a sharp can edge.
+    const profile = [[0, -0.27], [0.22, -0.27], [0.285, -0.245], [0.315, -0.2], [0.315, 0.2], [0.285, 0.245], [0.22, 0.27], [0, 0.27]];
+    mesh(g, new T.LatheGeometry(profile.map(([r, y]) => new T.Vector2(r, y)), 40), p.skin);
+    cylinder(g, p.skin, 0.12, 0.12, 0.09, 0, 0.305, 0);
     rig.eyes.forEach((e, i) => {
-      e.position.set(i ? 0.155 : -0.155, 0.045, 0.363);
+      e.position.set(i ? 0.13 : -0.13, 0.045, 0.31);
       e.children.forEach((c) => (c.visible = false));
       ball(e, "#29272a", 0, 0, 0, 0.045, 0.058, 0.018);
     });
     rig.brows.forEach((b) => (b.visible = false));
     rig.mouth.children.forEach((c) => (c.visible = false));
-    rig.mouth.position.set(0, -0.075, 0.38);
+    rig.mouth.position.set(0, -0.075, 0.32);
     tube(
       rig.mouth,
       [
@@ -1276,28 +1276,33 @@ export function dressCharacter(rig, p, primitives) {
   }
   if (id === "soldier") {
     if (signatureHead) {
-      const g = hardhat("#66714d");
-      box(g, 0.86, 0.07, 0.72, "#879365", 0, 0.18, 0.02, 0.02);
+      const helmet = part("tf2-helmet"), steel = "#5d635f";
+      soft(helmet, 0.99, 0.38, 0.83, steel, 0, 0.34, -0.04, 0.73);
+      cylinder(helmet, steel, 0.48, 0.49, 0.06, 0, 0.2, 0).scale.z = 0.88;
+      soft(helmet, 0.59, 0.085, 0.2, steel, 0, 0.15, 0.38, 0.78);
+      rig.brows.forEach((brow) => (brow.visible = false));
+      rig.eyes.forEach((eye) => eye.children[0].scale.set(0.08, 0.08, 0.035));
     }
     if (signatureBody) {
-      const g = garment();
-      box(g, 0.49, 0.46, 0.4, p.color, 0, -0.02, 0, 0.06);
-      for (let i = 0; i < 8; i++)
-        box(
-          g,
-          i % 2 ? 0.1 : 0.14,
-          0.065,
-          0.025,
-          ["#a1a17c", "#3d4d38", "#907c54"][i % 3],
-          ((i % 3) - 1) * 0.15,
-          0.14 - Math.floor(i / 3) * 0.11,
-          0.211,
-          0.015,
-        );
-      for (const s of [-1, 1])
-        box(g, 0.16, 0.17, 0.08, "#505b40", s * 0.115, -0.13, 0.25, 0.02);
-      box(g, 0.41, 0.43, 0.2, "#7b8056", 0, 0.005, -0.28, 0.05);
-      belt(g, "#404b35");
+      const jacket = garment("tf2-jacket"), leather = surfaceMaterial("#6b4d38", "leather");
+      soft(jacket, 0.54, 0.49, 0.42, surfaceMaterial(p.color), 0, -0.02, 0, 0.73);
+      for (const side of [-1, 1]) {
+        soft(jacket, 0.17, 0.25, 0.13, "#d2c3a7", side * 0.13, 0.17, 0.16, 0.78);
+        soft(jacket, 0.15, 0.11, 0.06, leather, side * 0.15, -0.15, 0.24, 0.75);
+        soft(elbows[side === -1 ? 0 : 1], 0.18, 0.23, 0.2, "#3b3d3c", 0, -0.07, 0, 0.78);
+      }
+      strand(jacket, [[-0.21, 0.19, 0.18], [-0.06, 0.04, 0.25], [0.19, -0.19, 0.21]], leather, 0.048, 0.027);
+      soft(jacket, 0.52, 0.085, 0.41, leather, 0, -0.2, 0, 0.75);
+      // The rocket launcher is held at the right shoulder and follows the torso.
+      const launcher = part("rocket-launcher", torso);
+      launcher.position.set(0.29, 0.15, 0.07);
+      const barrel = cylinder(launcher, "#333838", 0.115, 0.115, 0.77, 0, 0, 0);
+      barrel.rotation.x = Math.PI / 2;
+      const muzzle = cylinder(launcher, "#697171", 0.135, 0.135, 0.065, 0, 0, 0.38);
+      muzzle.rotation.x = Math.PI / 2;
+      const hole = cylinder(launcher, "#151c1e", 0.095, 0.095, 0.008, 0, 0, 0.42);
+      hole.rotation.x = Math.PI / 2;
+      box(launcher, 0.15, 0.11, 0.27, "#776551", 0, -0.12, -0.1, 0.025);
     }
     paws(p.shoeColor);
   }
@@ -1394,7 +1399,7 @@ export function dressCharacter(rig, p, primitives) {
       rig.mouth.position.set(0, -0.285, 0.577);
       if (id === "wolf") {
         furryEars(g, p.skin, "#c9b8b7");
-        tail(p.color, "#e4e4df");
+        tail(p.color, "#e4e4df", "wolf");
       } else {
         const mane = part("mane");
         for (let i = 0; i < 14; i++) {
@@ -1414,7 +1419,7 @@ export function dressCharacter(rig, p, primitives) {
           ball(g, p.skin, s * 0.4, 0.34, 0.05, 0.13, 0.13, 0.1);
           ball(g, "#986a48", s * 0.4, 0.34, 0.14, 0.065, 0.065, 0.02);
         }
-        tail(p.color, "#9d6036");
+        tail(p.color, "#9d6036", "lion");
       }
       if (signatureBody)
         softBody(p.color, id === "wolf" ? "#c9d0d3" : "#efd09b");
@@ -1435,16 +1440,6 @@ export function dressCharacter(rig, p, primitives) {
     paws(p.skin);
   }
   if (id === "ice-king") {
-    const beard = part("white-beard");
-    const b = cone(beard, "#f2f1ec", 0.28, 0.7, 0, -0.48, 0.32, 12);
-    b.rotation.z = Math.PI;
-    b.scale.z = 0.5;
-    for (const s of [-1, 1]) {
-      ball(beard, "#f4f3ed", s * 0.12, -0.19, 0.42, 0.18, 0.07, 0.06);
-      ball(beard, "#f4f3ed", s * 0.39, 0.02, -0.06, 0.13, 0.38, 0.18);
-    }
-    const nose = cone(beard, p.skin, 0.085, 0.29, 0, -0.045, 0.51, 10);
-    nose.rotation.x = Math.PI / 2;
     if (signatureHead) {
       const crown = part("ice-crown");
       cylinder(crown, "#e7be4f", 0.42, 0.42, 0.12, 0, 0.38, 0);
@@ -1681,11 +1676,6 @@ export function dressCharacter(rig, p, primitives) {
   }
   if (id === "trump") {
     // A big blond comb-over swept forward and to the side over the base hair, a navy suit, red tie.
-    const hair = part("combover");
-    const crest = box(hair, 0.92, 0.3, 0.6, p.hairColor, 0.04, 0.44, 0.1, 0.15);
-    crest.rotation.z = -0.12;
-    crest.rotation.x = 0.22;
-    box(hair, 0.52, 0.18, 0.24, p.hairColor, -0.2, 0.5, 0.26, 0.08).rotation.z = 0.28;
     if (signatureBody) {
       const g = garment();
       box(g, 0.47, 0.5, 0.35, p.color, 0, -0.07, 0, 0.08);
@@ -1701,10 +1691,6 @@ export function dressCharacter(rig, p, primitives) {
   }
   if (id === "messi") {
     // A trimmed beard over the base short hair, the sky-blue-and-white striped Argentina shirt with 10.
-    const beard = part("beard");
-    for (const s of [-1, 1]) box(beard, 0.09, 0.3, 0.14, p.hairColor, s * 0.38, -0.12, 0.3, 0.04);
-    box(beard, 0.5, 0.12, 0.12, p.hairColor, 0, -0.33, 0.33, 0.05);
-    box(beard, 0.3, 0.09, 0.1, p.hairColor, 0, -0.18, 0.42, 0.04);
     if (signatureBody) {
       const g = garment();
       box(g, 0.47, 0.44, 0.35, "#eef3f6", 0, -0.03, 0, 0.08);
@@ -1736,21 +1722,14 @@ export function dressCharacter(rig, p, primitives) {
   }
   if (id === "jon-snow") {
     // A short beard over the base curly hair, a heavy black fur mantle over leather.
-    const beard = part("beard");
-    for (const s of [-1, 1]) box(beard, 0.1, 0.32, 0.15, p.hairColor, s * 0.37, -0.12, 0.3, 0.05);
-    box(beard, 0.56, 0.16, 0.14, p.hairColor, 0, -0.32, 0.33, 0.06);
     if (signatureBody) {
       const g = garment();
       box(g, 0.47, 0.47, 0.36, "#3b332e", 0, -0.05, 0, 0.07);
       box(g, 0.12, 0.42, 0.03, "#2a2420", 0, -0.04, 0.18, 0.012);
       // Black fur mantle: a thick ruff of dark tufts over the shoulders.
-      const fur = part("fur-mantle", torso);
-      fur.position.set(0, 0.16, 0);
-      for (let i = 0; i < 16; i++) {
-        const a = (i / 16) * Math.PI * 2;
-        ball(fur, p.color, Math.sin(a) * 0.34, 0.02 + Math.cos(a * 2) * 0.03, Math.cos(a) * 0.26 - 0.02, 0.12, 0.15, 0.12);
-      }
-      rig.secondary.push({ object: fur, type: "ear", side: 0 });
+      const fur = part("fur-mantle", torso), furMat = surfaceMaterial(p.color, "fur");
+      fur.position.set(0, 0.16, -0.08);
+      soft(fur, 0.77, 0.22, 0.51, furMat, 0, 0, 0, 0.7);
       // A sword hilt over the shoulder.
       const hilt = part("sword", torso);
       cylinder(hilt, "#4a4036", 0.03, 0.03, 0.26, -0.26, 0.3, -0.24).rotation.z = 0.4;

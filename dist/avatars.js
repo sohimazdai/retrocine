@@ -2,6 +2,7 @@ import * as T from "three";
 import { RoundedBoxGeometry } from "./vendor/RoundedBoxGeometry.js";
 import { CHARACTERS, dressCharacter, animateCharacter } from "./characters.js";
 import { buildFireHair } from "./fire.js";
+import { sculptGeometry, sculptGeometries, strandGeometry, garmentGeometry, scalpGeometry } from "./sculpt.js";
 
 const geometries = new Map(),
   materials = new Map();
@@ -45,7 +46,7 @@ export function box(
   parent.add(mesh);
   return mesh;
 }
-const sphereGeometry = new T.SphereGeometry(1, 20, 14);
+const sphereGeometry = new T.SphereGeometry(1, 32, 20);
 export function ball(
   parent,
   color,
@@ -88,6 +89,83 @@ function pivot(parent, x, y, z) {
   group.position.set(x, y, z);
   parent.add(group);
   return group;
+}
+
+export function surfaceMaterial(color, surface = "cloth") {
+  const key = `${surface}|${color}`;
+  if (!materials.has(key)) {
+    const settings = {
+      skin: { roughness: 0.57, sheen: 0.12, sheenRoughness: 0.8 },
+      eyes: { roughness: 0.16, clearcoat: 0.65, clearcoatRoughness: 0.12 },
+      hair: { roughness: 0.48, sheen: 0.25, sheenRoughness: 0.65 },
+      leather: { roughness: 0.56, clearcoat: 0.08 },
+      fur: { roughness: 0.94, sheen: 0.75, sheenRoughness: 0.95, sheenColor: new T.Color("#dbcba5") },
+      cloth: { roughness: 0.88, sheen: 0.3, sheenRoughness: 1 },
+    }[surface];
+    materials.set(key, new T.MeshPhysicalMaterial({ color, ...settings }));
+  }
+  return materials.get(key);
+}
+
+export function soft(parent, w, h, d, color, x = 0, y = 0, z = 0, exponent = 0.7) {
+  const m = new T.Mesh(sculptGeometry(exponent, Math.max(w, h, d) < 0.35), typeof color === "string" ? material(color) : color);
+  m.scale.set(w / 2, h / 2, d / 2);
+  m.position.set(x, y, z);
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+export function strand(parent, points, color, width, depth = width) {
+  const m = new T.Mesh(strandGeometry(points, width, depth), typeof color === "string" ? surfaceMaterial(color, "hair") : color);
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+export function garment(parent, profile, color, folds = 0.025) {
+  const m = new T.Mesh(garmentGeometry(profile, folds), typeof color === "string" ? surfaceMaterial(color) : color);
+  m.castShadow = m.receiveShadow = true;
+  parent.add(m);
+  return m;
+}
+
+// A cap that follows the scalp and separate continuous locks. The face stays
+// exposed; long hair is concentrated behind the head and at the temples.
+export function scalp(parent, color) {
+  const mesh = new T.Mesh(scalpGeometry(), typeof color === "string" ? surfaceMaterial(color, "hair") : color);
+  mesh.castShadow = mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
+export function sculptHair(parent, color, style = "short") {
+  const g = pivot(parent, 0, 0, 0), mat = surfaceMaterial(color, "hair");
+  scalp(g, mat);
+  soft(g, 0.8, style === "long" ? 0.8 : 0.5, 0.23, mat, 0, style === "long" ? -0.06 : 0.08, -0.3, 0.8);
+  for (let i = 0; i < 7; i++) {
+    const x = -0.3 + i * 0.1;
+    strand(g, [[x * 0.7, 0.37, -0.17], [x, 0.43, 0.03], [x + 0.04, 0.34, 0.27], [x + 0.06, 0.22 + i * 0.014, 0.34]], mat, 0.07, 0.045);
+  }
+  for (const s of [-1, 1]) {
+    if (style === "long") {
+      for (let i = 0; i < 4; i++) {
+        const z = 0.07 - i * 0.11;
+        strand(g, [[s * 0.3, 0.31, z], [s * 0.43, 0.05, z], [s * 0.44, -0.25, z], [s * 0.38, -0.57, z + 0.04]], mat, 0.09, 0.07);
+      }
+    } else strand(g, [[s * 0.32, 0.32, -0.03], [s * 0.41, 0.12, -0.02], [s * 0.39, -0.12, 0]], mat, 0.075, 0.055);
+  }
+  if (style === "bun") {
+    soft(g, 0.37, 0.33, 0.33, mat, 0, 0.43, -0.3, 0.9);
+    for (let i = 0; i < 5; i++)
+      strand(g, [[-0.14, 0.4, -0.3], [0, 0.56, -0.37 + i * 0.027], [0.15, 0.4, -0.3]], mat, 0.04, 0.035);
+  }
+  if (style === "curly")
+    for (let i = 0; i < 14; i++) {
+      const a = i * 2.4, x = Math.sin(a) * 0.32, z = Math.cos(a) * 0.27;
+      strand(g, [[x - 0.08, 0.3, z], [x, 0.48, z + 0.06], [x + 0.09, 0.37, z], [x + 0.02, 0.29, z - 0.04]], mat, 0.06);
+    }
+  return g;
 }
 
 export const HAIRSTYLES = [
@@ -156,17 +234,6 @@ const BASIC_LOOKS = [
     outfit: "suit",
     footwear: "boots",
     pantsColor: "#5f4b3b",
-  },
-  {
-    id: "firestarter",
-    name: "Горячая идея",
-    color: "#42414e",
-    hairstyle: "flame",
-    headwear: "none",
-    mask: "none",
-    outfit: "tracksuit",
-    footwear: "sneakers",
-    pantsColor: "#383643",
   },
   {
     id: "bear",
@@ -250,7 +317,7 @@ export function avatar(input) {
   const torso = pivot(model, 0, 0.58, 0),
     neck = pivot(torso, 0, 0.22, 0);
   const coat = ["suit", "wizard", "raincoat"].includes(p.outfit);
-  box(
+  soft(
     torso,
     p.outfit === "spacesuit" ? 0.5 : 0.44,
     coat ? 0.55 : 0.43,
@@ -259,9 +326,9 @@ export function avatar(input) {
     0,
     coat ? -0.1 : -0.03,
     0,
-    0.09,
+    0.78,
   );
-  box(neck, 0.17, 0.14, 0.19, skin, 0, 0, 0, 0.04);
+  soft(neck, 0.17, 0.14, 0.19, surfaceMaterial(skin, "skin"));
   if (p.outfit === "hoodie") {
     ball(torso, color, 0, 0.18, -0.11, 0.25, 0.16, 0.2);
     box(torso, 0.23, 0.12, 0.02, color, 0, -0.13, 0.18, 0.02);
@@ -334,9 +401,9 @@ export function avatar(input) {
     hands = [];
   for (const side of [-1, 1]) {
     const leg = pivot(model, side * 0.125, 0.34, 0);
-    box(leg, 0.16, 0.17, 0.18, p.pantsColor, 0, -0.065, 0, 0.045);
+    soft(leg, 0.17, 0.2, 0.19, surfaceMaterial(p.pantsColor), 0, -0.065, 0, 0.8);
     const knee = pivot(leg, 0, -0.145, 0);
-    box(knee, 0.15, 0.12, 0.16, p.pantsColor, 0, -0.045, 0, 0.04);
+    soft(knee, 0.155, 0.16, 0.17, surfaceMaterial(p.pantsColor), 0, -0.045, 0, 0.8);
     const foot = pivot(knee, 0, -0.11, 0.025);
     const boot = ["boots", "space"].includes(p.footwear),
       bare = p.footwear === "bare";
@@ -370,18 +437,18 @@ export function avatar(input) {
     knees.push(knee);
     feet.push(foot);
     const arm = pivot(torso, side * 0.29, 0.12, 0);
-    box(arm, 0.16, 0.2, 0.18, color, 0, -0.075, 0, 0.055);
+    soft(arm, 0.17, 0.23, 0.19, surfaceMaterial(color), 0, -0.075, 0, 0.85);
     const elbow = pivot(arm, 0, -0.18, 0);
-    box(
+    soft(
       elbow,
       0.135,
       0.13,
       0.15,
-      p.outfit === "tshirt" ? skin : color,
+      surfaceMaterial(p.outfit === "tshirt" ? skin : color, p.outfit === "tshirt" ? "skin" : "cloth"),
       0,
       -0.045,
       0,
-      0.045,
+      0.85,
     );
     const hand = ball(
       elbow,
@@ -402,40 +469,24 @@ export function avatar(input) {
 
   const head = pivot(model, 0, 1.15, 0),
     face = pivot(head, 0, 0, 0);
-  box(face, 0.82, 0.74, 0.69, skin, 0, 0, 0, 0.16);
+  soft(face, 0.86, 0.74, 0.69, surfaceMaterial(skin, "skin"), 0, 0, 0, 0.7);
   const eyes = [],
-    brows = [],
-    cheeks = [];
+    brows = [];
   for (const side of [-1, 1]) {
     ball(face, skin, side * 0.42, -0.04, 0, 0.068, 0.11, 0.085);
     const eye = pivot(face, side * 0.215, 0.02, 0.335);
-    ball(eye, "#17131b", 0, 0, 0, 0.139, 0.158, 0.073, 0.1);
-    ball(eye, "#ffffff", -0.035, 0.053, 0.064, 0.031, 0.033, 0.012, 0.12);
-    ball(eye, "#bcb2c4", 0.045, -0.045, 0.064, 0.014, 0.016, 0.009, 0.15);
+    ball(eye, surfaceMaterial("#141318", "eyes"), 0, 0, 0, 0.112, 0.121, 0.052);
+    ball(eye, "#e9e5df", -0.028, 0.04, 0.047, 0.012, 0.016, 0.006);
     eyes.push(eye);
-    const brow = box(
-      face,
-      0.18,
-      0.028,
-      0.025,
-      hair,
-      side * 0.22,
-      0.225,
-      0.348,
-      0.01,
-    );
-    brow.rotation.z = -side * 0.09;
+    const brow = pivot(face, side * 0.22, 0.22, 0.327);
+    strand(brow, [[-0.09, -0.007, 0], [0, 0.019, 0.012], [0.09, -0.005, 0]], hair, 0.018, 0.008);
     brows.push(brow);
-    cheeks.push(
-      ball(face, "#d58a8e", side * 0.26, -0.16, 0.338, 0.065, 0.025, 0.015),
-    );
   }
-  ball(face, skin, 0, -0.075, 0.371, 0.045, 0.045, 0.055);
-  const mouth = pivot(face, 0, -0.23, 0.36);
-  ball(mouth, "#aa5c69", -0.027, 0.006, 0, 0.044, 0.019, 0.018);
-  ball(mouth, "#aa5c69", 0.027, 0.006, 0, 0.044, 0.019, 0.018);
-  ball(mouth, "#cb7b84", 0, -0.015, 0, 0.06, 0.018, 0.018);
-  const mouthOpen = ball(mouth, "#5b3546", 0, 0, -0.004, 0.045, 0.038, 0.016);
+  soft(face, 0.035, 0.075, 0.035, surfaceMaterial(skin, "skin"), 0, -0.065, 0.339, 0.85);
+  ball(face, surfaceMaterial(skin, "skin"), 0, -0.092, 0.354, 0.023, 0.015, 0.014);
+  const mouth = pivot(face, 0, -0.23, 0.322);
+  strand(mouth, [[-0.045, 0.002, 0], [0, -0.008, 0.005], [0.045, 0.002, 0]], material("#b6827d"), 0.007, 0.004);
+  const mouthOpen = ball(mouth, "#5b3546", 0, 0, 0.005, 0.035, 0.032, 0.012);
   mouthOpen.visible = false;
   const flames = [];
   let fireHair = null,
@@ -450,43 +501,7 @@ export function avatar(input) {
     fireMaterial = built.material;
     head.add(fireHair);
   } else if (p.hairstyle !== "bald" && p.headwear !== "bear" && !coveredHair) {
-    box(head, 0.85, 0.23, 0.72, hair, 0, 0.31, -0.03, 0.11);
-    box(head, 0.81, 0.48, 0.17, hair, 0, 0.1, -0.32, 0.08);
-    for (let i = 0; i < 5; i++) {
-      const clump = box(
-        head,
-        0.24,
-        0.17,
-        0.2,
-        hair,
-        -0.29 + i * 0.14,
-        0.26 + Math.sin(i * 0.8) * 0.07,
-        0.28,
-        0.07,
-      );
-      clump.rotation.z = 0.15 - i * 0.1;
-    }
-    for (const side of [-1, 1])
-      box(head, 0.105, 0.25, 0.32, hair, side * 0.37, 0.07, -0.01, 0.05);
-    if (p.hairstyle === "long") {
-      for (const side of [-1, 1])
-        box(head, 0.18, 0.7, 0.46, hair, side * 0.38, -0.04, -0.07, 0.065);
-      box(head, 0.75, 0.6, 0.21, hair, 0, -0.08, -0.36, 0.07);
-    }
-    if (p.hairstyle === "bun") {
-      ball(head, hair, 0, 0.51, -0.14, 0.22, 0.2, 0.21);
-      ball(head, hair, 0.06, 0.62, -0.18, 0.13);
-    }
-    if (p.hairstyle === "curly")
-      for (let i = 0; i < 15; i++)
-        ball(
-          head,
-          hair,
-          Math.sin(i * 2.4) * 0.34,
-          0.28 + (i % 3) * 0.065,
-          Math.cos(i * 2.4) * 0.28,
-          0.13,
-        );
+    sculptHair(head, hair, p.hairstyle);
   }
 
   const headwear = p.headwear;
@@ -574,7 +589,7 @@ export function avatar(input) {
     fireMaterial,
     profile: p,
   };
-  dressCharacter(rig, p, { box, ball, material, cylinder, pivot });
+  dressCharacter(rig, p, { box, ball, material, cylinder, pivot, soft, strand, garment, sculptHair, surfaceMaterial, scalp });
   return rig;
 }
 
@@ -598,7 +613,7 @@ export function tickAccessories(rig, time) {
 
 export function disposeAvatar(rig) {
   if (!rig) return;
-  const sharedGeometry = new Set([sphereGeometry, ...geometries.values()]);
+  const sharedGeometry = new Set([sphereGeometry, ...geometries.values(), ...sculptGeometries.values()]);
   const sharedMaterial = new Set(materials.values()),
     disposed = new Set();
   rig.root.traverse((object) => {

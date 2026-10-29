@@ -86,7 +86,6 @@ export function animateRig(rig, state, dt) {
     rig.arms[i].position.y = 0.12;
     rig.arms[i].scale.set(1, 1, 1);
     rig.elbows[i].rotation.set(-0.13 - flight * 0.25 * blend, 0, 0);
-    rig.hands[i].scale.set(0.08, 0.09, 0.08);
   }
   if (state.grounded === false) {
     const rising = (state.vy || 0) > 0,

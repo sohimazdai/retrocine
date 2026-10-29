@@ -324,7 +324,8 @@ test("character gallery filters, previews, saves and cancels while preserving pa
   assert.equal(a.run("avatarEditor.rig.root.userData.character"), "wolf");
   assert.equal(a.run("avatarEditor.draft.name"), "Аня");
   d.querySelector('[data-editor-tab="head"]').click();
-  d.querySelector('[data-choice="headwear"][data-value="cap"]').click();
+  d.querySelector('[data-choice="headwear"][data-value="fox"]').click();
+  assert(a.run("avatarEditor.rig.head.getObjectByName('headwear:fox')"));
   const save = () =>
     d
       .querySelector("#avatarForm")
@@ -334,7 +335,7 @@ test("character gallery filters, previews, saves and cancels while preserving pa
   save();
   const saved = JSON.parse(a.w.localStorage.getItem("kino-avatar-v1"));
   assert.equal(saved.character, "wolf");
-  assert.equal(saved.headwear, "cap");
+  assert.equal(saved.headwear, "fox");
   assert.equal(saved.name, "Аня");
   assert.equal(saved.id, "self");
   assert.equal(
@@ -570,6 +571,10 @@ test("avatar editor previews equipment live and cancellation preserves the avata
     .click();
   a.tick(0.2);
   assert(a.run("!!avatarEditor.rig.fireHair"));
+  a.w.document.querySelector('[data-choice="hairstyle"][data-value="wavy"]').click();
+  a.w.document.querySelector('[data-choice="facialHair"][data-value="full-beard"]').click();
+  assert.equal(a.run("avatarEditor.rig.profile.hairstyle"), "wavy");
+  assert(a.run('!!avatarEditor.rig.root.getObjectByName("avatar:facial-hair")'));
   assert.equal(a.run("active.profile"), before);
   a.run('$("#modal").close()');
   assert.equal(a.run("avatarEditor"), null);

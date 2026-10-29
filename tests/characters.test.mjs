@@ -2,14 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as T from "three";
 import { CHARACTERS } from "../dist/characters.js";
-import { avatar, applyLook, disposeAvatar } from "../dist/avatars.js";
+import { avatar, applyLook, disposeAvatar, HEADWEAR } from "../dist/avatars.js";
 import { animateRig } from "../dist/animation.js";
 import { EMOTIONS } from "../dist/emotions.js";
 import { framePortrait } from "../dist/room.js";
 
-test("all 34 characters keep identity across selecting, saving and returning to a basic avatar", () => {
+test("all 41 characters keep identity across selecting, saving and returning to a basic avatar", () => {
   let profile = { id: "self", name: "Саша", x: 2, z: 3 };
-  assert.equal(CHARACTERS.length, 34);
+  assert.equal(CHARACTERS.length, 41);
   assert.equal(new Set(CHARACTERS.map((p) => p.id)).size, CHARACTERS.length);
   for (const preset of CHARACTERS) {
     profile = applyLook(profile, preset.id);
@@ -35,17 +35,25 @@ test("all 34 characters keep identity across selecting, saving and returning to 
 test("new characters can replace signature clothing without losing their identity", () => {
   const signatureParts = {
     six: ["raincoat-hood", "costume"],
-    "little-sister": ["sister-hair", "sister-dress"],
+    "little-sister": ["sister-hair", "sister-dress", "adam-syringe"],
     ciri: ["ashen-hair", "witcher-outfit", "witcher-sword"],
     "anton-chigurh": ["chigurh-bob", "chigurh-jacket", "coin"],
     elastigirl: ["hero-mask", "incredibles-suit"],
     "scarlet-witch": ["scarlet-crown", "scarlet-costume", "chaos-magic-1", "cape"],
     eleven: ["buzz-cut", "eleven-dress", "waffle"],
-    alf: ["costume", "tail"],
-    "winnie-pooh": ["costume", "honey-pot"],
+    alf: ["costume"],
+    "winnie-pooh": ["costume", "balloon"],
+    soldier: ["tf2-helmet", "tf2-jacket", "rocket-launcher"],
     carlson: ["ginger-hair", "costume", "propeller"],
     spongebob: ["square-pants"],
     cheburashka: ["costume"],
+    homeless: ["knit-cap", "layered-coat", "backpack"],
+    gumball: ["face", "tan-sweater", "tail"],
+    "chainsaw-man": ["chainsaw-head", "hunter-shirt", "arm-saw-0"],
+    "one-punch-man": ["hero-suit", "cape"],
+    "sabrina-carpenter": ["blonde-fringe", "stage-dress", "microphone"],
+    ryuk: ["face", "shinigami-outfit", "wings", "apple"],
+    pennywise: ["face", "clown-suit", "balloon"],
   };
   for (const [id, names] of Object.entries(signatureParts)) {
     const profile = applyLook({ id: "self", name: "Игрок" }, id);
@@ -58,6 +66,18 @@ test("new characters can replace signature clothing without losing their identit
     }
     disposeAvatar(original);
     disposeAvatar(custom);
+  }
+});
+
+test("animal headwear replaces face and hair while keeping the chosen outfit", () => {
+  for (const style of ["trex", "moose", "monkey", "fox"]) {
+    assert(HEADWEAR.some(([id]) => id === style));
+    const rig = avatar(JSON.parse(JSON.stringify({ id: "self", headwear: style, hairstyle: "wavy", outfit: "hoodie" })));
+    assert.equal(rig.profile.headwear, style);
+    assert.equal(rig.face.visible, false);
+    assert(rig.head.getObjectByName(`headwear:${style}`));
+    assert(rig.torso.children.some((child) => child.isMesh));
+    disposeAvatar(rig);
   }
 });
 

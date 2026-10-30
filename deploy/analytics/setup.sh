@@ -118,9 +118,11 @@ if ! caddy validate --config "$CF" --adapter caddyfile >/dev/null 2>&1; then
   exit 1
 fi
 
+# caddy validate (от root) сам создаёт файл журнала — отдаём его Caddy, иначе тот не сможет писать.
+chown -R caddy:caddy /var/log/caddy
 systemctl daemon-reload
 systemctl enable --now analytics >/dev/null 2>&1 && systemctl restart analytics
-systemctl reload caddy
+systemctl reload caddy || { journalctl -u caddy -n 25 --no-pager; exit 1; }
 systemctl enable --now analytics-agent >/dev/null 2>&1 && systemctl restart analytics-agent
 systemctl enable --now grafana-server >/dev/null 2>&1 && systemctl restart grafana-server
 [ "${RESTART_RETRO:-}" = 1 ] && systemctl restart retrocine-sync || true

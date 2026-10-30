@@ -31,7 +31,9 @@ if not n: sys.exit("В Caddyfile не найден блок sohimazdai.ru")
 open(p, "w").write(t)
 PY
   if ! caddy validate --config "$CF" --adapter caddyfile >/dev/null 2>&1; then cp "$CF.bak-analytics" "$CF"; echo "Caddyfile не прошёл проверку — возвращён прежний" >&2; exit 1; fi
-  systemctl reload caddy
+  # caddy validate (от root) сам создаёт файл журнала — отдаём его Caddy, иначе тот не сможет писать.
+  chown -R caddy:caddy /var/log/caddy
+  systemctl reload caddy || { journalctl -u caddy -n 25 --no-pager; cp "$CF.bak-analytics" "$CF"; systemctl reload caddy; exit 1; }
 fi
 systemctl daemon-reload
 systemctl enable --now analytics-agent >/dev/null 2>&1 && systemctl restart analytics-agent

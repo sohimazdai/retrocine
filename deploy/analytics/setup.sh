@@ -17,7 +17,8 @@ install -d -m 755 /opt/analytics /etc/analytics
 rm -rf /opt/analytics/src /opt/analytics/agent
 cp -r "$SRC/src" "$SRC/agent" /opt/analytics/
 if [ ! -f /etc/analytics/analytics.env ]; then
-  umask 077
+  # Секреты: файл закрыт с самого начала (без umask на весь скрипт: от него Caddy не мог прочитать свой файл).
+  install -m 600 /dev/null /etc/analytics/analytics.env
   cat > /etc/analytics/analytics.env <<ENV
 ANALYTICS_PORT=8095
 ANALYTICS_DB=/var/lib/analytics/events.db
@@ -46,8 +47,10 @@ install -m 644 "$HERE/analytics-agent.service" /etc/systemd/system/analytics-age
 RENV=/etc/retrocine/retrocine.env
 if [ -f "$RENV" ] && ! grep -q '^ANALYTICS_TOKEN=' "$RENV"; then
   printf 'ANALYTICS_URL=http://127.0.0.1:8095/a/s\nANALYTICS_TOKEN=%s\n' "$TOKEN" >> "$RENV"
-  RESTART_RETRO=1
 fi
+# Работающий retrocine без этих настроек (запущен до них) перезапускается: участники переподключатся за 1–2 с.
+PID="$(systemctl show -p MainPID --value retrocine-sync 2>/dev/null || echo 0)"
+if [ "${PID:-0}" != 0 ] && ! tr '\0' '\n' < "/proc/$PID/environ" | grep -q '^ANALYTICS_TOKEN='; then RESTART_RETRO=1; fi
 
 # 4. Grafana с источником SQLite и дашбордом.
 if ! dpkg -s grafana >/dev/null 2>&1; then
@@ -100,6 +103,7 @@ fi
 CF=/etc/caddy/Caddyfile
 install -d -m 755 /etc/caddy/sites
 sed "s/stats\.sohimazdai\.ru/${DOMAIN}/" "$HERE/stats.caddy" > /etc/caddy/sites/stats.caddy
+chmod 644 /etc/caddy/sites/stats.caddy
 cp "$CF" "$CF.bak-analytics"
 grep -q "^import /etc/caddy/sites/" "$CF" || printf '\nimport /etc/caddy/sites/*.caddy\n' >> "$CF"
 if ! grep -q "/var/log/caddy/access.log" "$CF"; then

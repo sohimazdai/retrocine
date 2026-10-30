@@ -90,4 +90,5 @@
 | `server/src/` | `index.js` (HTTP, WebSocket, комнаты), `room.js` (комната, физика, рассылка), `store.js`, `livekit.js` |
 | `server/test/` | Интеграционные тесты сервера с настоящими WebSocket-клиентами |
 | `tests/scene.test.mjs` | Тесты фронта, включая мультиплеер на подставном сервере |
+| `analytics/`, `server/src/analytics.js` | Аналитика всех приложений: сервис событий (SQLite), агент журнала Caddy, дашборд Grafana; retrocine шлёт входы, комнаты, броски, онлайн и пройденные километры. См. [analytics/README.md](../analytics/README.md) |
 | `deploy/` | Установка серверов и выкладка, см. [servers.md](servers.md) |

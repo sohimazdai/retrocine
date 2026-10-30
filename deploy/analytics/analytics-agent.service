@@ -1,0 +1,18 @@
+[Unit]
+Description=Analytics agent: requests per url from the Caddy log
+After=network.target caddy.service
+
+[Service]
+# Caddy пишет журнал с правами 0600: читать его может только сам caddy.
+User=caddy
+Group=caddy
+EnvironmentFile=/etc/analytics/agent.env
+ExecStart=/usr/bin/node --no-warnings /opt/analytics/agent/caddy-agent.js
+Restart=always
+RestartSec=5
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

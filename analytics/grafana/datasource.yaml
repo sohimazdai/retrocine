@@ -1,0 +1,12 @@
+# Источник данных Grafana: база событий аналитики (только чтение).
+apiVersion: 1
+datasources:
+  - name: Аналитика
+    uid: analytics
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      path: /var/lib/analytics/events.db
+      attachLimit: 0

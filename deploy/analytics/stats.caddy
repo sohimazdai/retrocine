@@ -1,0 +1,10 @@
+# Аналитика: приём событий (/a/*) и Grafana. Ставит deploy/analytics/setup.sh.
+stats.sohimazdai.ru {
+	encode zstd gzip
+	handle /a/* {
+		reverse_proxy 127.0.0.1:8095
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

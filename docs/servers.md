@@ -38,6 +38,10 @@ DNS — Cloudflare, записи `sohimazdai.ru`, `www` → 45.159.189.71 и `ap
 
 Подключённые в этот момент участники переподключаются сами за 1–2 с и сохраняют свою идентичность.
 
+## Аналитика
+
+Сервис событий, Grafana (https://stats.sohimazdai.ru/) и агенты журнала Caddy ставятся отдельно: `./deploy/analytics/deploy.sh`. На московском сервере: `analytics.service` (127.0.0.1:8095, база `/var/lib/analytics/events.db`, настройки `/etc/analytics/analytics.env`), `grafana-server` (127.0.0.1:3000), `analytics-agent`; Caddy подключает `/etc/caddy/sites/*.caddy`. На сервере sohimazdai.ru — только `analytics-agent`. Подробно — [analytics/README.md](../analytics/README.md).
+
 ## Сервер kinō: что где
 
 | Что | Где |

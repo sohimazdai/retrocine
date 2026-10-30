@@ -1,0 +1,22 @@
+[Unit]
+Description=Analytics collector (retrocine, planner, …)
+After=network.target
+
+[Service]
+User=analytics
+Group=analytics
+EnvironmentFile=/etc/analytics/analytics.env
+WorkingDirectory=/opt/analytics
+ExecStart=/usr/bin/node --no-warnings /opt/analytics/src/server.js
+Restart=always
+# База в режиме WAL: Grafana (группа analytics) читает её и ей нужна запись в файл -shm.
+UMask=0007
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/analytics
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

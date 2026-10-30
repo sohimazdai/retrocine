@@ -605,3 +605,34 @@ test("a blast knocks props about on the server: everyone sees them move and come
   b.close();
   await app.close();
 });
+
+test("analytics: visits (one id per browser), opened rooms, throws and how far people walked and rode", async () => {
+  const seen = { events: [], sums: {}, gauges: [] };
+  const analytics = {
+    event: (n, v, o = {}) => seen.events.push({ n, v, ...o }),
+    sum: (n, v, k) => (seen.sums[k.mode] = (seen.sums[k.mode] || 0) + v),
+    gauge: (n, v) => seen.gauges.push({ n, v }),
+    flush: async () => {},
+    close: async () => {},
+  };
+  const { app, port } = await boot({ analytics });
+  const a = client(port);
+  await a.join("stats-room", { name: "Аня", uid: "browser-abcdef" });
+  assert.deepEqual(seen.events.map((e) => e.n), ["room.open", "visit"]);
+  const visit = seen.events[1];
+  assert(visit.uid && visit.uid !== "browser-abcdef", "an anonymous id, not the browser's own");
+  // Walking 3 m in steps, a teleport (not counted), then riding a kart 2 m.
+  a.send({ t: "pose", x: 0, y: 0, z: 0, a: 0, vy: 0, g: 1 });
+  await new Promise((r) => setTimeout(r, 50));
+  seen.sums = {};
+  for (let i = 1; i <= 6; i++) a.send({ t: "pose", x: i * 0.5, y: 0, z: 0, a: 0, vy: 0, g: 1 });
+  a.send({ t: "pose", x: 12, y: 0, z: 0, a: 0, vy: 0, g: 1 });
+  for (let i = 1; i <= 4; i++) a.send({ t: "pose", x: 12 + i * 0.5, y: 0, z: 0, a: 0, vy: 0, g: 1, kt: 1 });
+  a.send({ t: "act", k: "throw", w: "snow", to: [1, 0, 1] });
+  await new Promise((r) => setTimeout(r, 150));
+  assert(Math.abs(seen.sums.foot - 3) < 1e-6, `walked ${seen.sums.foot}`);
+  assert(Math.abs(seen.sums.kart - 2) < 1e-6, `drove ${seen.sums.kart}`);
+  assert(seen.events.some((e) => e.n === "throw" && e.k.w === "snow"));
+  a.close();
+  await app.close();
+});

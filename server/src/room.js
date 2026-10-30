@@ -105,7 +105,8 @@ function spawnPose(state) {
 const flowing = (state) => zonesOf(stateMap(state)).some((z) => z.flow);
 
 export class Room {
-  constructor(id, saved, { livekit = null, store = null, log = () => {} } = {}) {
+  constructor(id, saved, { livekit = null, store = null, log = () => {}, analytics = null } = {}) {
+    this.analytics = analytics;
     this.id = id;
     this.livekit = livekit;
     this.store = store;
@@ -148,6 +149,8 @@ export class Room {
       } catch {}
     }
     if (this.peers.size >= MAX_PEERS) return { error: "full" };
+    // Уникальные посетители: один обезличенный id на браузер для всех комнат.
+    this.analytics?.event("visit", 1, { uid: derivedId("analytics", "", uid, 16), k: { map: this.state.map } });
     const peer = {
       id,
       uid,
@@ -229,6 +232,15 @@ export class Room {
     peer.tokens--;
     return true;
   }
+  // Аналитика: сколько пройдено пешком и проехано на чём — по смещению между позами (рывки
+  // больше 4 м — телепорт: появление, смена карты, — не считаются; сбитого и висящего тоже нет).
+  countDistance(prev, pose) {
+    if (!this.analytics || !prev || pose.tb || pose.cl) return;
+    const d = Math.hypot(pose.x - prev.x, pose.z - prev.z);
+    if (d < 0.005 || d > 4) return;
+    const mode = pose.kt ? "kart" : pose.rd ? (this.state.rides || []).find((r) => r.id === pose.rd)?.kind || "ride" : pose.sd ? "sled" : pose.zp ? "zipline" : "foot";
+    this.analytics.sum("distance", d, { mode });
+  }
   handle(peer, msg) {
     fitRoom(this.state);
     const isPose = msg.t === "pose";
@@ -243,6 +255,7 @@ export class Room {
       case "pose": {
         const pose = sanitizePose(msg);
         if (!pose) return;
+        this.countDistance(peer.pose, pose);
         peer.pose = pose;
         this.broadcast({ t: "pose", id: peer.id, s: now(), ...pose }, peer, true);
         if (pose.sh) this.startPhysics();
@@ -265,6 +278,7 @@ export class Room {
           peer.lastThrow[kind.id] = t;
           out.to = msg.to.map((v) => r3(clamp(v, -40, 40)));
           out.w = kind.id;
+          this.analytics?.event("throw", 1, { k: { w: kind.id } });
           out.pw = Number.isFinite(msg.pw) ? Math.round(clamp(msg.pw, 1, 1.6) * 100) / 100 : 1;
           // The thrower's own velocity, carried into the shot.
           if (Array.isArray(msg.vel) && msg.vel.length === 2 && msg.vel.every(Number.isFinite)) out.vel = msg.vel.map((v) => r3(clamp(v, -12, 12)));

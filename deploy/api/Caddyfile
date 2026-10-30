@@ -1,4 +1,12 @@
 api.sohimazdai.ru {
+	# Журнал запросов для аналитики (RPM по урлам; читает analytics/agent).
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+		format json
+	}
 	# Синхронизация комнат (WebSocket). Сжатие не включаем: оно добавляет задержку.
 	handle /ws {
 		reverse_proxy 127.0.0.1:8090
@@ -18,3 +26,6 @@ api.sohimazdai.ru {
 http://185.209.160.44 {
 	redir https://api.sohimazdai.ru{uri}
 }
+
+# Другие сайты этого сервера (аналитика: stats.sohimazdai.ru) — их ставят свои скрипты.
+import /etc/caddy/sites/*.caddy

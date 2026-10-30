@@ -1,4 +1,5 @@
 // kinō sync server: HTTP /health and a WebSocket at /ws. Rooms live in memory and are saved to disk.
+import { analyticsClient } from "./analytics.js";
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -26,6 +27,7 @@ export function createServer({
   maxPerIp = 40,
   unloadAfter = 60_000,
   log = console.log,
+  analytics = analyticsClient(),
 } = {}) {
   const rooms = new Map(),
     loading = new Map(),
@@ -75,8 +77,9 @@ export function createServer({
     if (loading.has(id)) return loading.get(id);
     if (rooms.size >= maxRooms) return null;
     const p = (async () => {
-      const room = new Room(id, await store.load(id), { livekit, store, log });
+      const room = new Room(id, await store.load(id), { livekit, store, log, analytics });
       rooms.set(id, room);
+      analytics.event("room.open", 1, { k: { map: room.state.map } });
       loading.delete(id);
       return room;
     })();
@@ -154,6 +157,12 @@ export function createServer({
 
   const sweep = setInterval(() => store.sweep(30), 6 * 3600e3);
   sweep.unref?.();
+  // Аналитика: сколько людей сейчас в комнатах и сколько комнат открыто (раз в 30 с).
+  const census = setInterval(() => {
+    analytics.gauge("online", [...rooms.values()].reduce((n, r) => n + r.size, 0));
+    analytics.gauge("rooms", [...rooms.values()].filter((r) => r.size).length);
+  }, 30_000);
+  census.unref?.();
   return {
     server,
     rooms,
@@ -163,6 +172,8 @@ export function createServer({
       ),
     async close() {
       clearInterval(sweep);
+      clearInterval(census);
+      await analytics.close();
       for (const c of wss.clients) c.terminate();
       await Promise.all([...rooms.values()].map((r) => (r.dispose(), r.flush())));
       await new Promise((r) => server.close(r));
@@ -178,6 +189,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     store: new FileStore(env.DATA_DIR || "./data"),
     livekit: livekitConfig(env),
     allowedOrigins: (env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
+    // Аналитика (analytics/): локальный сервис на этом же сервере.
+    analytics: analyticsClient({ url: env.ANALYTICS_URL || "", token: env.ANALYTICS_TOKEN || "", log: console.log }),
   });
   const port = await app.listen();
   console.log(`kinō sync ${VERSION} on ${env.HOST || "127.0.0.1"}:${port}, LiveKit ${livekitConfig(env) ? "on" : "off"}`);

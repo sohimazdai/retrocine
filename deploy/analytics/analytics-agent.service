@@ -3,8 +3,9 @@ Description=Analytics agent: requests per url from the Caddy log
 After=network.target caddy.service
 
 [Service]
-DynamicUser=true
-SupplementaryGroups=caddy
+# Caddy пишет журнал с правами 0600: читать его может только сам caddy.
+User=caddy
+Group=caddy
 EnvironmentFile=/etc/analytics/agent.env
 ExecStart=/usr/bin/node --no-warnings /opt/analytics/agent/caddy-agent.js
 Restart=always

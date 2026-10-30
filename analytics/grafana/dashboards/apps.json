@@ -59,7 +59,7 @@
             "type": "frser-sqlite-datasource",
             "uid": "analytics"
           },
-          "queryType": "time series",
+          "queryType": "table",
           "rawQueryText": "SELECT ts / 1000 AS time, path, SUM(value) AS rpm FROM events WHERE app = '$app' AND name = 'http' AND ts BETWEEN $__from AND $__to AND path IN (SELECT path FROM events WHERE app = '$app' AND name = 'http' AND ts BETWEEN $__from AND $__to GROUP BY path ORDER BY SUM(value) DESC LIMIT 10) GROUP BY ts, path ORDER BY ts",
           "queryText": "SELECT ts / 1000 AS time, path, SUM(value) AS rpm FROM events WHERE app = '$app' AND name = 'http' AND ts BETWEEN $__from AND $__to AND path IN (SELECT path FROM events WHERE app = '$app' AND name = 'http' AND ts BETWEEN $__from AND $__to GROUP BY path ORDER BY SUM(value) DESC LIMIT 10) GROUP BY ts, path ORDER BY ts",
           "timeColumns": [
@@ -67,9 +67,24 @@
           ]
         }
       ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "path"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "unit": "reqpm"
+          "unit": "reqpm",
+          "displayName": "${__field.labels.path}"
         },
         "overrides": []
       },
@@ -346,7 +361,7 @@
             "type": "frser-sqlite-datasource",
             "uid": "analytics"
           },
-          "queryType": "time series",
+          "queryType": "table",
           "rawQueryText": "SELECT ts / 1000 AS time, name, value FROM gauges WHERE app = 'retrocine' AND name IN ('online', 'rooms') AND ts BETWEEN $__from AND $__to ORDER BY ts",
           "queryText": "SELECT ts / 1000 AS time, name, value FROM gauges WHERE app = 'retrocine' AND name IN ('online', 'rooms') AND ts BETWEEN $__from AND $__to ORDER BY ts",
           "timeColumns": [
@@ -354,9 +369,24 @@
           ]
         }
       ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "name"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "decimals": 0
+          "decimals": 0,
+          "displayName": "${__field.labels.name}"
         },
         "overrides": []
       },
@@ -419,12 +449,26 @@
             "type": "frser-sqlite-datasource",
             "uid": "analytics"
           },
-          "queryType": "time series",
+          "queryType": "table",
           "rawQueryText": "SELECT (ts / 3600000) * 3600 AS time, json_extract(props, '$.w') AS weapon, COUNT(*) AS n FROM events WHERE app = 'retrocine' AND name = 'throw' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "queryText": "SELECT (ts / 3600000) * 3600 AS time, json_extract(props, '$.w') AS weapon, COUNT(*) AS n FROM events WHERE app = 'retrocine' AND name = 'throw' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "timeColumns": [
             "time"
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "weapon"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
         }
       ],
       "fieldConfig": {
@@ -434,7 +478,8 @@
             "drawStyle": "bars",
             "fillOpacity": 70,
             "lineWidth": 1
-          }
+          },
+          "displayName": "${__field.labels.weapon}"
         },
         "overrides": []
       },
@@ -461,12 +506,26 @@
             "type": "frser-sqlite-datasource",
             "uid": "analytics"
           },
-          "queryType": "time series",
+          "queryType": "table",
           "rawQueryText": "SELECT ((ts + 10800000) / 86400000) * 86400 - 10800 AS time, CASE json_extract(props, '$.mode') WHEN 'foot' THEN 'пешком' ELSE 'на колёсах' END AS mode, SUM(value) / 1000.0 AS km FROM events WHERE app = 'retrocine' AND name = 'distance' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "queryText": "SELECT ((ts + 10800000) / 86400000) * 86400 - 10800 AS time, CASE json_extract(props, '$.mode') WHEN 'foot' THEN 'пешком' ELSE 'на колёсах' END AS mode, SUM(value) / 1000.0 AS km FROM events WHERE app = 'retrocine' AND name = 'distance' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "timeColumns": [
             "time"
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "mode"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
         }
       ],
       "fieldConfig": {
@@ -476,7 +535,8 @@
             "drawStyle": "bars",
             "fillOpacity": 70,
             "lineWidth": 1
-          }
+          },
+          "displayName": "${__field.labels.mode}"
         },
         "overrides": []
       },
@@ -755,12 +815,26 @@
             "type": "frser-sqlite-datasource",
             "uid": "analytics"
           },
-          "queryType": "time series",
+          "queryType": "table",
           "rawQueryText": "SELECT ((ts + 10800000) / 86400000) * 86400 - 10800 AS time, json_extract(props, '$.what') AS what, COUNT(*) AS n FROM events WHERE app = 'planner' AND name = 'edit' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "queryText": "SELECT ((ts + 10800000) / 86400000) * 86400 - 10800 AS time, json_extract(props, '$.what') AS what, COUNT(*) AS n FROM events WHERE app = 'planner' AND name = 'edit' AND ts BETWEEN $__from AND $__to GROUP BY 1, 2 ORDER BY 1",
           "timeColumns": [
             "time"
           ]
+        }
+      ],
+      "transformations": [
+        {
+          "id": "partitionByValues",
+          "options": {
+            "fields": [
+              "what"
+            ],
+            "keepFields": false,
+            "naming": {
+              "asLabels": true
+            }
+          }
         }
       ],
       "fieldConfig": {
@@ -770,7 +844,8 @@
             "drawStyle": "bars",
             "fillOpacity": 70,
             "lineWidth": 1
-          }
+          },
+          "displayName": "${__field.labels.what}"
         },
         "overrides": []
       },

@@ -695,3 +695,40 @@ test("snowballs, tomatoes and rocks reach others at most twice a second, however
     await app.close();
   }
 });
+
+test("fortress defense: everyone ready starts the waves; monsters come to all, a hit reported by one reaches the other; locked weapons are not thrown", async () => {
+  const { DEFENSE, MONSTERS } = await import("../../dist/defense.js");
+  const countdown = DEFENSE.countdown;
+  DEFENSE.countdown = 200;
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  try {
+    await a.join("fort");
+    await b.join("fort");
+    a.send({ t: "map.set", id: "fortress" });
+    await b.wait((m) => m.t === "reset");
+    a.send({ t: "def.ready" });
+    const one = await b.wait((m) => m.t === "def" && Object.keys(m.def.ready).length === 1);
+    assert.equal(one.def.phase, "idle", "b is not ready yet");
+    b.send({ t: "def.ready" });
+    await b.wait((m) => m.t === "def" && m.def.phase === "wave", 3000);
+    const spawned = await b.wait((m) => m.t === "mon", 4000);
+    const moving = await b.wait((m) => m.t === "mons" && m.m.some((row) => row[0] === spawned.m.id), 2000);
+    assert.equal(moving.m[0].length, 5, "[id, x, z, angle, state]");
+    a.send({ t: "def.hit", id: spawned.m.id, w: "snow", dmg: 1 });
+    const hit = await b.wait((m) => m.t === "mon.dmg" && m.id === spawned.m.id);
+    assert.equal(hit.hp, MONSTERS[spawned.m.c].hp - 1);
+    assert.equal(hit.by, a.welcome.id);
+    // Кирпичи закрыты, пока их не дала награда.
+    a.send({ t: "act", k: "throw", w: "brick", to: [0, 0, 0] });
+    a.send({ t: "act", k: "throw", w: "snow", to: [0, 0, 0] });
+    const thrown = await b.wait((m) => m.t === "act" && m.k === "throw");
+    assert.equal(thrown.w, "snow");
+  } finally {
+    DEFENSE.countdown = countdown;
+    a.close();
+    b.close();
+    await app.close();
+  }
+});

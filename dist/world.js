@@ -1,6 +1,6 @@
 // World rules shared by the browser and the sync server (no Three.js): the current map's props and
 // their colliders, loose balls and cubes, goals, hoops and zones.
-import { clamp, inside } from "./physics.js";
+import { clamp, inside, sloped, surfaceOf } from "./physics.js";
 import { ROOM, floorBack } from "./layout.js";
 import { mapDef } from "./maps/index.js";
 
@@ -225,7 +225,7 @@ export function supportHeight(x, z, map, positions) {
     0,
     ...obstacles(map, positions)
       .filter((b) => inside(x, z, b) && !b.y)
-      .map((b) => b.h),
+      .map((b) => (sloped(b) ? surfaceOf(b, x, z) : b.h)),
   );
 }
 
@@ -340,7 +340,8 @@ export function checkHoop(ball, previous, hoop, flags) {
   return false;
 }
 export const zonesOf = (map) => map.zones || [];
-export const inZone = (zone, x, z) => x >= zone.x0 && x <= zone.x1 && z >= zone.z0 && z <= zone.z1;
+// A zone is a rectangle (x0…x1, z0…z1) or, with `rx`/`rz`, an ellipse round (x, z) — a pond.
+export const inZone = (zone, x, z) => (zone.rx ? ((x - zone.x) / zone.rx) ** 2 + ((z - zone.z) / zone.rz) ** 2 <= 1 : x >= zone.x0 && x <= zone.x1 && z >= zone.z0 && z <= zone.z1);
 // Water an avatar stands in (river): slows you down and carries you with the flow.
 export const iceAt = (map, x, z) => zonesOf(map).find((zone) => zone.kind === "ice" && inZone(zone, x, z)) || null;
 export const waterAt = (map, x, z) => zonesOf(map).find((zone) => zone.kind === "water" && inZone(zone, x, z)) || null;

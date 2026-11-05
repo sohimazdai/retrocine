@@ -72,8 +72,11 @@ import {
   runMatchStep,
   matchActive,
   runMines,
+  runDefense,
 } from "./state.js";
 import { loadMatch, matchEnabled, projectileDamage, blastDamage, MAX_HP, TEAM_COLOR, DMG } from "./match.js";
+import { DEFENSE, MONSTERS, CARDS, WEAPON_DMG, spawnOdds, waveInfo, defenseLive, weaponAllowed, damageFactor, cooldownFactor, maxHp, perksOf, frostMonsters, terrainHeight } from "./defense.js";
+import { MonsterLayer } from "./monsters.js";
 import { Net, PoseBuffer, POSE_INTERVAL, HEARTBEAT } from "./net.js";
 import { Media } from "./media.js";
 import { apiUrl, currentRoom, roomLink } from "./config.js";
@@ -752,6 +755,377 @@ function ensureTeamRing(p) {
   p.teamRing.material.opacity = dead ? 0.3 : 0.85;
 }
 
+// ——— Защита крепости: монстры, крепость, ваше здоровье, награды между волнами ———
+// Сервер ведёт волны и монстров; ваш браузер — ваше здоровье и попадания ваших снарядов (как в
+// командном бою). Без сервера всё это считает браузер тем же кодом (runDefense).
+const monsterLayer = new MonsterLayer(scene, {
+  added: (root) => pickables.push(root),
+  removed: (root) => (pickables = pickables.filter((o) => o !== root)),
+});
+const inDefenseMap = () => !!mapScene.map?.defense;
+const defenseState = () => (inDefenseMap() ? world.defense : null);
+const defenseRunning = () => defenseLive(defenseState());
+const myMaxHp = () => maxHp(defenseState(), matchId());
+let defenseClock = 0,
+  downUntil = 0,
+  regenClock = 0,
+  defenseEpoch = null,
+  defenseScoreOpen = false,
+  lastPerks = null;
+const terrainAt = (x, z) => (mapScene.map?.defense ? terrainHeight(mapScene.map, x, z) : 0);
+// Без сервера: шаг волн и монстров здесь, 30 раз в секунду; сообщения — как от сервера.
+function stepDefenseOffline(dt) {
+  if (net.connected || !defenseRunning()) return;
+  defenseClock += dt;
+  for (let n = 0; defenseClock >= 1 / 30 && n < 4; n++) {
+    defenseClock -= 1 / 30;
+    for (const m of runDefense(world, clockNow(), 1 / 30, [{ id: matchId(), x: active.x, y: active.y, z: active.z, down: !!active.dead }])) onServer(m);
+  }
+  defenseClock = Math.min(defenseClock, 1 / 30);
+}
+// Каждый шаг физики: возвращение в строй, «Второе дыхание», монстры расталкивают ваш аватар.
+function stepDefenseSelf(dt) {
+  const d = defenseState();
+  if (!defenseLive(d)) return;
+  if (active.dead && downUntil && clockNow() >= downUntil) {
+    active.dead = false;
+    downUntil = 0;
+    active.hp = myMaxHp();
+    toast("Вы снова в строю!", 1600);
+    renderDefenseHud();
+  }
+  const regen = perksOf(d, matchId()).regen;
+  if (regen && !active.dead && (active.hp ?? myMaxHp()) < myMaxHp()) {
+    regenClock += dt * regen;
+    if (regenClock >= 2) {
+      regenClock -= 2;
+      active.hp = Math.min(myMaxHp(), (active.hp ?? myMaxHp()) + 1);
+      renderDefenseHud();
+    }
+  }
+  if (active.dead) return;
+  for (const m of d.monsters || []) {
+    const cls = MONSTERS[m.c];
+    if (!cls || cls.fly) continue;
+    const v = monsterLayer.views.get(m.id),
+      mx = v ? v.x : m.x,
+      mz = v ? v.z : m.z,
+      dx = active.x - mx,
+      dz = active.z - mz,
+      dist = Math.hypot(dx, dz),
+      over = cls.r + 0.3 - dist;
+    if (over > 0 && active.y < terrainAt(active.x, active.z) + cls.tall * 0.8) {
+      active.x += (dx / (dist || 1)) * over;
+      active.z += (dz / (dist || 1)) * over;
+    }
+  }
+}
+// Монстр ударил вас.
+function defenseHurt(dmg) {
+  if (active.dead || !defenseRunning()) return;
+  active.hp = Math.max(0, (active.hp ?? myMaxHp()) - dmg);
+  active.hurt = 0.4;
+  active.hit = 0.55;
+  if (active.hp <= 0) {
+    // Одолели: сразу во двор крепости, 6 с без бросков (монстры вас не трогают), потом — в бой.
+    active.dead = true;
+    downUntil = clockNow() + DEFENSE.respawn;
+    effects.puff(new T.Vector3(active.x, active.y + 0.9, active.z), "#d8d8d8", 16, 3, 0.05);
+    if (active.ride) leaveRide();
+    if (active.kart) leaveKart();
+    active.climb = null;
+    pending = null;
+    Object.assign(active, spawnPoint(mapScene.map, Math.random, world.structures), { y: 0, vy: 0, kx: 0, kz: 0, grounded: true });
+    toast(`Вас одолели — через ${DEFENSE.respawn / 1000} с снова в бой`, 2600);
+  }
+  renderDefenseHud();
+}
+// Попадание вашего снаряда или удара в монстра: урон — оружия с вашими наградами.
+function hitMonster(root, w, dir) {
+  const id = root.userData.id;
+  monsterLayer.flash(id);
+  op({ t: "def.hit", id, w, dmg: Math.round(WEAPON_DMG[w] * damageFactor(defenseState(), matchId()) * 100) / 100, dx: r3(dir?.x || 0), dz: r3(dir?.z || 0) });
+}
+// E рядом с монстром — пинок.
+function nearestMonster(reach = 1.5) {
+  let best = null,
+    bestD = Infinity;
+  for (const v of monsterLayer.views.values()) {
+    const d = Math.hypot(v.x - active.x, v.z - active.z) - v.cls.r;
+    if (d < reach && d < bestD && Math.abs(v.root.position.y - active.y) < 1.8) {
+      best = v;
+      bestD = d;
+    }
+  }
+  return best ? { v: best, d: bestD } : null;
+}
+function kickMonster(v) {
+  startAction(active, "kick", worldTime, {});
+  active.angle = Math.atan2(v.x - active.x, v.z - active.z);
+  hitMonster(v.root, "melee", { x: v.x - active.x, z: v.z - active.z });
+}
+// Самострелы на стенах: появляются наградой «Самострел»; стрела летит к монстру при выстреле.
+const turretMeshes = [];
+function turretModel() {
+  const g = new T.Group(),
+    wood = new T.MeshStandardMaterial({ color: "#7a5434", roughness: 0.85 }),
+    iron = new T.MeshStandardMaterial({ color: "#3a3a3e", roughness: 0.4, metalness: 0.6 });
+  const post = new T.Mesh(new T.CylinderGeometry(0.06, 0.08, 0.5, 8), wood);
+  post.position.y = 0.25;
+  const head = new T.Group();
+  head.position.y = 0.55;
+  const stock = new T.Mesh(new T.BoxGeometry(0.1, 0.08, 0.9), wood);
+  const bow = new T.Mesh(new T.TorusGeometry(0.42, 0.025, 6, 16, Math.PI), iron);
+  bow.rotation.set(Math.PI / 2, 0, 0);
+  bow.position.z = 0.3;
+  head.add(stock, bow);
+  g.add(post, head);
+  g.userData.head = head;
+  return g;
+}
+function syncTurrets() {
+  const spots = mapScene.map?.defense?.turrets || [],
+    n = inDefenseMap() ? Math.min(spots.length, world.defense?.turrets || 0) : 0;
+  while (turretMeshes.length > n) scene.remove(turretMeshes.pop());
+  while (turretMeshes.length < n) {
+    const t = spots[turretMeshes.length],
+      g = turretModel();
+    g.position.set(t.x, t.y, t.z);
+    g.rotation.y = Math.PI / 2;
+    scene.add(g);
+    turretMeshes.push(g);
+  }
+}
+function turretShot(i, x, z) {
+  const g = turretMeshes[i];
+  if (!g) return;
+  const from = g.position.clone().add(new T.Vector3(0, 0.6, 0)),
+    to = new T.Vector3(x, terrainAt(x, z) + 0.8, z);
+  g.userData.head.rotation.y = Math.atan2(to.x - from.x, to.z - from.z) - g.rotation.y;
+  const bolt = new T.Mesh(new T.CylinderGeometry(0.02, 0.02, 0.5, 5), new T.MeshBasicMaterial({ color: "#e8d6a8" }));
+  bolt.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), to.clone().sub(from).normalize());
+  effects.add(bolt, 0.18, (it) => bolt.position.lerpVectors(from, to, it.age / it.life), () => bolt.material.dispose());
+}
+// Сообщения защиты (с сервера, а без него — из своей симуляции).
+function onDefense(m) {
+  const d = world.defense,
+    online = net.connected;
+  if (!d) return;
+  if (m.t === "def") {
+    const was = { phase: d.phase, wave: d.wave, epoch: d.epoch };
+    if (online) world.defense = m.def;
+    const now = world.defense;
+    if (now.epoch !== defenseEpoch && now.phase === "wave" && now.wave === 1) {
+      // Игра началась: полное здоровье, снаряды — только открытые.
+      defenseEpoch = now.epoch;
+      active.hp = myMaxHp();
+      active.dead = false;
+      downUntil = 0;
+      if (!weaponAllowed(now, matchId(), weapon)) setWeapon("snow");
+    }
+    if (now.phase === "countdown" && was.phase !== "countdown") {
+      active.hp = DEFENSE.avatarHp;
+      active.dead = false;
+    }
+    if (now.phase === "wave" && (was.phase !== "wave" || was.wave !== now.wave)) toast(now.wave === now.waves ? `Последняя волна! ${now.waves > 1 ? "В конце — босс" : ""}` : `Волна ${now.wave} из ${now.waves}`, 2400);
+    if (now.phase === "break" && was.phase !== "break") toast(`Волна ${now.wave} отбита! Выберите награду`, 2600);
+    if (now.phase === "won" && was.phase !== "won") {
+      toast("Крепость выстояла — победа!", 4000);
+      emotionEffects.start(active, "firework", worldTime);
+    }
+    if (now.phase === "lost" && was.phase !== "lost") toast("Крепость пала…", 4000);
+    if (now.phase === "idle") {
+      active.dead = false;
+      downUntil = 0;
+    }
+    if (now.phase !== "wave") monsterLayer.sync(now.monsters || []);
+    // «Крепкое здоровье»: сразу полное (и больше) здоровье.
+    const mine = perksOf(now, matchId());
+    if (lastPerks && mine.tough > lastPerks.tough) active.hp = myMaxHp();
+    lastPerks = { ...mine };
+    renderDefenseHud();
+    renderDefenseCards();
+    renderWeaponPicker();
+  } else if (m.t === "mon") {
+    if (online && !d.monsters.some((o) => o.id === m.m.id)) d.monsters.push({ ...m.m });
+    mapScene.decor?.spawned?.();
+  } else if (m.t === "mons") {
+    const byId = new Map(d.monsters.map((o) => [o.id, o]));
+    for (const [id, x, z, a, st] of m.m) {
+      const o = byId.get(id);
+      if (o) Object.assign(o, { x, z, a, st });
+    }
+  } else if (m.t === "mon.dmg") {
+    if (online) {
+      const o = d.monsters.find((x) => x.id === m.id);
+      if (o) o.hp = m.hp;
+      if (m.hp <= 0) d.monsters = d.monsters.filter((x) => x.id !== m.id);
+      if (m.by && d.stats) {
+        const s = (d.stats[m.by] = d.stats[m.by] || { k: 0, dmg: 0 });
+        if (m.hp <= 0) s.k++;
+      }
+    }
+    if (m.tu != null) turretShot(m.tu, m.bx, m.bz);
+    if (m.hp <= 0) {
+      const v = monsterLayer.remove(m.id, true);
+      if (v) effects.puff(new T.Vector3(v.x, v.root.position.y + v.cls.tall * 0.5, v.z), MONSTER_PUFF[v.c] || "#cfc8b8", 14, 3, 0.05);
+      // «Трофеи»: ваш убитый монстр лечит.
+      const vamp = perksOf(d, matchId()).vamp;
+      if (m.by === matchId() && vamp && !active.dead) active.hp = Math.min(myMaxHp(), (active.hp ?? myMaxHp()) + 2 * vamp);
+      renderDefenseHud();
+    } else monsterLayer.hit(m.id, m.hp);
+  } else if (m.t === "mon.atk") {
+    monsterLayer.attack(m.id);
+    if (m.target === "fort") {
+      if (online) d.fort = m.fort;
+      const v = monsterLayer.views.get(m.id);
+      if (v) effects.puff(new T.Vector3(v.x + Math.sin(v.a) * (v.cls.r + 0.4), Math.min(2, v.cls.tall * 0.6), v.z + Math.cos(v.a) * (v.cls.r + 0.4)), "#bdb5a4", 6, 2.4, 0.045);
+      fortHitAt = performance.now();
+      renderDefenseHud();
+    } else if (m.target === matchId()) defenseHurt(m.dmg);
+    else {
+      const p = players.find((o) => o.profile.id === m.target);
+      if (p) p.hit = 0.55;
+    }
+  }
+}
+const MONSTER_PUFF = { goblin: "#7aa860", bat: "#4a3a52", zombie: "#8f9e85", skeleton: "#e8dfc8", slime: "#7fdc6a", ogre: "#9a8a6a", golem: "#8a857a" };
+let fortHitAt = 0;
+// Каждый кадр: монстры на сцене, самострелы.
+function drawDefense(dt) {
+  if (!inDefenseMap()) {
+    if (monsterLayer.views.size || monsterLayer.dying.length) monsterLayer.clear();
+    syncTurrets();
+    return;
+  }
+  monsterLayer.sync(world.defense?.monsters || []);
+  monsterLayer.update(dt, worldTime, terrainAt, camera);
+  syncTurrets();
+}
+// ——— Панель защиты: волна, крепость, ваше здоровье; до игры — готовность и число волн ———
+function renderDefenseHud() {
+  const hud = $("#defHud"),
+    d = defenseState();
+  if (!hud) return;
+  hud.hidden = !d;
+  if (!d) {
+    $("#defCards").hidden = true;
+    $("#defScore").hidden = true;
+    return;
+  }
+  const here = net.connected ? players.length : 1,
+    ready = Object.values(d.ready || {}).filter(Boolean).length,
+    left = d.until ? Math.max(0, Math.ceil((d.until - clockNow()) / 1000)) : 0;
+  const title = $("#defTitle"),
+    info = $("#defInfo"),
+    hint = $("#defHint");
+  hud.dataset.phase = d.phase;
+  $("#defWaves").hidden = d.phase !== "idle";
+  $("#defWaveCount").textContent = d.waves;
+  if (d.phase === "idle") {
+    title.textContent = "Защита крепости";
+    info.textContent = `готовы ${ready}/${here}`;
+    hint.textContent = d.ready?.[matchId()] ? "Вы готовы — ждём остальных (R — передумать)" : "R — готов. Когда готовы все, из подземелья пойдут монстры";
+  } else if (d.phase === "countdown") {
+    title.textContent = `Волна 1 через ${left}…`;
+    info.textContent = `волн: ${d.waves}`;
+    hint.textContent = "На стены! Монстры идут к крепости, а ближе 4 м — на вас";
+  } else if (d.phase === "wave") {
+    title.textContent = `Волна ${d.wave} из ${d.waves}`;
+    info.textContent = `монстров: ${d.monsters?.length || 0}`;
+    hint.textContent = active.dead ? `Вы вернётесь в бой через ${Math.max(0, Math.ceil((downUntil - clockNow()) / 1000))} с` : "";
+  } else if (d.phase === "break") {
+    title.textContent = `Волна ${d.wave} отбита`;
+    info.textContent = `следующая через ${left} с`;
+    hint.textContent = "";
+  } else {
+    title.textContent = d.phase === "won" ? "Победа! Крепость выстояла" : "Крепость пала";
+    info.textContent = d.phase === "won" ? `все ${d.waves} волн отбиты` : `на волне ${d.wave} из ${d.waves}`;
+    hint.textContent = "Скоро можно сыграть снова";
+  }
+  const fortOn = d.phase !== "idle",
+    k = Math.max(0, d.fort / (d.fortMax || DEFENSE.fortHp));
+  $("#defFort").hidden = !fortOn;
+  $("#defFortFill").style.width = `${k * 100}%`;
+  $("#defFort").classList.toggle("low", k < 0.3);
+  $("#defFort").classList.toggle("hit", performance.now() - fortHitAt < 180);
+  $("#defFortText").textContent = `Крепость ${Math.max(0, Math.ceil(d.fort))}/${d.fortMax || DEFENSE.fortHp}`;
+  const meOn = fortOn && d.phase !== "won" && d.phase !== "lost",
+    hp = active.dead ? 0 : Math.max(0, active.hp ?? myMaxHp());
+  $("#defMe").hidden = !meOn;
+  $("#defHpFill").style.width = `${(hp / myMaxHp()) * 100}%`;
+  $("#defMe").classList.toggle("low", hp / myMaxHp() < 0.3);
+  $("#defHpText").textContent = active.dead ? "Выбыли" : `Здоровье ${Math.ceil(hp)}/${myMaxHp()}`;
+  if (defenseScoreOpen) renderDefenseScore();
+}
+// Награды: три карточки, одна на выбор; после выбора — что выбрали другие.
+function renderDefenseCards() {
+  const box = $("#defCards"),
+    d = defenseState(),
+    offers = d?.phase === "break" ? d.offers?.[matchId()] : null;
+  box.hidden = !offers?.length;
+  if (box.hidden) return;
+  const picked = d.picked?.[matchId()],
+    total = Object.keys(d.offers || {}).length,
+    done = Object.keys(d.picked || {}).length;
+  const kinds = { weapon: "Оружие", perk: "Умение", team: "Для крепости" };
+  box.innerHTML =
+    `<h3>Волна ${d.wave} отбита · выберите награду</h3><div class="def-card-row">` +
+    offers
+      .map((key) => {
+        const c = CARDS[key];
+        return `<button class="def-card ${c.kind}${picked === key ? " picked" : ""}${picked && picked !== key ? " faded" : ""}" data-def-card="${key}" ${picked ? "disabled" : ""}><span class="def-card-kind">${kinds[c.kind]}</span><span class="def-card-icon" aria-hidden="true">${c.icon}</span><b>${c.title}</b><small>${c.text}</small></button>`;
+      })
+      .join("") +
+    `</div><p>${picked ? (done < total ? `Ждём остальных: выбрали ${done} из ${total}` : "Все выбрали — волна вот-вот") : "Не выберете — достанется первая"}</p>`;
+}
+// TAB на защите: кто сколько монстров убил и урона нанёс.
+function renderDefenseScore() {
+  const d = defenseState(),
+    box = $("#defScore");
+  if (!d) return;
+  const rows = Object.entries(d.stats || {})
+    .filter(([id]) => id !== "turret")
+    .sort((a, b) => b[1].k - a[1].k || b[1].dmg - a[1].dmg);
+  const turret = d.stats?.turret;
+  box.innerHTML =
+    `<h3>Защита крепости · волна ${d.wave || 0} из ${d.waves}</h3><table><thead><tr><th>Кто</th><th>Убито</th><th>Урон</th></tr></thead><tbody>` +
+    (rows.map(([id, s]) => `<tr class="${id === matchId() ? "me" : ""}"><td>${esc(playerName(id))}</td><td>${s.k}</td><td>${Math.round(s.dmg)}</td></tr>`).join("") || `<tr><td colspan="3">Пока никого не убили</td></tr>`) +
+    (turret ? `<tr class="turret"><td>Самострелы</td><td>${turret.k}</td><td>${Math.round(turret.dmg)}</td></tr>` : "") +
+    `</tbody></table><p class="foot">TAB — закрыть</p>`;
+}
+function toggleDefenseScore(show) {
+  defenseScoreOpen = !!show && !!defenseState();
+  $("#defScore").hidden = !defenseScoreOpen;
+  if (defenseScoreOpen) renderDefenseScore();
+}
+// Справка: классы монстров и как часто они выходят по волнам.
+function defenseGuide() {
+  const d = defenseState(),
+    n = d?.waves || DEFENSE.waves.default;
+  const waves = Array.from({ length: n }, (_, i) => i + 1);
+  const rows = Object.entries(MONSTERS)
+    .map(([c, m]) => {
+      const odds = waves.map((w) => (m.boss ? (w === n ? "босс" : "—") : `${Math.round(spawnOdds(waveInfo(w, n).p)[c] * 100)}%`));
+      return `<tr><td><b>${m.name}</b><small>${m.group}</small></td><td>${m.hp}</td><td>${m.hit}</td><td>${m.fort}</td><td>${m.speed}</td>${odds.map((o) => `<td>${o}</td>`).join("")}</tr>`;
+    })
+    .join("");
+  const sizes = waves.map((w) => Math.round(waveInfo(w, n).duration * waveInfo(w, n).rate));
+  modal(
+    "Монстры подземелья",
+    `<div class="def-guide"><p class="modal-text">Монстры идут к крепости, а ближе 4 м — на ближайшего аватара. Крепость — ${DEFENSE.fortHp} прочности; кончится — команда проиграла. С каждым игроком в комнате монстры выходят на половину чаще.</p><div class="def-guide-scroll"><table><thead><tr><th>Класс</th><th>Здоровье</th><th>Бьёт вас</th><th>Бьёт крепость</th><th>м/с</th>${waves.map((w) => `<th>Волна ${w}</th>`).join("")}</tr></thead><tbody>${rows}<tr class="total"><td>Монстров (1 игрок)</td><td colspan="4"></td>${sizes.map((s, i) => `<td>≈${s}${i === n - 1 ? " + босс" : ""}</td>`).join("")}</tr></tbody></table></div><p class="modal-text">Снежок и помидор снимают 1, камень — 2, кирпич — 4, взрыв в центре — 10. Между волнами — награды: новое оружие, умения или помощь крепости.</p></div>`,
+    true,
+  );
+}
+function defenseClick(b) {
+  if (b.dataset.defWaves) {
+    const d = defenseState();
+    if (d?.phase === "idle") op({ t: "def.config", waves: d.waves + +b.dataset.defWaves });
+  }
+  if (b.dataset.defCard) op({ t: "def.pick", card: b.dataset.defCard });
+  if (b.dataset.defGuide != null) defenseGuide();
+}
+
 // ——— Icicle: shatters where it lands, freezing everyone close by for a few seconds ———
 const shownFrosts = new Set();
 const FROST = projectile("icicle").frost;
@@ -807,6 +1181,8 @@ function frostProjectile(pr, point) {
   if (pr.owner !== "self") return; // the thrower reports where it shattered
   applyFrost(point.x, point.z, pr.pid);
   net.send({ t: "act", k: "frost", pid: pr.pid, x: r3(point.x), z: r3(point.z) });
+  // Монстров морозит сервер; без него — здесь.
+  if (!net.connected && world.defense) frostMonsters(world.defense, point.x, point.z, FROST.radius, FROST.seconds);
 }
 // Frozen avatars get a crust of ice around their feet.
 function ensureFrost(p) {
@@ -1693,6 +2069,11 @@ let charge = null;
 const projectileId = () => Math.random().toString(36).slice(2, 12);
 function setWeapon(id) {
   const kind = projectile(id);
+  // Защита крепости: оружие сверх снежков, помидоров и камней открывают награды.
+  if (!weaponAllowed(defenseState(), matchId(), kind.id)) {
+    toast(`${kind.emoji} ${kind.label} — откроется наградой между волнами`, 1800);
+    return;
+  }
   weapon = kind.id;
   try {
     localStorage.setItem("kino-weapon-v1", JSON.stringify(weapon));
@@ -1717,9 +2098,10 @@ function renderWeapon() {
 }
 // Снаряды: островок над панелью, только значки (название и клавиша — в подсказке).
 function renderWeaponPicker() {
-  $("#weaponPicker").innerHTML = PROJECTILES.map(
-    (k) => `<button data-weapon="${k.id}" class="${k.id === weapon ? "on" : ""}" title="${k.label} · ${k.key}" aria-label="${k.label}" aria-pressed="${k.id === weapon}"><span aria-hidden="true">${k.emoji}</span></button>`,
-  ).join("");
+  $("#weaponPicker").innerHTML = PROJECTILES.map((k) => {
+    const locked = !weaponAllowed(defenseState(), matchId(), k.id);
+    return `<button data-weapon="${k.id}" class="${k.id === weapon ? "on" : ""}${locked ? " locked" : ""}" title="${k.label} · ${k.key}${locked ? " — откроется наградой" : ""}" aria-label="${k.label}${locked ? " (закрыто)" : ""}" aria-pressed="${k.id === weapon}"><span aria-hidden="true">${k.emoji}</span></button>`;
+  }).join("");
   renderCooldowns();
 }
 function toggleWeaponPicker(force) {
@@ -1759,7 +2141,7 @@ function throwSnow(hit, power = 1) {
   const pid = projectileId();
   const vel = [r3(active.velocityX || 0), r3(active.velocityZ || 0)];
   if (startAction(active, "throw", worldTime, { to, w: kind.id, pw: power, pid, vel })) {
-    cooldownUntil[kind.id] = now + kind.cooldown * 1000;
+    cooldownUntil[kind.id] = now + kind.cooldown * 1000 * cooldownFactor(defenseState(), matchId());
     net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid, vel });
     renderCooldowns();
   }
@@ -1786,10 +2168,19 @@ function nearPickables(from, to, radius) {
   if (worldTime - pickBoundsAt > 1 / 30 || pickBoundsOf !== pickables || pickBounds.length !== pickables.length) {
     pickBoundsAt = worldTime;
     pickBoundsOf = pickables;
-    pickBounds = pickables.map((o) => {
-      pickBox.setFromObject(o);
-      return { o, s: pickBox.isEmpty() ? null : pickBox.getBoundingSphere(new T.Sphere()) };
-    });
+    pickBounds = [];
+    const bound = (o) => (pickBox.setFromObject(o).isEmpty() ? null : pickBox.getBoundingSphere(new T.Sphere()));
+    for (const o of pickables) {
+      const s = bound(o);
+      if (!s) continue;
+      // Большая группа (вся статика карты, экран): по частям, чтобы снежок в одном углу не проверял другой.
+      if (s.radius > 8 && !o.isMesh && o.children.length > 1)
+        for (const c of o.children) {
+          const cs = bound(c);
+          if (cs) pickBounds.push({ o: c, s: cs });
+        }
+      else pickBounds.push({ o, s });
+    }
   }
   // 0.8 m: a kart or a blown-away avatar moves about that far in 1/30 s.
   return pickBounds.filter(({ s }) => s && segmentDistance(s.center, from, to) <= s.radius + radius + 0.8).map(({ o }) => o);
@@ -1843,6 +2234,8 @@ function burst(pos, kind, snowOwner = "self", pr = null) {
     normal = pr?.normal || new T.Vector3(0, 1, 0);
   if (k.id === "tomato") effects.tomato(pos, normal, pr?.v);
   else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
+  // Монстр: попадание сообщает тот, кто бросил.
+  if (kind?.userData.kind === "monster" && snowOwner === "self" && WEAPON_DMG[k.id]) hitMonster(kind, k.id, pr?.v);
   if (["cube", "ball"].includes(kind?.userData.kind) && snowOwner === "self") {
     const c = findObject(world, kind.userData.id);
     if (c) {
@@ -2030,6 +2423,9 @@ function kickNearest() {
     foeD = foe ? Math.hypot(foe.x - active.x, foe.z - active.z) : Infinity,
     nearD = near ? Math.hypot(near.x - active.x, near.z - active.z) : Infinity;
   if (foe && foeD <= nearD) return meleeSwing(foe);
+  // Монстр рядом (и мяча ближе нет): пинок.
+  const monster = nearestMonster();
+  if (monster && monster.d <= nearD) return kickMonster(monster.v);
   // A prop within reach (and no ball nearer): kick it, or lift it back up if it has fallen over.
   const prop = mapProps(mapDef(world.map))
     .filter((p) => Number.isFinite(p.weight) && world.structures[p.id])
@@ -2315,7 +2711,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — тормоз. На доске, самокате, BMX <kbd>Space</kbd> — прыжок, <kbd>Shift</kbd> — флип (с земли — с прыжком), в воздухе <kbd>A</kbd>/<kbd>D</kbd> — вращение. В карте <kbd>Space</kbd> — стоп; карт выдаёт автомат на картинге, рядом — автомат выбора трассы; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>9</kbd> или колесо — снежок, помидор, теннисный мяч, камень, кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — тормоз. На доске, самокате, BMX <kbd>Space</kbd> — прыжок, <kbd>Shift</kbd> — флип (с земли — с прыжком), в воздухе <kbd>A</kbd>/<kbd>D</kbd> — вращение. В карте <kbd>Space</kbd> — стоп; карт выдаёт автомат на картинге, рядом — автомат выбора трассы; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>8</kbd>, колесо или островок над кнопкой броска — снежок, помидор, камень (до 2 раз в секунду), кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Защита крепости</strong><kbd>R</kbd> — готов; когда готовы все, из подземелья пойдут монстры. Число волн — на панели сверху. Монстры идут к крепости, а ближе 4 м — на вас; со стены вас не достать. <kbd>E</kbd> рядом с монстром — пинок, <kbd>Tab</kbd> — счёт. Между волнами — награды.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -2608,6 +3004,7 @@ document.addEventListener("click", (e) => {
   }
   if (b.closest("#pollCard")) pollClick(b);
   if (b.closest("#drawIsland")) penClick(b);
+  if (b.closest("#defHud, #defCards")) defenseClick(b);
   if (b.dataset.shape) {
     cubeShape = b.dataset.shape;
     remember("kino-shape", cubeShape);
@@ -2901,8 +3298,10 @@ canvas.addEventListener(
       updateShareTools();
     } else if (Math.abs(e.deltaY) > 4)
       throttled("wheel", () => {
-        const i = PROJECTILES.findIndex((k) => k.id === weapon);
-        setWeapon(PROJECTILES[(i + Math.sign(e.deltaY) + PROJECTILES.length) % PROJECTILES.length].id);
+        // Колесо листает только открытое.
+        const open = PROJECTILES.filter((k) => weaponAllowed(defenseState(), matchId(), k.id)),
+          i = open.findIndex((k) => k.id === weapon);
+        setWeapon(open[(i + Math.sign(e.deltaY) + open.length) % open.length].id);
       }, 160);
   },
   { passive: false },
@@ -2944,9 +3343,12 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "KeyR" && !e.repeat && inMatchMap() && world.match?.phase === "idle") {
     op({ t: world.match.ready?.[matchId()] ? "match.unready" : "match.ready" });
   }
+  // Защита крепости: R — готов (или передумал), пока игра не началась.
+  if (e.code === "KeyR" && !e.repeat && defenseState()?.phase === "idle") op({ t: defenseState().ready?.[matchId()] ? "def.unready" : "def.ready" });
   if (e.code === "Tab") {
     e.preventDefault();
     if (!e.repeat && inMatchMap()) toggleScoreboard(true);
+    if (!e.repeat && defenseState()) toggleDefenseScore(true);
   }
   if (e.code === "KeyV") setTool("interact");
   if (e.code === "KeyX") setTool("snow");
@@ -2967,7 +3369,10 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("keyup", (e) => {
   if (keyMap[e.code]) keys.delete(keyMap[e.code]);
-  if (e.code === "Tab") toggleScoreboard(false);
+  if (e.code === "Tab") {
+    toggleScoreboard(false);
+    toggleDefenseScore(false);
+  }
   if (e.key === "Shift") {
     sprinting = false;
     shiftHeld = false;
@@ -3047,6 +3452,8 @@ function physics(dt) {
   }
   stepMatchOffline();
   stepMines();
+  stepDefenseOffline(dt);
+  stepDefenseSelf(dt);
   updateSeesaws(dt);
   mapScene.tickProps(dt);
   const obstacles = mapScene.colliders();
@@ -3170,7 +3577,8 @@ function physics(dt) {
       }
       // Ice: you skate — speed builds up, and you glide on when you let go.
       const ice = p.y < 0.2 && !!iceAt(mapScene.map, p.x, p.z);
-      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1) * (p.slow > 0 ? 0.5 : 1), ice);
+      const swift = defenseRunning() ? 1 + 0.15 * perksOf(world.defense, matchId()).swift : 1;
+      stepBody(p, move, obstacles, dt, (sprinting && (move.x || move.z) ? SPRINT : 1) * (water ? (water.slow ?? 0.6) : 1) * (p.slow > 0 ? 0.5 : 1) * swift, ice);
       p.velocityX = (p.x - oldX) / dt;
       p.velocityZ = (p.z - oldZ) / dt;
       if (!wasGrounded && p.grounded) p.land = 0.2;
@@ -3338,6 +3746,7 @@ function visual(dt) {
   // Remote avatars are sampled once per rendered frame, so their motion is as smooth as the display.
   for (const p of players) if (p.remote) updateRemote(p, dt);
   tickMines();
+  drawDefense(dt);
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
     ensureTeamRing(p);
@@ -3673,6 +4082,7 @@ function currentPose() {
   } else if (active.climb) pose[active.climb.c.kind === "zip" ? "zp" : "cl"] = 1;
   if (sledding(active)) pose.sd = 1;
   if (active.slow > 0) pose.fr = 1;
+  if (active.dead && defenseRunning()) pose.dn = 1;
   if (active.kart) {
     pose.kt = 1;
     if (Math.abs(active.kart.steer) > 0.05) pose.ks = Math.round(active.kart.steer * 10) / 10;
@@ -3704,7 +4114,8 @@ function sendPose(now) {
     lastPose.sh !== pose.sh ||
     String(lastPose.m) !== String(pose.m) ||
     lastPose.ps !== pose.ps ||
-    lastPose.c !== pose.c;
+    lastPose.c !== pose.c ||
+    lastPose.dn !== pose.dn;
   if (changed) movedAt = now;
   const since = now - lastPoseSent;
   const due = now - movedAt < 200 ? since >= POSE_INTERVAL : since >= HEARTBEAT;
@@ -3780,6 +4191,7 @@ function loadState(fresh, objs) {
     poll: fresh.poll || null,
     strokes: fresh.strokes || [],
     match: fresh.match,
+    defense: fresh.defense || null,
     mines: fresh.mines || [],
     flags: {},
     lifts: {},
@@ -3829,6 +4241,10 @@ function onWelcome(m) {
   for (const p of players.slice(1)) removeRemote(p.profile.id, true);
   for (const peer of m.peers) addRemote(peer.id, peer.profile, peer.pose, true);
   loadState(createState(m.state, uid), m.objs);
+  // Идущая защита крепости приходит с сервером как есть (createState начал бы её заново).
+  if (net.connected && m.state.defense) world.defense = m.state.defense;
+  renderDefenseHud();
+  renderDefenseCards();
   if (!placedOnce && m.you?.pose) {
     placedOnce = true;
     Object.assign(active, { x: m.you.pose.x, z: m.you.pose.z, y: 0, vy: 0, grounded: true });
@@ -3972,6 +4388,10 @@ function onServer(m, at) {
       active.tumble = null;
       active.climb = null;
       loadState(createState(m.state, uid), m.objs);
+  // Идущая защита крепости приходит с сервером как есть (createState начал бы её заново).
+  if (net.connected && m.state.defense) world.defense = m.state.defense;
+  renderDefenseHud();
+  renderDefenseCards();
       // Everyone starts the new map at its entrance.
       Object.assign(active, spawnPoint(mapDef(world.map), Math.random, world.structures), { y: 0, vy: 0, grounded: true, kx: 0, kz: 0, hp: MAX_HP, dead: false, slow: 0 });
       pending = null;
@@ -3998,6 +4418,13 @@ function onServer(m, at) {
     case "strokes":
       world.strokes = m.strokes || [];
       strokeLayer.set(world.strokes);
+      break;
+    case "def":
+    case "mon":
+    case "mons":
+    case "mon.dmg":
+    case "mon.atk":
+      onDefense(m);
       break;
     case "error":
       toast(m.message, 6000);
@@ -4210,6 +4637,7 @@ setInterval(() => {
   renderTimer();
   status();
   renderCooldowns();
+  renderDefenseHud();
 }, 250);
 requestAnimationFrame(frame);
 $("#loading").classList.add("hidden");

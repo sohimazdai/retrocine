@@ -1950,3 +1950,335 @@ body:has(.sub-island:not([hidden]), .emotion-island:not([hidden])) .island .tip 
     bottom: 168px;
   }
 }
+
+/* ——— Защита крепости: панель сверху, карточки наград, счёт, справка ——— */
+.def-hud {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  pointer-events: none;
+  max-width: calc(100vw - 140px);
+}
+.def-hud[hidden] {
+  display: none;
+}
+.def-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px 6px 14px;
+  border: 1px solid #a899c033;
+  border-radius: 12px;
+  background: linear-gradient(150deg, #34313ef2, #24232ff7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px #0a09195c;
+  color: #f4e8ff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.def-banner > b {
+  font-size: 13px;
+}
+.def-banner > span {
+  color: #b8b1c8;
+}
+.def-waves {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 9px;
+  border-left: 1px solid #ffffff1a;
+  pointer-events: auto;
+}
+.def-waves[hidden] {
+  display: none;
+}
+.def-waves b {
+  color: #f4e8ff;
+}
+.def-waves button,
+.def-guide-button {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: #ffffff0f;
+  color: #f4e8ff;
+  font-size: 13px;
+  line-height: 1;
+  pointer-events: auto;
+}
+.def-waves button:hover,
+.def-guide-button:hover {
+  background: #c1a9fa40;
+}
+.def-bar {
+  position: relative;
+  width: 280px;
+  height: 17px;
+  border: 1px solid #ffffff24;
+  border-radius: 9px;
+  background: #19171ee6;
+  overflow: hidden;
+  box-shadow: 0 6px 18px #0006;
+}
+.def-bar[hidden] {
+  display: none;
+}
+.def-bar.me {
+  width: 200px;
+  height: 13px;
+}
+.def-bar i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(180deg, #f0cf7a, #c98a3a);
+  transition: width 0.2s ease;
+}
+.def-bar.me i {
+  background: linear-gradient(180deg, #9ce46a, #4fa83a);
+}
+.def-bar.low i {
+  background: linear-gradient(180deg, #ff7a5a, #c8321f);
+  animation: def-low 0.9s ease-in-out infinite;
+}
+.def-bar.hit {
+  box-shadow: 0 0 0 2px #ff6a4a, 0 6px 18px #0006;
+}
+.def-bar span {
+  position: relative;
+  display: block;
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+  color: #fff;
+  text-shadow: 0 1px 2px #000c;
+}
+.def-bar.me span {
+  font-size: 9.5px;
+  line-height: 11px;
+}
+@keyframes def-low {
+  50% {
+    filter: brightness(1.4);
+  }
+}
+.def-hint {
+  min-height: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #f4e8ff;
+  text-shadow: 0 1px 3px #000, 0 0 10px #000a;
+}
+.def-hint:empty {
+  display: none;
+}
+/* Карточки наград между волнами. */
+.def-cards {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -54%);
+  z-index: 24;
+  padding: 14px 16px 10px;
+  border: 1px solid #a899c033;
+  border-radius: 16px;
+  background: linear-gradient(150deg, #34313ef5, #24232ffa);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 24px 70px #0a091980;
+  color: #f4e8ff;
+  text-align: center;
+  animation: island-in-right 0.2s ease-out;
+  max-width: calc(100vw - 24px);
+}
+.def-cards[hidden] {
+  display: none;
+}
+.def-cards h3 {
+  margin: 0 0 11px;
+  font-size: 14px;
+}
+.def-cards p {
+  margin: 9px 0 0;
+  font-size: 11px;
+  color: #b8b1c8;
+}
+.def-card-row {
+  display: flex;
+  gap: 9px;
+  justify-content: center;
+}
+.def-card {
+  --k: #c1a9fa;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 150px;
+  padding: 10px 10px 12px;
+  border: 1px solid #ffffff1a;
+  border-top: 3px solid var(--k);
+  border-radius: 12px;
+  background: #ffffff0a;
+  color: #f4e8ff;
+  transition:
+    transform 0.15s,
+    background 0.15s,
+    opacity 0.2s;
+}
+.def-card.weapon {
+  --k: #f0a35a;
+}
+.def-card.team {
+  --k: #5ad1c8;
+}
+.def-card:not(:disabled):hover {
+  transform: translateY(-3px);
+  background: #ffffff14;
+}
+.def-card-kind {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--k);
+}
+.def-card-icon {
+  font-size: 30px;
+  line-height: 1.15;
+}
+.def-card b {
+  font-size: 13px;
+}
+.def-card small {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #c9c1d8;
+}
+.def-card.picked {
+  box-shadow: 0 0 0 2px var(--k);
+  background: #ffffff16;
+}
+.def-card.faded {
+  opacity: 0.4;
+}
+/* TAB: счёт защиты. */
+.def-score {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
+  min-width: 320px;
+  padding: 16px 18px;
+  border: 1px solid #ffffff1f;
+  border-radius: 16px;
+  background: #1d1b24f5;
+  color: #f4e8ff;
+  font-size: 13px;
+  box-shadow: 0 18px 60px #0008;
+}
+.def-score[hidden] {
+  display: none;
+}
+.def-score h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+.def-score table,
+.def-guide table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.def-score th,
+.def-score td,
+.def-guide th,
+.def-guide td {
+  padding: 5px 8px;
+  text-align: right;
+}
+.def-score th:first-child,
+.def-score td:first-child,
+.def-guide th:first-child,
+.def-guide td:first-child {
+  text-align: left;
+}
+.def-score th,
+.def-guide th {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b8b1c8;
+  border-bottom: 1px solid #ffffff1f;
+}
+.def-score tr.me td {
+  background: #c1a9fa1f;
+}
+.def-score tr.turret td {
+  color: #9fe3dc;
+}
+.def-score .foot {
+  margin: 10px 0 0;
+  text-align: center;
+  font-size: 11px;
+  color: #b8b1c8;
+}
+.def-guide-scroll {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.def-guide td {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.def-guide td small {
+  display: block;
+  font-size: 10px;
+  color: #b8b1c8;
+}
+.def-guide tr.total td {
+  border-top: 1px solid #ffffff1f;
+  font-weight: 600;
+}
+/* Закрытое оружие на островке снарядов. */
+.sub-island.weapon-island button.locked {
+  opacity: 0.38;
+  filter: grayscale(1);
+}
+.sub-island.weapon-island button.locked::before {
+  content: "🔒";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  font-size: 10px;
+  filter: none;
+}
+@media (max-width: 720px) {
+  .def-hud {
+    top: 58px;
+    max-width: calc(100vw - 20px);
+  }
+  .def-banner {
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+  }
+  .def-bar {
+    width: 220px;
+  }
+  .def-card-row {
+    flex-direction: column;
+  }
+  .def-card {
+    width: 240px;
+    flex-direction: row;
+    text-align: left;
+    flex-wrap: wrap;
+  }
+}

@@ -18,7 +18,10 @@ import {
   fitRoom,
   stepProps,
   propsMoving,
+  runDefense,
+  defenseActive,
 } from "../../dist/state.js";
+import { createDefense, serializeDefense, packMonsters, weaponAllowed, cooldownFactor, frostMonsters } from "../../dist/defense.js";
 import { removePlayer as matchRemovePlayer, serializeMatch } from "../../dist/match.js";
 import { spawnPoint, zonesOf } from "../../dist/world.js";
 import { projectile, PROJECTILES } from "../../dist/projectiles.js";
@@ -29,6 +32,9 @@ import { livekitToken } from "./livekit.js";
 export const MAX_PEERS = 16;
 const PHYS_DT = 1 / 120;
 const OBJECT_BROADCAST = 1 / 30;
+// Защита крепости: монстры шагают 30 раз в секунду, их позиции уходят всем 10 раз в секунду.
+const DEFENSE_DT = 1 / 30,
+  MONSTER_BROADCAST = 1 / 10;
 const ACTS = new Set(["throw", "kick", "shoot", "emote", "jump", "trick", "hit", "lap", "melee", "frost"]);
 export const now = () => performance.timeOrigin + performance.now();
 export const newId = () => randomBytes(6).toString("hex");
@@ -85,6 +91,8 @@ export function sanitizePose(p) {
   if (p.sd === 1) pose.sd = 1;
   // Slowed by an icicle.
   if (p.fr === 1) pose.fr = 1;
+  // Выбыл на защите крепости (монстры его не трогают, пока не вернётся).
+  if (p.dn === 1) pose.dn = 1;
   // Hanging from a bar, and how far pulled up.
   if (p.hb === 1) pose.hb = 1;
   if (Number.isFinite(p.pu) && p.pu > 0) pose.pu = Math.round(clamp(p.pu, 0, 1) * 10) / 10;
@@ -213,6 +221,13 @@ export class Room {
       this.broadcast({ t: "match", match: serializeMatch(this.state.match) });
       if (matchActive(this.state)) this.startPhysics();
     }
+    // Защита крепости: ушедший больше не «готов»; ушли все — игра начнётся заново.
+    const d = this.state.defense;
+    if (d && (d.ready[peer.id] || (!this.peers.size && d.phase !== "idle"))) {
+      delete d.ready[peer.id];
+      if (!this.peers.size) this.state.defense = createDefense(d.waves);
+      this.broadcast({ t: "def", def: serializeDefense(this.state.defense) });
+    }
     this.broadcast({ t: "leave", id: peer.id });
     this.log(`room ${this.id}: ${peer.id} left, ${this.peers.size} inside`);
   }
@@ -275,8 +290,10 @@ export class Room {
           // Cooldowns per projectile (snowballs, tomatoes, rocks 0.5 s, bricks 1 s, fireballs 5 s,
           // grenades 10 s). A throw may come a little early (network jitter), but each one moves the
           // next allowed time a full cooldown on, so on average it is never faster.
+          // На защите крепости — только открытое наградами и с их перезарядкой.
+          if (!weaponAllowed(this.state.defense, peer.id, kind.id)) return;
           const t = now(),
-            cd = kind.cooldown * 1000,
+            cd = kind.cooldown * 1000 * cooldownFactor(this.state.defense, peer.id),
             next = peer.nextThrow[kind.id] || 0;
           if (t < next - Math.min(150, cd * 0.3)) return;
           peer.nextThrow[kind.id] = Math.max(t, next) + cd;
@@ -322,6 +339,9 @@ export class Room {
           out.pid = msg.pid.slice(0, 24);
           out.x = r3(clamp(msg.x, -40, 40));
           out.z = r3(clamp(msg.z, -40, 40));
+          // Монстры вокруг тоже еле ползут.
+          const frost = projectile("icicle").frost;
+          frostMonsters(this.state.defense, out.x, out.z, frost.radius, frost.seconds);
         }
         // A melee hit on another player (the victim applies the damage on their own client).
         if (msg.k === "melee") {
@@ -351,7 +371,7 @@ export class Room {
     if (!result) return;
     for (const { msg: out, others } of result.out) this.broadcast(out, others ? peer : null);
     if (result.physics) this.startPhysics();
-    if (msg.t.startsWith("match")) this.startPhysics();
+    if (msg.t.startsWith("match") || msg.t.startsWith("def.")) this.startPhysics();
     if (msg.t.startsWith("timer")) this.scheduleTimer();
     this.markDirty();
   }
@@ -359,6 +379,8 @@ export class Room {
     if (this.physTimer) return;
     this.lastStep = performance.now();
     this.acc = 0;
+    this.defAcc = 0;
+    this.sinceMonsters = MONSTER_BROADCAST;
     this.sinceBroadcast = OBJECT_BROADCAST;
     this.physTimer = setInterval(() => this.tick(), 1000 / 60);
     this.physTimer.unref?.();
@@ -412,7 +434,25 @@ export class Room {
       this.broadcast(m);
       this.markDirty();
     }
-    let awake = propsMoving(this.state) || pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || minesPending(this.state);
+    // Защита крепости: волны, монстры, удары; позиции монстров — 10 раз в секунду.
+    if (defenseActive(this.state)) {
+      this.defAcc += elapsed;
+      const avatars = [...this.peers.values()].map((p) => ({ id: p.id, x: p.pose.x, y: p.pose.y, z: p.pose.z, down: !!p.pose.dn }));
+      for (let n = 0; this.defAcc >= DEFENSE_DT && n < 6; n++) {
+        this.defAcc -= DEFENSE_DT;
+        for (const m of runDefense(this.state, nowMs, DEFENSE_DT, avatars)) {
+          this.broadcast(m);
+          if (m.t === "mines") this.startPhysics();
+        }
+      }
+      this.defAcc = Math.min(this.defAcc, DEFENSE_DT);
+      this.sinceMonsters += elapsed;
+      if (this.sinceMonsters >= MONSTER_BROADCAST && this.state.defense?.monsters.length) {
+        this.sinceMonsters = 0;
+        this.broadcast({ t: "mons", s: nowMs, m: packMonsters(this.state.defense) }, null, true);
+      }
+    }
+    let awake = propsMoving(this.state) || pushers.length > 0 || Object.keys(this.state.lifts || {}).length > 0 || (this.peers.size > 0 && flowing(this.state)) || (this.peers.size > 0 && matchActive(this.state)) || (this.peers.size > 0 && defenseActive(this.state)) || minesPending(this.state);
     for (const o of objects) {
       if (dragged(o)) {
         awake = true;

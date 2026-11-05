@@ -22,10 +22,19 @@ export function jump(body) {
   return true;
 }
 // Sloped colliders: "ramp" (straight wedge, height h0 → h1 along axis), "qpipe" (quarter pipe,
-// a concave curve rising toward the dir side, as tall as h) and "path" (a road of a given width along
-// a polyline of [x, z, y] points: hills, embankments and bridges). Their top surface carries bodies
-// and balls.
-export const sloped = (b) => b.shape === "ramp" || b.shape === "qpipe" || b.shape === "path";
+// a concave curve rising toward the dir side, as tall as h), "path" (a road of a given width along
+// a polyline of [x, z, y] points: hills, embankments and bridges) and "mound" (a smooth round hill:
+// an ellipse w × d, h high at the top, flat on its inner `top` part, falling off like a cosine to the
+// rim). Their top surface carries bodies and balls.
+export const sloped = (b) => b.shape === "ramp" || b.shape === "qpipe" || b.shape === "path" || b.shape === "mound";
+// How far out on a mound (0 at the centre, 1 at the rim).
+const moundT = (b, x, z) => Math.hypot((x - b.x) / (b.w / 2), (z - b.z) / (b.d / 2));
+export function moundHeight(b, x, z) {
+  const t = moundT(b, x, z),
+    top = b.top || 0;
+  if (t >= 1) return 0;
+  return t <= top ? b.h : (b.h * (1 + Math.cos((Math.PI * (t - top)) / (1 - top)))) / 2;
+}
 // ——— Paths ———
 const pathCache = new WeakMap();
 function pathData(b) {
@@ -75,6 +84,7 @@ export function pathNearest(b, x, z) {
 export const PATH_CLEARANCE = 1.5;
 export function surfaceOf(b, x, z) {
   if (b.shape === "path") return pathNearest(b, x, z).y;
+  if (b.shape === "mound") return moundHeight(b, x, z);
   if (!sloped(b)) return b.h;
   const u = clamp(b.axis === "x" ? (x - (b.x - b.w / 2)) / b.w : (z - (b.z - b.d / 2)) / b.d, 0, 1);
   if (b.shape === "ramp") return b.h0 + (b.h1 - b.h0) * u;
@@ -84,7 +94,7 @@ export function surfaceOf(b, x, z) {
 // Downhill direction and steepness on a sloped collider at (x, z): { x, z, slope }.
 export function downhill(b, x, z) {
   const e = 0.05;
-  if (b.shape === "path") {
+  if (b.shape === "path" || b.shape === "mound") {
     const gx = (surfaceOf(b, x + e, z) - surfaceOf(b, x - e, z)) / (2 * e),
       gz = (surfaceOf(b, x, z + e) - surfaceOf(b, x, z - e)) / (2 * e),
       g = Math.hypot(gx, gz) || 1;
@@ -99,6 +109,7 @@ export function downhill(b, x, z) {
 export function inside(x, z, b, pad = 0) {
   if (b.shape === "cylinder")
     return Math.hypot(x - b.x, z - b.z) < b.radius + pad;
+  if (b.shape === "mound") return Math.hypot((x - b.x) / (b.w / 2 + pad), (z - b.z) / (b.d / 2 + pad)) < 1;
   if (b.shape === "path") {
     const d = pathData(b);
     if (x < d.x0 - pad || x > d.x1 + pad || z < d.z0 - pad || z > d.z1 + pad) return false;

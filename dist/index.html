@@ -118,6 +118,21 @@
     </div>
     <div id="weaponPicker" class="sub-island weapon-island" hidden aria-label="Чем бросаться"></div>
     <div id="chargeRing" class="charge-ring" hidden aria-hidden="true"></div>
+    <!-- Защита крепости: волна, прочность крепости, ваше здоровье; до игры — готовность и число волн. -->
+    <div id="defHud" class="def-hud" hidden>
+      <div class="def-banner">
+        <b id="defTitle"></b><span id="defInfo"></span>
+        <span id="defWaves" class="def-waves" title="Сколько волн в игре"
+          ><button data-def-waves="-1" aria-label="Меньше волн">−</button><span>волн <b id="defWaveCount">5</b></span
+          ><button data-def-waves="1" aria-label="Больше волн">+</button></span
+        ><button class="def-guide-button" data-def-guide title="Монстры и волны" aria-label="Монстры и волны">?</button>
+      </div>
+      <div id="defFort" class="def-bar fort" hidden><i id="defFortFill"></i><span id="defFortText"></span></div>
+      <div id="defMe" class="def-bar me" hidden><i id="defHpFill"></i><span id="defHpText"></span></div>
+      <div id="defHint" class="def-hint"></div>
+    </div>
+    <div id="defCards" class="def-cards" hidden></div>
+    <div id="defScore" class="def-score" hidden></div>
     <div id="toast" role="status"></div>
     <dialog id="modal"><div id="modalContent"></div></dialog>
     <div id="srStatus" class="sr-only" role="status"></div>

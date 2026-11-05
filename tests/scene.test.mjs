@@ -26,6 +26,8 @@ import * as hitboxesModule from "../dist/hitboxes.js";
 import * as ridingModule from "../dist/riding.js";
 import * as ridesModule from "../dist/rides.js";
 import * as drawingModule from "../dist/drawing.js";
+import * as defenseModule from "../dist/defense.js";
+import * as monstersModule from "../dist/monsters.js";
 import * as climbingModule from "../dist/climbing.js";
 import * as kartingModule from "../dist/karting.js";
 import * as kartsModule from "../dist/karts.js";
@@ -235,6 +237,8 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...ridingModule,
     ...ridesModule,
     ...drawingModule,
+    ...defenseModule,
+    ...monstersModule,
     ...climbingModule,
     ...kartingModule,
     ...kartsModule,
@@ -900,7 +904,8 @@ test("a tomato leaves no stain: it bursts into juice, chunks and its green top, 
   assert(pieces, "it burst");
   assert(pieces[0] >= 25 && pieces[1] >= 10, `juice ${pieces[0]}, chunks ${pieces[1]}`);
   a.tick(0.25);
-  assert(a.run("effects.items.some(it=>it.object.isInstancedMesh && (()=>{const m=new T.Matrix4(),p=new T.Vector3();it.object.getMatrixAt(0,m);p.setFromMatrixPosition(m);return p.distanceTo(new T.Vector3(0,0,4))>0.3})())"), "the pieces fly apart");
+  const spread = a.run("Math.max(...effects.items.filter(it=>it.object.isInstancedMesh).flatMap(it=>Array.from({length:it.object.count},(_,i)=>{const m=new T.Matrix4(),p=new T.Vector3();it.object.getMatrixAt(i,m);p.setFromMatrixPosition(m);return Math.hypot(p.x,p.z-4)})))");
+  assert(spread > 0.5, `the pieces fly apart: ${spread.toFixed(2)} m`);
   a.tick(2);
   assert.equal(a.run("effects.items.length"), 0, "nothing stays behind");
   // An old client's tennis ball flies here as a snowball.
@@ -1748,4 +1753,98 @@ test("the toolbar is a miniature island: small buttons, poll and pencil included
   const a = boot();
   for (const sel of ['[data-tool="draw"]', '[data-action="poll"]', '[data-action="reaction"]', '[data-tool="cube"]'])
     assert(a.w.document.querySelector(`.island ${sel}`), sel);
+});
+
+const monsterRecord = (id, c, x, z, extra = {}) => `world.defense.monsters.push(${JSON.stringify({ id, c, v: 5, x, z, a: 0, hp: defenseModule.MONSTERS[c].hp, max: defenseModule.MONSTERS[c].hp, st: 0, sp: 0, cd: 0, tgt: null, frozen: 0, y: 0, ...extra })})`;
+
+test("fortress defense: the panel sets the waves and R starts it; monsters are 3D, your snowball hurts them, they hurt you; beaten, you are back in the fortress in 6 s", () => {
+  const a = boot({ offline: true }),
+    d = a.w.document;
+  a.run('op({ t: "map.set", id: "fortress" })');
+  a.tick(0.2);
+  assert.equal(a.run("ROOM.scale"), 2, "a field twice the size");
+  const hud = d.querySelector("#defHud");
+  assert.equal(hud.hidden, false);
+  assert.match(d.querySelector("#defTitle").textContent, /Защита крепости/);
+  d.querySelector('[data-def-waves="1"]').click();
+  assert.equal(a.run("world.defense.waves"), 6);
+  d.querySelector("[data-def-guide]").click();
+  assert.match(d.querySelector("#modal").textContent, /Гоблин.*Мелочь/);
+  assert.match(d.querySelector("#modal").textContent, /Каменный голем/);
+  a.run('$("#modal").close()');
+  d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "KeyR", bubbles: true }));
+  assert.equal(a.run("world.defense.phase"), "countdown");
+  a.run("world.defense.until = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("world.defense.phase"), "wave");
+  assert.match(d.querySelector("#defTitle").textContent, /Волна 1 из 6/);
+  assert.equal(d.querySelector("#defFort").hidden, false);
+  // Тихая волна: монстров ставим сами.
+  a.run("Object.assign(world.defense, { spawnUntil: Date.now() - 1, bossDone: true })");
+  // Кирпичи — только наградой.
+  a.run("setWeapon('brick')");
+  assert.equal(a.run("weapon"), "snow");
+  d.querySelector('[data-tool="snow"]').click();
+  assert(d.querySelector('#weaponPicker [data-weapon="brick"]').classList.contains("locked"));
+  assert(!d.querySelector('#weaponPicker [data-weapon="rock"]').classList.contains("locked"));
+  a.run("toggleWeaponPicker(false)");
+  // Снежок в зомби в 6 м (ещё не заметил вас).
+  a.run("Object.assign(active, { x: 0, z: 8, y: 0, vy: 0, grounded: true })");
+  a.run(monsterRecord("z1", "zombie", 0, 2));
+  a.tick(0.1);
+  assert.equal(a.run("monsterLayer.views.size"), 1);
+  assert.equal(a.run("pickables.includes(monsterLayer.views.get('z1').root)"), true, "snowballs can hit it");
+  a.run("active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,1.0,2),w:'snow',pw:1,pid:'s1'})");
+  for (let i = 0; i < 240 && a.run("world.defense.monsters[0].hp") === 6; i++) a.tick(1 / 120);
+  assert.equal(a.run("world.defense.monsters[0].hp"), 5, "−1 from a snowball");
+  a.tick(0.2);
+  assert.equal(a.run("monsterLayer.views.get('z1').bar.visible"), true, "a health bar");
+  // Гоблин вплотную бьёт вас.
+  a.run(monsterRecord("g1", "goblin", 0.4, 8));
+  a.tick(2.5);
+  const hp = a.run("active.hp");
+  assert(hp < 20 && hp >= 20 - 3, `hit: ${hp}`);
+  assert.match(d.querySelector("#defHpText").textContent, new RegExp(`Здоровье ${Math.ceil(hp)}/20`));
+  // Одолели: во двор крепости, через 6 с — снова в бою с полным здоровьем.
+  a.run("active.hp = 1");
+  a.tick(1.5);
+  assert.equal(a.run("active.dead"), true);
+  assert(a.run("active.x") < -24, `in the courtyard: ${a.run("active.x")}`);
+  a.run("downUntil = Date.now() - 1");
+  a.tick(0.1);
+  assert.equal(a.run("active.dead"), false);
+  assert.equal(a.run("active.hp"), 20);
+});
+
+test("fortress defense: E kicks a monster; a wave beaten brings three reward cards, one to pick; the chosen weapon unlocks", () => {
+  const a = boot({ offline: true }),
+    d = a.w.document;
+  a.run('op({ t: "map.set", id: "fortress" })');
+  a.tick(0.2);
+  a.run("op({ t: 'def.ready' }); world.defense.until = Date.now() - 1");
+  a.tick(0.1);
+  a.run("Object.assign(world.defense, { spawnUntil: Date.now() - 1, bossDone: true })");
+  a.run("Object.assign(active, { x: 0, z: 8, y: 0, vy: 0, grounded: true })");
+  a.run(monsterRecord("k1", "goblin", 0.9, 8, { hp: 1 }));
+  a.tick(0.1);
+  d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "KeyE", bubbles: true }));
+  a.tick(0.1);
+  assert.equal(a.run("world.defense.monsters.length"), 0, "kicked to death");
+  assert.equal(a.run("world.defense.stats.self.k"), 1);
+  a.tick(0.3);
+  assert.equal(a.run("world.defense.phase"), "break");
+  const cards = d.querySelectorAll("#defCards [data-def-card]");
+  assert.equal(d.querySelector("#defCards").hidden, false);
+  assert.equal(cards.length, 3);
+  // Подсунем карточку с кирпичами, чтобы проверить открытие оружия.
+  a.run("world.defense.offers.self = ['brick', 'repair', 'power']; renderDefenseCards()");
+  d.querySelector('#defCards [data-def-card="brick"]').click();
+  assert.equal(a.run("world.defense.picked.self"), "brick");
+  assert(d.querySelector('#defCards [data-def-card="brick"]').classList.contains("picked"));
+  a.run("setWeapon('brick')");
+  assert.equal(a.run("weapon"), "brick", "bricks are yours now");
+  // TAB: счёт.
+  d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Tab", bubbles: true }));
+  assert.equal(d.querySelector("#defScore").hidden, false);
+  assert.match(d.querySelector("#defScore").textContent, /Тестер\s*1/);
 });

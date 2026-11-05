@@ -13,3 +13,4 @@ import "./ropepark.look.js";
 import "./rink.look.js";
 import "./race.look.js";
 import "./track.look.js";
+import "./fortress.look.js";

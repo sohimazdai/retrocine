@@ -40,6 +40,7 @@ import {
 import { MAPS } from "./maps/index.js";
 import { projectile } from "./projectiles.js";
 import * as match from "./match.js";
+import * as defense from "./defense.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
@@ -132,6 +133,8 @@ export function createState(saved = {}, newId) {
     strokes: (Array.isArray(saved.strokes) ? saved.strokes : []).slice(-MAX_STROKES).map((st) => sanitizeStroke(st, st?.id || newId(), st?.by)).filter(Boolean),
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
+    // Защита крепости (только на её карте): с диска — лишь число волн, игра начинается заново.
+    defense: map.defense ? defense.loadDefense(sameMap ? saved.defense : null) : null,
     mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
     mineAt: {},
     flags: {},
@@ -177,6 +180,7 @@ export function serializeState(s) {
     structures: s.structures,
     scores: s.scores,
     match: s.match ? match.serializeMatch(s.match) : undefined,
+    defense: s.defense ? defense.serializeDefense(s.defense) : undefined,
     mines: (s.mines || []).map(({ id, x, z, by, armAt, triggerAt }) => ({ id, x, z, by, armAt, triggerAt })),
     timer: s.timer,
     poll: s.poll || null,
@@ -539,6 +543,7 @@ export function applyOp(s, op, ctx) {
       s.flags = {};
       s.lifts = {};
       s.lastTouch = {};
+      s.defense = map.defense ? defense.createDefense(s.defense?.waves) : null;
       s.v++;
       // Stickers stay, moved out of anything solid on the new map.
       for (const n of s.notes) Object.assign(n, freeSpot(s, n.x, n.z));
@@ -640,6 +645,8 @@ export function applyOp(s, op, ctx) {
       const props = applyBlast(s, x, y, z, radius, power);
       all({ t: "boom", by: ctx.peer, kind: kind.id, pid: typeof op.pid === "string" ? op.pid.slice(0, 24) : null, x, y, z, r: radius, power });
       for (const p of props) all({ t: "struct", ...p });
+      // Монстрам на защите крепости тоже достаётся.
+      for (const e of defense.blastMonsters(s.defense, x, z, radius, ctx.peer)) all(e);
       physics = true;
       break;
     }
@@ -669,6 +676,8 @@ export function applyOp(s, op, ctx) {
       s.mines = s.mines || [];
       s.mineAt = s.mineAt || {};
       if (s.mines.some((m) => m.by === ctx.peer) || s.mines.length >= MAX_MINES) return null;
+      // На защите крепости мины открывает награда.
+      if (!defense.weaponAllowed(s.defense, ctx.peer, "mine")) return null;
       if (ctx.now - (s.mineAt[ctx.peer] || -Infinity) < cool - 150) return null;
       s.mineAt[ctx.peer] = ctx.now;
       s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, ROOM.back, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
@@ -681,6 +690,40 @@ export function applyOp(s, op, ctx) {
       mine.triggerAt = ctx.now + projectile("mine").mine.fuse;
       all({ t: "mines", mines: serializeState(s).mines });
       physics = true;
+      break;
+    }
+    // ——— Защита крепости ———
+    case "def.ready": {
+      if (!s.defense || !defense.ready(s.defense, ctx.peer, ctx.now, ctx.peers || [ctx.peer])) return null;
+      all({ t: "def", def: defense.serializeDefense(s.defense) });
+      physics = true;
+      break;
+    }
+    case "def.unready": {
+      if (!s.defense || !defense.unready(s.defense, ctx.peer)) return null;
+      all({ t: "def", def: defense.serializeDefense(s.defense) });
+      break;
+    }
+    case "def.config": {
+      if (!s.defense || !defense.configure(s.defense, op.waves)) return null;
+      all({ t: "def", def: defense.serializeDefense(s.defense) });
+      break;
+    }
+    case "def.hit": {
+      // Попадание своего снаряда или удара: не больше, чем бьёт это оружие с наградами бросившего.
+      const d = s.defense,
+        base = defense.WEAPON_DMG[op.w];
+      if (!d || !base || !finite(op.dmg) || op.dmg > base * defense.damageFactor(d, ctx.peer) + 1e-6) return null;
+      if (op.w !== "melee" && !defense.weaponAllowed(d, ctx.peer, op.w)) return null;
+      const dir = finite(op.dx) && finite(op.dz) && Math.hypot(op.dx, op.dz) > 1e-6 ? { x: op.dx / Math.hypot(op.dx, op.dz), z: op.dz / Math.hypot(op.dx, op.dz) } : null;
+      const e = defense.hitMonster(d, str(op.id, 16), op.dmg, ctx.peer, op.w, dir);
+      if (!e) return null;
+      all(e);
+      break;
+    }
+    case "def.pick": {
+      if (!s.defense || !defense.pick(s.defense, stateMap(s), ctx.peer, str(op.card, 16), ctx.now)) return null;
+      all({ t: "def", def: defense.serializeDefense(s.defense) });
       break;
     }
     // ——— Team match (paintball) ———
@@ -744,6 +787,11 @@ export const STATE_OPS = new Set([
   "match.unready",
   "match.dmg",
   "match.dead",
+  "def.ready",
+  "def.unready",
+  "def.config",
+  "def.hit",
+  "def.pick",
 ]);
 
 // Advances the match clock (countdown, round transitions). Returns broadcast messages. The server
@@ -767,11 +815,31 @@ export function runMines(s, now) {
     const props = applyBlast(s, m.x, 0.3, m.z, M.radius, M.power);
     out.push({ t: "boom", by: m.by, kind: "mine", pid: null, x: m.x, y: 0.3, z: m.z, r: M.radius, power: M.power });
     for (const p of props) out.push({ t: "struct", ...p });
+    out.push(...defense.blastMonsters(s.defense, m.x, m.z, M.radius, m.by));
   }
   out.push({ t: "mines", mines: serializeState(s).mines });
   return out;
 }
 export const minesPending = (s) => (s.mines || []).some((m) => m.triggerAt != null);
+// Защита крепости: шаг монстров и волн (сервер — 30 раз в секунду, без сервера — браузер). Взведённая
+// мина под монстром рвётся почти сразу: у аватара есть 3 с убежать, монстр за это время её бы прошёл.
+export function runDefense(s, now, dt, avatars, rand = Math.random) {
+  fitRoom(s);
+  const map = stateMap(s);
+  if (!s.defense || !map.defense) return [];
+  const out = defense.stepDefense(s.defense, map, now, dt, avatars, rand);
+  if (s.defense.phase === "wave" && s.mines?.length) {
+    let changed = false;
+    for (const mine of s.mines)
+      if (mine.triggerAt == null && now >= mine.armAt && s.defense.monsters.some((m) => !defense.MONSTERS[m.c].fly && Math.hypot(m.x - mine.x, m.z - mine.z) < 0.6 + defense.MONSTERS[m.c].r)) {
+        mine.triggerAt = now + 400;
+        changed = true;
+      }
+    if (changed) out.push({ t: "mines", mines: serializeState(s).mines });
+  }
+  return out;
+}
+export const defenseActive = (s) => defense.defenseLive(s.defense);
 export function matchActive(s) {
   return s.match && s.match.phase !== "idle";
 }

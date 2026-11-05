@@ -12,8 +12,9 @@ import rink from "./rink.js";
 import race from "./race.js";
 import raceMountain from "./race-mountain.js";
 import raceGp from "./race-gp.js";
+import fortress from "./fortress.js";
 
-export const MAPS = [cinema, maze, playground, river, paintball, saloon, skatepark, ropepark, rink, race, raceMountain, raceGp];
+export const MAPS = [cinema, maze, playground, river, paintball, saloon, skatepark, ropepark, rink, race, raceMountain, raceGp, fortress];
 export const DEFAULT_MAP = "cinema";
 export const mapDef = (id) => MAPS.find((m) => m.id === id) || MAPS[0];
 export const mapInfo = mapDef;

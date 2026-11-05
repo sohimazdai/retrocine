@@ -30,7 +30,7 @@ const DEFAULT_THEME = {
 };
 const textures = new Map();
 // Procedural floor textures, drawn once on a canvas (1 texture repeat = 4 room units).
-function floorTexture(kind) {
+export function floorTexture(kind) {
   if (!kind) return null;
   if (textures.has(kind)) return textures.get(kind);
   let texture = null;
@@ -199,6 +199,11 @@ export class MapScene {
       far.scale.setScalar(map.scale || 1);
       decor.add(far);
       STATICS.backdrop?.(far, { style: map.backdrop }, map);
+      // Фон — только картинка: снаряды его не задевают (и не тратят время на проверку тысяч его
+      // треугольников при каждом шаге полёта).
+      far.traverse((o) => {
+        if (o.isMesh) o.raycast = () => {};
+      });
     }
     decor.traverse((o) => {
       if (o.isMesh) o.receiveShadow = true;

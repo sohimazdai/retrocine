@@ -135,6 +135,42 @@ const STYLES = {
     mesh(group, merge(snow), mat("#e9eef5", { flat: true }), 0, 0, 0, false);
     forest(group, scatter(42, 16, 1, 7, -16, 4, (x, z, r) => ({ kind: "pine", x, z, h: 4 + r() * 3, s: 1.2, r: r() * 6 })), sky);
   },
+  // Холмистая равнина без деревьев (защита крепости: за краем поля ничего не загораживает вид):
+  // пологие зелёные холмы, валуны и далёкие горы.
+  highlands(group, map, sky) {
+    verge(group, "#56703f");
+    const r = rng(77),
+      hills = [],
+      far = [],
+      stones = [],
+      peaks = [];
+    for (let i = 0; i < 14; i++) {
+      const side = i % 2 ? 1 : -1,
+        w = 4 + r() * 5;
+      hills.push(placed(new T.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), side * (EDGE + 2.5 + r() * 9), 0, -14 + r() * 24, r() * 6, 0, 0, [w, 0.5 + r() * 1.2, w * (0.7 + r() * 0.5)]));
+    }
+    for (let i = 0; i < 10; i++) {
+      const side = i % 2 ? 1 : -1,
+        w = 7 + r() * 6;
+      far.push(placed(new T.SphereGeometry(1, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), side * (EDGE + 11 + r() * 8), 0, -20 + r() * 16, r() * 6, 0, 0, [w, 1.5 + r() * 2.5, w * 0.8]));
+    }
+    for (let i = 0; i < 18; i++) {
+      const side = i % 2 ? 1 : -1,
+        s = 0.3 + r() * 0.8;
+      stones.push(placed(rockGeometry(i + 300), side * (EDGE + 0.8 + r() * 8), s * 0.35, -15 + r() * 25, r() * 6, 0, 0, [s, s * 0.7, s]));
+    }
+    for (let i = 0; i < 8; i++) {
+      const side = i % 2 ? 1 : -1,
+        h = 10 + r() * 9,
+        x = side * (EDGE + 16 + r() * 10),
+        z = -26 + r() * 14;
+      peaks.push(placed(new T.ConeGeometry(h * 0.7, h, 6), x, h / 2, z, r() * 6));
+    }
+    mesh(group, merge(hills), mat("#62803f", { roughness: 1 }), 0, 0, 0, false);
+    mesh(group, merge(far), mat(haze("#56703a", sky, 0.35), { roughness: 1 }), 0, 0, 0, false);
+    mesh(group, merge(stones), mat("#8a857a", { flat: true, roughness: 0.95 }), 0, 0, 0, false);
+    mesh(group, merge(peaks), mat(haze("#6f7684", sky, 0.45), { flat: true, roughness: 0.95 }), 0, 0, 0, false);
+  },
   // A dark pine forest behind the netting.
   forest(group, map, sky) {
     verge(group, "#4f6b3a");

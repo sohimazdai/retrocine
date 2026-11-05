@@ -281,3 +281,19 @@ test("the fortress gate opens for someone close to it, for a short while, and cl
   const f = map.defense.fort;
   assert(gate.z > f.z0 && gate.z < f.z1 && gate.x <= f.x1);
 });
+
+test("the bow and the pistol come with rewards in the defense, and hit monsters for 3 and 2", () => {
+  assert.equal(CARDS.bow.w, "bow");
+  assert.equal(CARDS.pistol.w, "pistol");
+  const s = game();
+  run(s, DEFENSE.countdown / 1000 + 0.1);
+  quietWave(s);
+  const ogre = spawnOf(s, "ogre", 0, 0);
+  assert.equal(weaponAllowed(s.defense, "a", "bow"), false);
+  assert.equal(applyOp(s, { t: "def.hit", id: ogre.id, w: "bow", dmg: 3 }, ctx("a")), null, "no bow yet");
+  s.defense.perks.a = { w: ["bow", "pistol"], power: 0, quick: 0, tough: 0, regen: 0, swift: 0, vamp: 0 };
+  applyOp(s, { t: "def.hit", id: ogre.id, w: "bow", dmg: 3 }, ctx("a"));
+  applyOp(s, { t: "def.hit", id: ogre.id, w: "pistol", dmg: 2 }, ctx("a"));
+  assert.equal(ogre.hp, MONSTERS.ogre.hp - 5);
+  assert.equal(applyOp(s, { t: "def.hit", id: ogre.id, w: "pistol", dmg: 3 }, ctx("a")), null, "a bullet does not hit for 3");
+});

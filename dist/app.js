@@ -52,7 +52,7 @@ import {
   CHARGE_TIME,
   PROJECTILE_GRAVITY,
 } from "./projectiles.js";
-import { Effects, projectileMesh, mineModel } from "./effects.js";
+import { Effects, projectileMesh, mineModel, heldWeapon } from "./effects.js";
 import {
   createState,
   serializeState,
@@ -1302,10 +1302,6 @@ function placeMine(kind) {
     toast(`${kind.emoji} ${kind.label} будет готова через ${Math.ceil((cooldownUntil[kind.id] - now) / 1000)} с`, 1300);
     return;
   }
-  if ((world.mines || []).some((m) => m.by === matchId())) {
-    toast("Ваша мина уже стоит — новую можно поставить, когда она сработает", 2200);
-    return;
-  }
   cooldownUntil[kind.id] = now + kind.cooldown * 1000;
   startAction(active, "kick", worldTime, {});
   op({ t: "mine.place", x: r3(active.x), z: r3(active.z) });
@@ -2111,7 +2107,7 @@ function renderWeapon() {
   if (icon) icon.outerHTML = `<span class="weapon-emoji" aria-hidden="true">${kind.emoji}</span>`;
   const tip = btn.querySelector(".tip");
   if (tip) tip.textContent = `${kind.label} · клик, ПКМ — сильнее`;
-  btn.title = kind.place ? `${kind.label}: клик — поставить под ноги. 1–${PROJECTILES.length} — выбрать` : `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–${PROJECTILES.length} — выбрать снаряд`;
+  btn.title = kind.place ? `${kind.label}: клик — поставить под ноги. 1–9, 0 — выбрать` : `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–9, 0 — выбрать снаряд`;
   $$("#weaponPicker [data-weapon]").forEach((b) => {
     b.classList.toggle("on", b.dataset.weapon === weapon);
     b.setAttribute("aria-pressed", b.dataset.weapon === weapon);
@@ -2161,11 +2157,24 @@ function throwSnow(hit, power = 1) {
   }
   const pid = projectileId();
   const vel = [r3(active.velocityX || 0), r3(active.velocityZ || 0)];
-  if (startAction(active, "throw", worldTime, { to, w: kind.id, pw: power, pid, vel })) {
+  if (startAction(active, kind.action || "throw", worldTime, { to, w: kind.id, pw: power, pid, vel })) {
     cooldownUntil[kind.id] = now + kind.cooldown * 1000 * cooldownFactor(defenseState(), matchId());
     net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid, vel });
     renderCooldowns();
   }
+}
+const FORWARD = new T.Vector3(0, 0, 1),
+  TMP_DIR = new T.Vector3();
+// Что аватар держит в руке, пока стреляет: лук — в левой, пистолет — в правой.
+function syncHeldWeapon(p) {
+  const type = p.action?.type === "bow" || p.action?.type === "pistol" ? p.action.type : null;
+  if ((p.heldWeapon?.userData.type || null) === type) return;
+  p.heldWeapon?.parent?.remove(p.heldWeapon);
+  p.heldWeapon = null;
+  if (!type || !p.elbows) return;
+  p.heldWeapon = heldWeapon(type);
+  p.heldWeapon.userData.type = type;
+  p.elbows[type === "bow" ? 0 : 1].add(p.heldWeapon);
 }
 // Broad phase for flying things. A raycast through every object in the room costs ~0.8 ms and each
 // projectile in the air made one every physics step (120 a second): a dozen bouncing tennis balls
@@ -2216,11 +2225,24 @@ function releaseSnow(player, payload) {
   direction.y = 0;
   direction.normalize();
   from.addScaledVector(direction, 0.5);
-  const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1),
-    v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g);
+  const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1);
+  let v;
+  if (kind.straight && player.arms?.[1]) {
+    // Пуля вылетает из ствола, а не от лица: рука с пистолетом вытянута вперёд от правого плеча.
+    const shoulder = player.arms[1].getWorldPosition(new T.Vector3()),
+      reach = 0.5 * player.arms[1].getWorldScale(new T.Vector3()).y;
+    from.set(shoulder.x, shoulder.y + reach * 0.06, shoulder.z).addScaledVector(direction, reach);
+  }
+  if (kind.straight) {
+    // Пистолет: прямо туда, куда показали; в пол под курсором — на уровне груди, через всю точку и дальше.
+    const aim = to.clone();
+    if (aim.y < 0.3) aim.y = from.y - 0.12;
+    v = aim.sub(from).normalize().multiplyScalar(kind.maxSpeed);
+    effects.muzzle(from);
+  } else v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g, kind.pace);
   // Throwing on the move: your speed along the throw (forward or back, not sideways) adds to the
   // shot's speed; the direction stays where you aimed.
-  {
+  if (!kind.straight) {
     const vx = payload.vel?.[0] ?? player.velocityX ?? 0,
       vz = payload.vel?.[1] ?? player.velocityZ ?? 0,
       h = Math.hypot(v.x, v.z);
@@ -2246,7 +2268,7 @@ function releaseSnow(player, payload) {
     spin: new T.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
   });
 }
-const IMPACT_COLORS = { snow: "#faf5ff", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a" };
+const IMPACT_COLORS = { snow: "#faf5ff", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a", bow: "#c9a26a", pistol: "#ffe8a0" };
 // What a projectile does where it lands: a puff (a tomato bursts), a push for loose objects (thrower only)
 // and a knock for avatars (each avatar's owner applies it, so it travels with their pose).
 function burst(pos, kind, snowOwner = "self", pr = null) {
@@ -2254,6 +2276,7 @@ function burst(pos, kind, snowOwner = "self", pr = null) {
     speed = pr ? pr.v.length() : 12,
     normal = pr?.normal || new T.Vector3(0, 1, 0);
   if (k.id === "tomato") effects.tomato(pos, normal, pr?.v);
+  else if (k.id === "bow" || k.id === "pistol") effects.puff(pos, IMPACT_COLORS[k.id], 5, 2.2, 0.025);
   else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
   // Монстр: попадание сообщает тот, кто бросил.
   if (kind?.userData.kind === "monster" && snowOwner === "self" && WEAPON_DMG[k.id]) hitMonster(kind, k.id, pr?.v);
@@ -2732,7 +2755,7 @@ function timerSettings() {
 function help() {
   modal(
     "Управление",
-    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — тормоз. На доске, самокате, BMX <kbd>Space</kbd> — прыжок, <kbd>Shift</kbd> — флип (с земли — с прыжком), в воздухе <kbd>A</kbd>/<kbd>D</kbd> — вращение. В карте <kbd>Space</kbd> — стоп; карт выдаёт автомат на картинге, рядом — автомат выбора трассы; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>8</kbd>, колесо или островок над кнопкой броска — снежок, помидор, камень (до 2 раз в секунду), кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги; кто наступит — через 3 с взрыв). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Защита крепости</strong><kbd>R</kbd> — готов; когда готовы все, из подземелья пойдут монстры. Число волн — на панели сверху. Монстры идут к крепости, а ближе 4 м — на вас; со стены вас не достать. <kbd>E</kbd> рядом с монстром — пинок, <kbd>Tab</kbd> — счёт. Между волнами — награды.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
+    `<div class="help-grid"><div><strong>Передвигаться</strong><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> или стрелки.<br><kbd>Space</kbd> — прыжок.</div><div><strong>Транспорт</strong>Скейт, самокат, BMX, карт — <kbd>E</kbd> рядом. <kbd>W</kbd> — газ, <kbd>A</kbd>/<kbd>D</kbd> — поворот относительно себя, <kbd>S</kbd> — тормоз. На доске, самокате, BMX <kbd>Space</kbd> — прыжок, <kbd>Shift</kbd> — флип (с земли — с прыжком), в воздухе <kbd>A</kbd>/<kbd>D</kbd> — вращение. В карте <kbd>Space</kbd> — стоп; карт выдаёт автомат на картинге, рядом — автомат выбора трассы; вышли — карт исчезает.</div><div><strong>Бросать</strong>Левый клик — бросок в точку под курсором. Удерживайте правую кнопку, чтобы бросить сильнее и дальше. <kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd>, колесо или островок над кнопкой броска — снежок, помидор, камень (до 2 раз в секунду), кирпич (раз в 1 с), граната (взрыв через 3 с, раз в 10 с), фаербол (взрыв при касании, раз в 5 с), сосулька (замедляет всех в зоне на 3 с, без Shift), мина (ставится под ноги, сколько угодно; кто наступит — через 3 с взрыв), лук (стрела летит быстро и далеко), пистолет (выстрел почти мгновенный, через всё поле). Тяжёлое летит ближе, бросок на бегу — быстрее.</div><div><strong>Shift</strong>Бегать быстрее. С зажатым Shift упритесь в предмет, чтобы толкать: тяжёлое двигают несколько человек вместе. С двух противоположных сторон предмет можно поднять и унести.</div><div><strong>Конструкции и футбол</strong><kbd>E</kbd> — пнуть мяч или кубик; рядом с игроком — удар. На куб, пирамиду и катушки можно запрыгнуть или выбрать «Забраться». В воротах считаются голы.</div><div><strong>Любой объект</strong><kbd>V</kbd> — взаимодействие: клик для действий, перетаскивание для перемещения. Короткий клик правой кнопкой — действия в любом режиме.</div><div><strong>Командный бой (пейнтбол)</strong><kbd>R</kbd> — готов; когда готовы все, через 10 с бой. Здоровье 10: лёгкое −2, камень −5, кирпич и взрыв в упор — сразу; укрытие защищает от взрыва. <kbd>Tab</kbd> — счёт.</div><div><strong>Защита крепости</strong><kbd>R</kbd> — готов; когда готовы все, из подземелья пойдут монстры. Число волн — на панели сверху. Монстры идут к крепости, а ближе 4 м — на вас; со стены вас не достать. <kbd>E</kbd> рядом с монстром — пинок, <kbd>Tab</kbd> — счёт. Между волнами — награды.</div><div><strong>Стикеры на полу</strong><kbd>N</kbd> и клик по полу. По стикерам можно ходить. В режиме взаимодействия двойной клик открывает редактор.</div><div><strong>Ракурс и демонстрация</strong>Средняя кнопка + движение вверх/вниз — наклон 0–80°. Комната сохраняет масштаб. Колесо над демонстрацией увеличивает её содержимое; потяните его, чтобы рассмотреть детали.</div></div><p class="modal-text">Комната общая: все участники видят друг друга, стикеры, голоса, таймер, мяч и кубики в реальном времени. Микрофон, камера и показ экрана передаются всем в комнате. Пригласить коллег, сменить карту, ракурс и внешность — кнопка настроек в правом верхнем углу.</p><div class="modal-actions"><button class="primary" data-action="close">В зал</button></div>`,
   );
 }
 function mediaVideo(stream) {
@@ -3352,8 +3375,10 @@ document.addEventListener("keydown", (e) => {
     } else sprinting = !(active.slow > 0);
     shiftHeld = true;
   }
-  const digit = /^Digit([1-9])$/.exec(e.code);
-  if (digit && !e.repeat && PROJECTILES[+digit[1] - 1]) setWeapon(PROJECTILES[+digit[1] - 1].id);
+  // 1–9 и 0 — десятый.
+  const digit = /^Digit([0-9])$/.exec(e.code),
+    slot = digit ? (+digit[1] + 9) % 10 : -1;
+  if (digit && !e.repeat && PROJECTILES[slot]) setWeapon(PROJECTILES[slot].id);
   if (e.code === "Space") {
     e.preventDefault();
     spaceHeld = true;
@@ -3611,7 +3636,7 @@ function physics(dt) {
         p.action.released = true;
         if (p.action.type === "throw" && p.action.payload.ball) {
           if (p === active) releaseShot(p, p.action.payload.ball);
-        } else if (p.action.type === "throw") releaseSnow(p, p.action.payload);
+        } else if (p.action.type === "throw" || p.action.type === "bow" || p.action.type === "pistol") releaseSnow(p, p.action.payload);
         if (p.action.type === "kick" && p === active) {
           const c = p.action.payload.cube;
           if (loose.includes(c) && reachable(c, p, 1.9)) kickObject(c, p, 8);
@@ -3664,7 +3689,9 @@ function physics(dt) {
     if (!pr.resting) {
       pr.v.y -= pr.g * dt;
       pos.addScaledVector(pr.v, dt);
-      if (k.id !== "fireball") {
+      // Стрела и пуля летят остриём вперёд, остальное кувыркается.
+      if (k.orient) pr.mesh.quaternion.setFromUnitVectors(FORWARD, TMP_DIR.copy(pr.v).normalize());
+      else if (k.id !== "fireball") {
         pr.mesh.rotation.x += pr.spin.x * dt;
         pr.mesh.rotation.y += pr.spin.y * dt;
         pr.mesh.rotation.z += pr.spin.z * dt;
@@ -3704,6 +3731,13 @@ function physics(dt) {
         continue;
       }
       if (pr.v.length() > 2.5 || !k.bounce) burst(hit.point, target, pr.owner, pr);
+      // Стрела втыкается в землю, стену, камень: торчит несколько секунд.
+      if (k.sticks && !["avatar", "monster", "cube", "ball"].includes(target?.userData.kind)) {
+        const stuck = projectileMesh(k);
+        stuck.quaternion.copy(pr.mesh.quaternion);
+        stuck.position.copy(hit.point).addScaledVector(TMP_DIR.copy(pr.v).normalize(), -0.22);
+        effects.stuck(stuck, k.sticks);
+      }
       if (k.bounce && pr.bounces < 7 && pr.v.length() > 1.4) {
         const vn = pr.v.dot(pr.normal);
         pr.v.addScaledVector(pr.normal, -(1 + k.bounce) * vn).multiplyScalar(0.82);
@@ -3772,6 +3806,7 @@ function visual(dt) {
   for (const g of mapScene.map?.gates || []) mapScene.decor?.gate?.(g.id, gateIsOpen(g.id));
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
+    syncHeldWeapon(p);
     ensureTeamRing(p);
     ensureFrost(p);
     if (!p.remote && sledding(p)) {
@@ -4072,7 +4107,7 @@ function updateRemote(p, dt) {
 }
 function remoteEvent(p, ev) {
   if (ev.k === "throw" && Array.isArray(ev.to))
-    startAction(p, "throw", worldTime, { to: new T.Vector3(...ev.to), w: ev.w || "snow", pw: ev.pw || 1, pid: ev.pid });
+    startAction(p, projectile(ev.w || "snow").action || "throw", worldTime, { to: new T.Vector3(...ev.to), w: ev.w || "snow", pw: ev.pw || 1, pid: ev.pid });
   if (ev.k === "kick")
     startAction(p, "kick", worldTime, { cube: findObject(world, ev.target) || null });
   if (ev.k === "trick" && ev.n) toast(`${p.profile.name}: ${ev.n}!`, 1600);

@@ -85,13 +85,80 @@ function buildProjectile(kind) {
     back.rotation.x = -Math.PI / 2;
     back.position.z = -0.2;
     g.add(shard, back);
+  } else if (kind.id === "bow") {
+    // Стрела вдоль +z: древко, железный наконечник, оперение.
+    const wood = mat("#c9a26a", { roughness: 0.8 }),
+      shaft = new T.Mesh(new T.CylinderGeometry(0.009, 0.009, 0.62, 6), wood);
+    shaft.rotation.x = Math.PI / 2;
+    const head = new T.Mesh(new T.ConeGeometry(0.024, 0.08, 6), mat("#8d9096", { metalness: 0.7, roughness: 0.35 }));
+    head.rotation.x = Math.PI / 2;
+    head.position.z = 0.34;
+    g.add(shaft, head);
+    const feather = mat("#d8432f", { roughness: 0.9, side: T.DoubleSide });
+    for (let i = 0; i < 3; i++) {
+      const f = new T.Mesh(new T.PlaneGeometry(0.035, 0.12), feather);
+      f.position.z = -0.25;
+      f.rotation.set(Math.PI / 2, 0, (i * Math.PI * 2) / 3);
+      f.translateX(0.02);
+      g.add(f);
+    }
+  } else if (kind.id === "pistol") {
+    // Пуля и светящийся след за ней.
+    const bullet = new T.Mesh(new T.CapsuleGeometry(0.018, 0.08, 3, 6), new T.MeshBasicMaterial({ color: "#fff1b0" }));
+    bullet.rotation.x = Math.PI / 2;
+    const trail = new T.Mesh(
+      new T.CylinderGeometry(0.004, 0.016, 1.4, 6),
+      new T.MeshBasicMaterial({ color: "#ffd36b", transparent: true, opacity: 0.55, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false }),
+    );
+    trail.rotation.x = Math.PI / 2;
+    trail.position.z = -0.72;
+    g.add(bullet, trail);
   } else if (kind.id === "mine") {
     g.add(mineModel());
   }
+  // Пуля со следом — свет, тени от неё нет.
   g.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
+    if (o.isMesh) o.castShadow = kind.id !== "pistol";
   });
   return g;
+}
+
+// Что аватар держит, когда стреляет: лук (в левой руке) и пистолет (в правой). Построено в осях
+// аватара (x вправо, y вверх, z вперёд) и повёрнуто под кисть вытянутой вперёд руки.
+const held = new Map();
+export function heldWeapon(type) {
+  if (!held.has(type)) {
+    const g = new T.Group();
+    if (type === "bow") {
+      // Плечи лука изгибаются назад, к лучнику; тетива — прямая между концами.
+      const r = 0.34,
+        limb = new T.Mesh(new T.TorusGeometry(r, 0.016, 6, 18, 2.3), mat("#8a5a32", { roughness: 0.7 }));
+      limb.rotation.set(0, -Math.PI / 2, -1.15);
+      limb.position.z = -r;
+      const tipZ = -r + r * Math.cos(1.15),
+        tipY = r * Math.sin(1.15),
+        string = new T.Mesh(new T.CylinderGeometry(0.004, 0.004, tipY * 2, 4), mat("#f2ead2", { roughness: 0.6 }));
+      string.position.z = tipZ;
+      const grip = new T.Mesh(new T.CylinderGeometry(0.022, 0.022, 0.1, 8), mat("#4a3020", { roughness: 0.9 }));
+      g.add(limb, string, grip);
+    } else {
+      const metal = mat("#2f3034", { roughness: 0.35, metalness: 0.7 });
+      const slide = new T.Mesh(new T.BoxGeometry(0.045, 0.05, 0.22), metal);
+      slide.position.set(0, 0.035, 0.07);
+      const grip = new T.Mesh(new T.BoxGeometry(0.04, 0.11, 0.055), mat("#5a3b28", { roughness: 0.8 }));
+      grip.position.set(0, -0.03, -0.01);
+      grip.rotation.x = 0.25;
+      g.add(slide, grip);
+    }
+    held.set(type, g);
+  }
+  const g = held.get(type).clone();
+  // Рука вытянута вперёд: «вверх» аватара в осях кисти — это её +z, «вперёд» — её −y.
+  const out = new T.Group();
+  g.rotation.x = Math.PI / 2;
+  out.add(g);
+  out.position.set(0, -0.15, 0.02);
+  return out;
 }
 
 // A flat land mine: an olive disc with a ribbed rim, a pressure plate and a red lamp (userData.lamp).
@@ -320,6 +387,21 @@ export class Effects {
     scorch.position.set(point.x, 0.012, point.z);
     scorch.scale.setScalar(radius * 0.32);
     this.add(scorch, 20, (it) => (scorchMat.opacity = 0.55 * Math.min(1, (it.life - it.age) / 5)), () => scorchMat.dispose());
+  }
+  // Вспышка у ствола (без источника света: лишний свет пересобирает шейдеры у всех).
+  muzzle(point) {
+    const m = new T.MeshBasicMaterial({ color: "#ffc860", transparent: true, depthWrite: false, blending: T.AdditiveBlending, toneMapped: false });
+    const f = new T.Mesh(lowSphere, m);
+    f.position.copy(point);
+    this.add(f, 0.07, (it) => {
+      const k = it.age / it.life;
+      f.scale.setScalar(0.04 + k * 0.07);
+      m.opacity = 1 - k;
+    }, () => m.dispose());
+  }
+  // Стрела, воткнувшаяся во что-то: торчит, потом исчезает.
+  stuck(mesh, life) {
+    this.add(mesh, life, (it) => mesh.scale.setScalar(Math.min(1, (it.life - it.age) / 0.3)));
   }
   // Glowing embers behind a flying fireball.
   ember(point) {

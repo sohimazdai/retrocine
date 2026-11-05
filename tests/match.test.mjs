@@ -117,13 +117,13 @@ let ids = 0;
 const nid = () => "m" + ++ids;
 const at = (x, z) => ({ x, z, y: 0 });
 
-test("mines: set down at your feet, one each with a cooldown; armed after a moment; a step starts a 3 s fuse; then a blast", () => {
+test("mines: set down at your feet, as many as you like (one per cooldown); armed after a moment; a step starts a 3 s fuse; then a blast", () => {
   const s = createState({ map: "paintball" }, nid);
   const ctx = (peer, now, pose) => ({ peer, now, pose, newId: nid });
   assert.equal(applyOp(s, { t: "mine.place", x: 3, z: 3 }, ctx("a", 1000, at(0, 0))), null, "too far from you");
   assert(applyOp(s, { t: "mine.place", x: 0.3, z: 0.2 }, ctx("a", 1000, at(0, 0))));
   assert.equal(s.mines.length, 1);
-  assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 20000, at(0, 0))), null, "one mine each");
+  assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 5000, at(0, 0))), null, "not before the cooldown");
   assert.equal(applyOp(s, { t: "mine.place", x: 5, z: 5 }, ctx("b", 1000, at(5, 5))) && s.mines.length, 2, "someone else may");
   const mine = s.mines[0];
   assert.equal(applyOp(s, { t: "mine.step", id: mine.id }, ctx("b", 1500, at(0, 0))), null, "not armed yet");
@@ -142,4 +142,16 @@ test("mines: set down at your feet, one each with a cooldown; armed after a mome
   // The cooldown: a new mine for 'a' only after 10 s from the last.
   assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 9000, at(0, 0))), null);
   assert(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 11000, at(0, 0))));
+  // No limit on how many: 'a' sets another while the first still stands.
+  assert(applyOp(s, { t: "mine.place", x: 1, z: 0 }, ctx("a", 21500, at(1, 0))));
+  assert.equal(s.mines.filter((m) => m.by === "a").length, 2);
+  // The field holds 48 at once: one more takes the oldest away.
+  s.mines = Array.from({ length: 48 }, (_, i) => ({ id: "m" + i, x: 0, z: 0, by: "c", armAt: 0, triggerAt: null }));
+  // A refused try (still cooling down) takes nothing away.
+  assert.equal(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 25000, at(0, 0))), null);
+  assert.equal(s.mines.length, 48);
+  assert.equal(s.mines[0].id, "m0");
+  assert(applyOp(s, { t: "mine.place", x: 0, z: 0 }, ctx("a", 40000, at(0, 0))));
+  assert.equal(s.mines.length, 48);
+  assert.equal(s.mines[0].id, "m1", "the oldest went");
 });

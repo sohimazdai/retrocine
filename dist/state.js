@@ -44,7 +44,9 @@ import * as defense from "./defense.js";
 
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
-const MAX_MINES = 16;
+// Мин можно ставить сколько угодно (раз в перезарядку); на поле одновременно — до 48, лишняя
+// убирает самую старую несработавшую.
+const MAX_MINES = 48;
 export const GATE_OPEN_MS = 2500;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
@@ -680,10 +682,15 @@ export function applyOp(s, op, ctx) {
       if (ctx.pose && Math.hypot(ctx.pose.x - op.x, ctx.pose.z - op.z) > 1.8) return null;
       s.mines = s.mines || [];
       s.mineAt = s.mineAt || {};
-      if (s.mines.some((m) => m.by === ctx.peer) || s.mines.length >= MAX_MINES) return null;
       // На защите крепости мины открывает награда.
       if (!defense.weaponAllowed(s.defense, ctx.peer, "mine")) return null;
       if (ctx.now - (s.mineAt[ctx.peer] || -Infinity) < cool - 150) return null;
+      // Поле заполнено — уступает самая старая невзведённая мина (отклонённая попытка выше ничего не убирает).
+      if (s.mines.length >= MAX_MINES) {
+        const oldest = s.mines.findIndex((m) => m.triggerAt == null);
+        if (oldest < 0) return null;
+        s.mines.splice(oldest, 1);
+      }
       s.mineAt[ctx.peer] = ctx.now;
       s.mines.push({ id: ctx.newId(), x: clamp(op.x, -LIMITS.x, LIMITS.x), z: clamp(op.z, ROOM.back, LIMITS.z), by: ctx.peer, armAt: ctx.now + M.arm, triggerAt: null });
       all({ t: "mines", mines: serializeState(s).mines });

@@ -88,7 +88,9 @@ export const CARDS = {
   grenade: { kind: "weapon", w: "grenade", icon: "💣", title: "Гранаты", text: "Взрыв по толпе, раз в 10 с" },
   fireball: { kind: "weapon", w: "fireball", icon: "🔥", title: "Фаерболы", text: "Взрываются при касании, раз в 5 с" },
   icicle: { kind: "weapon", w: "icicle", icon: "🧊", title: "Сосульки", text: "Монстры вокруг на 3 с еле ползут" },
-  mine: { kind: "weapon", w: "mine", icon: "🧨", title: "Мины", text: "Срабатывают под монстрами" },
+  mine: { kind: "weapon", w: "mine", icon: "🧨", title: "Мины", text: "Сколько угодно, срабатывают под монстрами" },
+  bow: { kind: "weapon", w: "bow", icon: "🏹", title: "Лук", text: "Стрелы летят быстро и далеко: −3" },
+  pistol: { kind: "weapon", w: "pistol", icon: "🔫", title: "Пистолет", text: "Выстрел почти мгновенный, через всё поле: −2" },
   power: { kind: "perk", max: 3, icon: "💪", title: "Сильный бросок", text: "Ваши снаряды бьют на 50% сильнее" },
   quick: { kind: "perk", max: 2, icon: "⚡", title: "Ловкие руки", text: "Перезарядка на 30% быстрее" },
   tough: { kind: "perk", max: 3, icon: "❤️", title: "Крепкое здоровье", text: "+10 к здоровью и полное лечение" },
@@ -101,8 +103,9 @@ export const CARDS = {
 };
 // Самострел: раз в 1,5 с бьёт ближайшего монстра не дальше 18 м на 2.
 export const TURRET = { every: 1.5, range: 18, dmg: 2 };
-// Урон снарядов монстрам (до умения «Сильный бросок»); взрывы — отдельно, как в командном бою.
-export const WEAPON_DMG = { snow: 1, tomato: 1, rock: 2, brick: 4, icicle: 1, fireball: 2, grenade: 1, melee: 1 };
+// Урон снарядов монстрам (до умения «Сильный бросок»); взрывы — отдельно, как в командном бою. Лук и
+// пистолет открываются наградой, как кирпичи и гранаты.
+export const WEAPON_DMG = { snow: 1, tomato: 1, rock: 2, brick: 4, icicle: 1, fireball: 2, grenade: 1, bow: 3, pistol: 2, melee: 1 };
 
 const blankPerks = () => ({ w: [], power: 0, quick: 0, tough: 0, regen: 0, swift: 0, vamp: 0 });
 export const perksOf = (d, id) => d?.perks?.[id] || blankPerks();

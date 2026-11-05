@@ -820,7 +820,7 @@ test("room link, presence chip and media fallbacks", () => {
 });
 
 // ——— Throwing and Shift ———
-test("weapons: 1–8 select, heavier things fly shorter, holding the right button throws harder", () => {
+test("weapons: 1–9 and 0 select, heavier things fly shorter, holding the right button throws harder; arrows fly far and fast, a bullet almost at once", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
   const flight = (weapon, pw = 1) => {
@@ -842,8 +842,39 @@ test("weapons: 1–8 select, heavier things fly shorter, holding the right butto
   a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit5", key: "5", bubbles: true }));
   assert.equal(a.run("weapon"), "grenade");
   a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit9", key: "9", bubbles: true }));
-  assert.equal(a.run("weapon"), "grenade", "there is no ninth");
-  assert.equal(a.w.document.querySelector('[data-tool="snow"] .weapon-emoji').textContent, "💣");
+  assert.equal(a.run("weapon"), "bow");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit0", key: "0", bubbles: true }));
+  assert.equal(a.run("weapon"), "pistol");
+  const shot = (weapon, to) => {
+    a.run(`setWeapon('${weapon}');projectiles.length=0;active.action=null;Object.assign(active,{x:0,z:8,y:0,angle:Math.PI})`);
+    a.run(`startAction(active,projectile('${weapon}').action||'throw',worldTime,{to:new T.Vector3(${to}),w:'${weapon}',pw:1,pid:'t'})`);
+    for (let i = 0; i < 120 && !a.run("projectiles.length"); i++) a.tick(1 / 120);
+    return a.run("worldTime");
+  };
+  // Стрела: втрое быстрее снежка, до задней стены (20 м) — втрое быстрее.
+  const toWall = (weapon) => {
+    shot(weapon, "0,0,-40");
+    const v = a.run("projectiles[0].v.length()"),
+      start = a.run("worldTime");
+    for (let i = 0; i < 400 && a.run("projectiles.length"); i++) a.tick(1 / 120);
+    return { v, t: a.run("worldTime") - start };
+  };
+  const snowFlight = toWall("snow"),
+    arrowFlight = toWall("bow");
+  assert(arrowFlight.v > snowFlight.v * 2.4, `arrow ${arrowFlight.v.toFixed(1)} m/s vs snowball ${snowFlight.v.toFixed(1)}`);
+  assert(arrowFlight.t < snowFlight.t / 2, `to the wall: arrow ${arrowFlight.t.toFixed(2)} s, snowball ${snowFlight.t.toFixed(2)} s`);
+  assert(a.run("effects.items.some(it => it.object.children?.length && it.life === 3)"), "the arrow sticks where it hit");
+  const t0 = a.run("worldTime"),
+    fired = shot("pistol", "0,0,-12");
+  assert(fired - t0 < 0.1, `a pistol fires at once: ${(fired - t0).toFixed(3)} s`);
+  assert.equal(a.run("active.action.type"), "pistol");
+  assert(a.run("active.elbows[1].children.some(c => c.userData.type === 'pistol')"), "a pistol in hand");
+  const speed = a.run("projectiles[0].v.length()");
+  assert(speed > 100, `bullet ${speed} m/s`);
+  assert(Math.abs(a.run("projectiles[0].v.y")) < 5, "flies straight");
+  a.tick(0.4);
+  assert(a.run("effects.items.length") > 0, "muzzle flash and the hit");
+  assert.equal(a.w.document.querySelector('[data-tool="snow"] .weapon-emoji').textContent, "🔫");
 });
 
 test("cooldowns: grenade every 10 s, fireball every 5 s, brick every second", () => {
@@ -924,7 +955,7 @@ test("projectiles are chosen on an island of icons above the toolbar: no names, 
   assert.equal(island.hidden, false);
   assert(island.classList.contains("sub-island"));
   const buttons = [...island.querySelectorAll("[data-weapon]")];
-  assert.deepEqual(buttons.map((b) => b.dataset.weapon), ["snow", "tomato", "rock", "brick", "grenade", "fireball", "icicle", "mine"]);
+  assert.deepEqual(buttons.map((b) => b.dataset.weapon), ["snow", "tomato", "rock", "brick", "grenade", "fireball", "icicle", "mine", "bow", "pistol"]);
   for (const b of buttons) assert(!/[А-Яа-я0-9]/.test(b.textContent), `only an icon: "${b.textContent}"`);
   assert.equal(buttons[0].title, "Снежок · 1");
   assert(buttons[0].classList.contains("on"));

@@ -9,6 +9,10 @@ const mix = (a, b, t) => a + (b - a) * t;
 export const ACTIONS = {
   throw: { duration: 0.46, release: 0.105 },
   kick: { duration: 0.42, release: 0.12 },
+  // Лук: левая рука с луком вперёд, правая тянет тетиву к щеке — и отпускает.
+  bow: { duration: 0.62, release: 0.26 },
+  // Пистолет: рука вперёд и выстрел почти сразу, потом отдача.
+  pistol: { duration: 0.36, release: 0.035 },
 };
 export function startAction(player, type, now, payload = null) {
   if (player.action && now - player.action.started < 0.18) return false;
@@ -136,6 +140,27 @@ export function animateRig(rig, state, dt) {
       rig.elbows[1].rotation.x = mix(-1.7 * wind, -0.08, snap) * end;
       rig.arms[0].rotation.x = -0.4 * Math.sin(progress * Math.PI);
       rig.head.rotation.y -= rig.torso.rotation.y * 0.45;
+    } else if (action.type === "bow") {
+      const raise = ease(progress / 0.2),
+        draw = ease((progress - 0.08) / 0.3),
+        loose = ease((age - action.release) / 0.08);
+      rig.torso.rotation.y -= 0.35 * raise * end;
+      rig.arms[0].rotation.x = -1.5 * raise * end;
+      rig.arms[0].rotation.z = 0.12 * end;
+      rig.elbows[0].rotation.x = -0.05 * end;
+      // Правая рука: к тетиве, назад к щеке, после выстрела — разжата и чуть назад.
+      rig.arms[1].rotation.x = (-1.35 * raise + 0.25 * loose) * end;
+      rig.arms[1].rotation.z = (-0.35 - 0.25 * draw) * end;
+      rig.elbows[1].rotation.x = (-0.4 - 1.5 * draw + 0.9 * loose) * end;
+      rig.head.rotation.y += 0.3 * raise * end;
+    } else if (action.type === "pistol") {
+      const raise = ease(progress / 0.08),
+        kickback = Math.max(0, 1 - (age - action.release) / 0.12) * (age > action.release ? 1 : 0);
+      rig.arms[1].rotation.x = (-1.55 - 0.35 * kickback) * raise * end;
+      rig.arms[1].rotation.z = 0.1 * end;
+      rig.elbows[1].rotation.x = -0.05 * end;
+      rig.torso.rotation.y += 0.18 * raise * end;
+      rig.head.rotation.y -= 0.15 * raise * end;
     } else if (action.type === "kick") {
       const wind = ease(progress / 0.28),
         snap = ease((progress - 0.28) / 0.2);

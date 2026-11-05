@@ -172,13 +172,14 @@ export function loadMatch(data) {
     for (const [k, v] of Object.entries(data.stats)) if (Array.isArray(v) && v.length === 3) m.stats[k] = { k: v[0] | 0, d: v[1] | 0, p: v[2] | 0 };
   return m;
 }
-// Damage tiers by weapon (light = 2, so 5 hits; heavy = 5, so 2; instant = 10). Melee is half (5).
+// Damage tiers by weapon (light = 2, so 5 hits; pistol = 3; heavy = 5 — rock and arrow, so 2; instant = 10). Melee is half (5).
 export const DMG = { light: 2, heavy: 5, instant: MAX_HP, melee: 5 };
 export function projectileDamage(kindId) {
   // An icicle only slows; grenades, fireballs and mines hurt through their blast.
   if (kindId === "icicle") return 0;
   if (["brick", "grenade", "fireball", "mine"].includes(kindId)) return DMG.instant;
-  if (kindId === "rock") return DMG.heavy;
+  if (kindId === "rock" || kindId === "bow") return DMG.heavy;
+  if (kindId === "pistol") return 3;
   return DMG.light; // snow, tomato
 }
 // A blast falls off with distance: centre −10, half-way −5, 80% −2, edge 0.

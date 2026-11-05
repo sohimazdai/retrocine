@@ -267,3 +267,17 @@ test("a turret on the wall shoots the nearest monster in range; a monster steppi
   assert(s.mines[0].triggerAt != null, "triggered");
   assert(m.events.some((e) => e.t === "mines"));
 });
+
+test("the fortress gate opens for someone close to it, for a short while, and closes by itself; monsters still cannot get in", () => {
+  const s = createState({ map: "fortress" }, newId),
+    gate = map.gates[0];
+  assert.equal(applyOp(s, { t: "gate.open", id: gate.id }, { ...ctx("a", 1000), pose: { x: gate.x + 9, y: 0, z: gate.z } }), null, "too far away");
+  const r = applyOp(s, { t: "gate.open", id: gate.id }, { ...ctx("a", 1000), pose: { x: gate.x + 2, y: 0, z: gate.z } });
+  assert.deepEqual(r.out[0].msg, { t: "gate", id: gate.id, until: 1000 + 2500 });
+  assert.equal(applyOp(s, { t: "gate.open", id: gate.id }, { ...ctx("b", 1200), pose: { x: gate.x - 1, y: 0, z: gate.z } }), null, "already open long enough: nothing to send");
+  assert(applyOp(s, { t: "gate.open", id: gate.id }, { ...ctx("b", 2600), pose: { x: gate.x - 1, y: 0, z: gate.z } }), "kept open while someone is there");
+  assert.equal(s.gates[gate.id], 2600 + 2500);
+  // Монстров ворота не пускают: для них проём — тоже крепость.
+  const f = map.defense.fort;
+  assert(gate.z > f.z0 && gate.z < f.z1 && gate.x <= f.x1);
+});

@@ -8,8 +8,11 @@ const S = 2,
   EDGE = 14.7 * S,
   FRONT = 10.3 * S;
 
-// ——— Крепость: передняя стена смотрит на поле (её грань — x = WALL.x1), по ней ходят: изнутри на
-// стену ведёт пандус, снаружи — лестница. На башнях и стене встают самострелы (награды). ———
+// ——— Крепость: передняя стена смотрит на поле (её грань — x = WALL.x1), в ней ворота: сами
+// открываются, когда к ним подходит аватар, изнутри или снаружи, и закрываются, когда рядом никого
+// (state.js, «gate.open»). Монстров ворота не пускают в любом случае: для них крепость — сплошная
+// стена (map.defense.fort). На стену ведут пандус со двора и лестница с поля; на башнях и стене
+// встают самострелы (награды). ———
 export const WALL = { x0: -23.6, x1: -22.4, z0: -7.0, z1: 9.0, h: 2.6 };
 export const TOWERS = [
   { x: -23.0, z: -7.0 },
@@ -18,12 +21,20 @@ export const TOWERS = [
 const TOWER_R = 1.4,
   TOWER_H = 4.2;
 export const KEEP = { x: -27.2, z: 1.0, w: 3.6, d: 4.4, h: 4.4 };
-export const GATE = { z: 1.0, w: 2.6 };
+// Ворота: проём в передней стене, над ним — свод, по которому идёт стена.
+export const GATE = { id: "main", z: 1.0, w: 2.4, h: 2.3 };
 const wallX = (WALL.x0 + WALL.x1) / 2,
-  wallW = WALL.x1 - WALL.x0;
+  wallW = WALL.x1 - WALL.x0,
+  gate0 = GATE.z - GATE.w / 2,
+  gate1 = GATE.z + GATE.w / 2;
 const fortress = [
-  // Передняя стена (ворота в ней — дубовые, закрыты: монстры бьют и стену, и ворота).
-  { kind: "fort-wall", front: true, x: wallX, z: (WALL.z0 + WALL.z1) / 2, w: wallW, d: WALL.z1 - WALL.z0, h: WALL.h },
+  // Передняя стена — две части по сторонам ворот.
+  { kind: "fort-wall", front: true, x: wallX, z: (WALL.z0 + gate0) / 2, w: wallW, d: gate0 - WALL.z0, h: WALL.h },
+  { kind: "fort-wall", front: true, x: wallX, z: (gate1 + WALL.z1) / 2, w: wallW, d: WALL.z1 - gate1, h: WALL.h },
+  // Свод над воротами: под ним проходят, по нему идут по стене.
+  { kind: "fort-gatehouse", x: wallX, z: GATE.z, w: wallW, d: GATE.w, y: GATE.h, h: WALL.h },
+  // Створки: закрытые — стена для аватара, открытые — проход.
+  { kind: "fort-gate", gate: GATE.id, x: WALL.x1 - 0.25, z: GATE.z, w: 0.3, d: GATE.w, h: GATE.h },
   // Зубцы по внешнему краю: за ними стоят, через них можно перепрыгнуть.
   { kind: "fort-parapet", x: WALL.x1 - 0.08, z: (WALL.z0 + WALL.z1) / 2, w: 0.16, d: WALL.z1 - WALL.z0 - 2.4, y: WALL.h, h: WALL.h + 0.7 },
   // Боковые стены до края поля.
@@ -33,7 +44,7 @@ const fortress = [
   // Пандус со двора на стену.
   { kind: "fort-ramp", shape: "ramp", x: WALL.x0 - 0.7, z: 5.6, w: 1.4, d: 5.2, h0: 0, h1: WALL.h, h: WALL.h, axis: "z" },
 ];
-// Лестница снаружи: со стороны поля обратно на стену.
+// Лестница снаружи: с поля на стену.
 export const FORT_LADDER = { id: "fort-ladder", kind: "wall", x: wallX, z: -3.6, w: wallW, d: 1.0, y0: 0, y1: WALL.h, face: "+x" };
 
 // ——— Подземелье: скала у правого края с аркой и дверью. ———
@@ -116,8 +127,8 @@ export default {
     turrets: [
       { x: TOWERS[0].x, z: TOWERS[0].z, y: TOWER_H },
       { x: TOWERS[1].x, z: TOWERS[1].z, y: TOWER_H },
-      { x: WALL.x1 - 0.4, z: -2.0, y: WALL.h },
-      { x: WALL.x1 - 0.4, z: 4.0, y: WALL.h },
+      { x: WALL.x1 - 0.4, z: -2.6, y: WALL.h },
+      { x: WALL.x1 - 0.4, z: 5.0, y: WALL.h },
     ],
   },
   theme: {
@@ -137,6 +148,8 @@ export default {
     { x0: -28.4, x1: -25.6, z0: -5.6, z1: -2.2 },
     { x0: -28.4, x1: -25.6, z0: 4.4, z1: 7.8 },
   ],
+  // Ворота, которые открываются сами, когда к ним подходят (на reach метров).
+  gates: [{ id: GATE.id, x: WALL.x1 - 0.25, z: GATE.z, reach: 2.8 }],
   zones: [
     { id: "pond", kind: "water", ...POND, slow: 0.5, grip: 3, swamp: true },
     { id: "bog", kind: "water", ...BOG, slow: 0.6, grip: 2.5, swamp: true },

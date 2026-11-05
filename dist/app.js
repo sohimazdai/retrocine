@@ -73,6 +73,7 @@ import {
   matchActive,
   runMines,
   runDefense,
+  GATE_OPEN_MS,
 } from "./state.js";
 import { loadMatch, matchEnabled, projectileDamage, blastDamage, MAX_HP, TEAM_COLOR, DMG } from "./match.js";
 import { DEFENSE, MONSTERS, CARDS, WEAPON_DMG, spawnOdds, waveInfo, defenseLive, weaponAllowed, damageFactor, cooldownFactor, maxHp, perksOf, frostMonsters, terrainHeight } from "./defense.js";
@@ -986,6 +987,26 @@ function onDefense(m) {
     else {
       const p = players.find((o) => o.profile.id === m.target);
       if (p) p.hit = 0.55;
+    }
+  }
+}
+// ——— Ворота крепости: открываются, когда к ним подходит ваш аватар, закрываются сами ———
+const gateIsOpen = (id) => clockNow() < (world.gates?.[id] || 0);
+// Открытые ворота — не стена: их коллайдер убирается из препятствий.
+function withGates(list) {
+  if (!mapScene.map?.gates || !list.some((b) => b.gate && gateIsOpen(b.gate))) return list;
+  return list.filter((b) => !(b.gate && gateIsOpen(b.gate)));
+}
+let gatePing = 0;
+function stepGates() {
+  for (const g of mapScene.map?.gates || []) {
+    if (Math.hypot(active.x - g.x, active.z - g.z) > g.reach || active.y > 1.5) continue;
+    // Рядом: открыть (у себя сразу, не дожидаясь сервера) и держать открытыми, пока не отошли.
+    if ((world.gates?.[g.id] || 0) - clockNow() < 1500 && performance.now() - gatePing > 300) {
+      gatePing = performance.now();
+      world.gates = world.gates || {};
+      world.gates[g.id] = Math.max(world.gates[g.id] || 0, clockNow() + GATE_OPEN_MS);
+      op({ t: "gate.open", id: g.id });
     }
   }
 }
@@ -3454,9 +3475,10 @@ function physics(dt) {
   stepMines();
   stepDefenseOffline(dt);
   stepDefenseSelf(dt);
+  stepGates();
   updateSeesaws(dt);
   mapScene.tickProps(dt);
-  const obstacles = mapScene.colliders();
+  const obstacles = withGates(mapScene.colliders());
   const loose = dynamicObjects(world);
   let move = $("#modal").open ? { x: 0, z: 0 } : movement();
   if (pending && !$("#modal").open) {
@@ -3747,6 +3769,7 @@ function visual(dt) {
   for (const p of players) if (p.remote) updateRemote(p, dt);
   tickMines();
   drawDefense(dt);
+  for (const g of mapScene.map?.gates || []) mapScene.decor?.gate?.(g.id, gateIsOpen(g.id));
   for (const p of players) {
     p.root.position.set(p.x, p.y, p.z);
     ensureTeamRing(p);
@@ -4192,6 +4215,7 @@ function loadState(fresh, objs) {
     strokes: fresh.strokes || [],
     match: fresh.match,
     defense: fresh.defense || null,
+    gates: fresh.gates || {},
     mines: fresh.mines || [],
     flags: {},
     lifts: {},
@@ -4418,6 +4442,10 @@ function onServer(m, at) {
     case "strokes":
       world.strokes = m.strokes || [];
       strokeLayer.set(world.strokes);
+      break;
+    case "gate":
+      world.gates = world.gates || {};
+      world.gates[m.id] = Math.max(world.gates[m.id] || 0, m.until);
       break;
     case "def":
     case "mon":

@@ -5,7 +5,7 @@ import * as T from "three";
 import { registerStatics, registerDecor, floorTexture } from "../mapscene.js";
 import { mat, mesh, merge, placed, rng, rockGeometry, canvasTexture, TEXTURES } from "./kit.js";
 import { moundHeight } from "../physics.js";
-import { POND, BOG, GATE } from "./fortress.js";
+import { POND, BOG } from "./fortress.js";
 
 // Кладка из тёсаных блоков: светлые известняковые камни с тёмными швами.
 const stoneTexture = () =>
@@ -76,37 +76,48 @@ function fortWall(group, s) {
   const parts = [placed(stoneBox(s.w + 0.16, 0.14, s.d + 0.16), s.x, s.h - 0.07, s.z)];
   if (!s.front) merlons(parts, s.x, s.z + (alongZ ? 0 : Math.sign(s.z) * (s.d / 2 - 0.2)), alongZ ? s.d : s.w - 1, alongZ, s.h);
   mesh(group, merge(parts), stone(), 0, 0, 0);
-  if (s.front) gate(group, s);
 }
 function parapet(group, s) {
   const parts = [];
   merlons(parts, s.x, s.z, s.d, true, s.y, 0.6, 0.45, 0.24);
   mesh(group, merge(parts), stone());
 }
-// Дубовые ворота с железными полосами и аркой из камня на наружной грани передней стены.
-function gate(group, s) {
+// Свод над воротами: кладка над проёмом, каменная арка по его краю и факелы по сторонам.
+function gatehouse(group, s) {
+  mesh(group, stoneBox(s.w, s.h - s.y, s.d), stone(), s.x, (s.y + s.h) / 2, s.z);
   const face = s.x + s.w / 2 + 0.02,
-    h = 2.05,
-    tex = TEXTURES.wood();
-  const wood = mat(tex ? "#a77a52" : "#6b4a2c", { map: tex, roughness: 0.8 }),
-    iron = mat("#3a3a3e", { roughness: 0.45, metal: 0.6 });
-  const door = mesh(group, new T.BoxGeometry(0.1, h, GATE.w), wood, face, h / 2, GATE.z);
-  door.receiveShadow = true;
-  const bands = [];
-  for (const y of [0.35, 1.05, 1.75]) bands.push(placed(new T.BoxGeometry(0.04, 0.12, GATE.w + 0.02), face + 0.06, y, GATE.z));
-  bands.push(placed(new T.BoxGeometry(0.05, h, 0.06), face + 0.06, h / 2, GATE.z));
-  for (const y of [0.35, 1.05, 1.75]) for (let i = -2; i <= 2; i++) if (i) bands.push(placed(new T.SphereGeometry(0.035, 6, 4), face + 0.09, y, GATE.z + i * 0.5));
-  mesh(group, merge(bands), iron);
-  // Арка: камни полукругом над воротами.
-  const arch = [];
+    arch = [];
+  // Арка: камни полукругом над проёмом, с внешней стороны.
   for (let i = 0; i <= 8; i++) {
     const a = (i / 8) * Math.PI,
-      r = GATE.w / 2 + 0.15;
-    arch.push(placed(stoneBox(0.18, 0.3, 0.42), face + 0.04, h + Math.sin(a) * 0.35, GATE.z + Math.cos(a) * r, 0, -(a - Math.PI / 2)));
+      r = s.d / 2 + 0.1;
+    arch.push(placed(stoneBox(0.18, 0.3, 0.42), face + 0.04, s.y - 0.12 + Math.sin(a) * 0.35, s.z + Math.cos(a) * r, 0, -(a - Math.PI / 2)));
   }
   mesh(group, merge(arch), stone({ roughness: 0.85 }));
-  // Факелы по сторонам ворот.
-  for (const side of [-1, 1]) torch(group, face + 0.12, 1.85, GATE.z + side * (GATE.w / 2 + 0.55));
+  for (const side of [-1, 1]) torch(group, face + 0.12, 1.85, s.z + side * (s.d / 2 + 0.55));
+}
+// Ворота: две дубовые створки с железными полосами на петлях у краёв проёма; открываются внутрь.
+function gateLeaves(group, s) {
+  const tex = TEXTURES.wood(),
+    wood = mat(tex ? "#a77a52" : "#6b4a2c", { map: tex, roughness: 0.8 }),
+    iron = mat("#3a3a3e", { roughness: 0.45, metal: 0.6 }),
+    half = s.d / 2,
+    h = s.h - 0.06;
+  const leaves = [-1, 1].map((side) => {
+    // Петля — у края проёма; створка тянется от неё к середине.
+    const hinge = new T.Group();
+    hinge.position.set(s.x, 0, s.z + side * half);
+    group.add(hinge);
+    const mid = -side * (half / 2);
+    mesh(hinge, new T.BoxGeometry(0.1, h, half - 0.02), wood, 0, h / 2, mid);
+    const bands = [];
+    for (const y of [0.35, 1.05, 1.75]) bands.push(placed(new T.BoxGeometry(0.04, 0.12, half - 0.04), 0.06, y, mid));
+    for (const y of [0.35, 1.05, 1.75]) for (const k of [0.25, 0.5, 0.75]) bands.push(placed(new T.SphereGeometry(0.035, 6, 4), 0.09, y, -side * half * k));
+    bands.push(placed(new T.TorusGeometry(0.09, 0.02, 6, 12), 0.09, 1.05, -side * (half - 0.2), Math.PI / 2));
+    mesh(hinge, merge(bands), iron);
+    return hinge;
+  });
+  group.userData.gates = { ...(group.userData.gates || {}), [s.gate]: leaves };
 }
 function torch(group, x, y, z) {
   mesh(group, new T.CylinderGeometry(0.035, 0.025, 0.42, 6), mat("#4a3020", { roughness: 0.9 }), x, y, z);
@@ -333,6 +344,8 @@ function fallen(group, s) {
 
 registerStatics({
   "fort-wall": fortWall,
+  "fort-gatehouse": gatehouse,
+  "fort-gate": gateLeaves,
   "fort-parapet": parapet,
   "fort-tower": tower,
   "fort-keep": keep,
@@ -400,7 +413,8 @@ registerDecor("fortress", (group, map) => {
       [0, 1.0],
       [-8, 1.6],
       [-15, 1.2],
-      [-21.8, 1.0],
+      [-22.2, 1.0],
+      [-24.8, 1.0],
     ],
     dirt = [];
   for (let i = 0; i < path.length - 1; i++) {
@@ -417,7 +431,8 @@ registerDecor("fortress", (group, map) => {
   for (let i = 0; i < 260; i++) {
     const x = (r() - 0.5) * 54,
       z = -14 + r() * 33;
-    if (x < -22 || (x > 24 && Math.abs(z - 1) < 6)) continue;
+    // Не во дворе крепости и не у двери подземелья.
+    if ((x < -22 && z > -8.6 && z < 10.6) || (x > 24 && Math.abs(z - 1) < 6)) continue;
     tufts.push(placed(new T.ConeGeometry(0.07, 0.22 + r() * 0.15, 4), x, 0.12, z, r() * 3, (r() - 0.5) * 0.4, (r() - 0.5) * 0.4));
     if (r() < 0.25) flowers.push(placed(new T.SphereGeometry(0.045, 6, 4), x + 0.1, 0.25, z + 0.05));
   }
@@ -427,12 +442,16 @@ registerDecor("fortress", (group, map) => {
   let flames = null,
     door = null,
     light = null,
-    open = 0;
+    open = 0,
+    gates = {};
+  const gateOpen = {},
+    gateTarget = {};
   const find = () => {
     flames = [];
     group.traverse((o) => {
       if (o.userData.flicker) flames.push(o);
       if (o.userData.dungeonDoor) door = o.userData.dungeonDoor;
+      if (o.userData.gates) gates = { ...gates, ...o.userData.gates };
       if (o.userData.dungeonLight) light = o.userData.dungeonLight;
     });
   };
@@ -441,12 +460,23 @@ registerDecor("fortress", (group, map) => {
     spawned() {
       open = 1;
     },
+    // Ворота открыты или закрыты (браузер говорит каждый кадр); створки поворачиваются плавно.
+    gate(id, isOpen) {
+      gateTarget[id] = isOpen ? 1 : 0;
+    },
     update(dt, t) {
       if (!flames) find();
       for (const f of flames) f.scale.set(1, 0.85 + Math.sin(t * 17 + f.position.z * 3) * 0.15 + Math.sin(t * 29) * 0.06, 1);
       if (pond.material.map) pond.material.map.offset.set(Math.sin(t * 0.2) * 0.05, t * 0.01);
       open = Math.max(0, open - dt * 0.7);
       if (door) door.rotation.y = -Math.min(1, open * 1.6) * 1.2;
+      for (const [id, [left, right]] of Object.entries(gates)) {
+        const k = (gateOpen[id] = (gateOpen[id] || 0) + Math.sign((gateTarget[id] || 0) - (gateOpen[id] || 0)) * Math.min(Math.abs((gateTarget[id] || 0) - (gateOpen[id] || 0)), dt * 2.2));
+        // Внутрь двора: левая створка — в одну сторону, правая — в другую.
+        const a = (1 - (1 - k) ** 2) * 1.4;
+        left.rotation.y = -a;
+        right.rotation.y = a;
+      }
       if (light) light.intensity = 3 + Math.sin(t * 2.3) * 0.8 + open * 8;
     },
   };

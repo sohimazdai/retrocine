@@ -1809,7 +1809,9 @@ test("fortress defense: the panel sets the waves and R starts it; monsters are 3
   a.run("active.hp = 1");
   a.tick(1.5);
   assert.equal(a.run("active.dead"), true);
-  assert(a.run("active.x") < -24, `in the courtyard: ${a.run("active.x")}`);
+  const fort = a.run("mapScene.map.defense.fort"),
+    at = a.run("({ x: active.x, z: active.z })");
+  assert(at.x > fort.x0 && at.x < fort.x1 && at.z > fort.z0 && at.z < fort.z1, `in the courtyard: ${at.x}, ${at.z}`);
   a.run("downUntil = Date.now() - 1");
   a.tick(0.1);
   assert.equal(a.run("active.dead"), false);
@@ -1847,4 +1849,36 @@ test("fortress defense: E kicks a monster; a wave beaten brings three reward car
   d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Tab", bubbles: true }));
   assert.equal(d.querySelector("#defScore").hidden, false);
   assert.match(d.querySelector("#defScore").textContent, /Тестер\s*1/);
+});
+
+test("fortress gate: walking up to it from the courtyard opens it, you walk out onto the field, and it closes behind you; closed, it holds", () => {
+  const a = boot({ offline: true });
+  a.run('op({ t: "map.set", id: "fortress" })');
+  a.tick(0.2);
+  const gate = a.run("mapScene.map.gates[0]");
+  // Во дворе перед воротами, лицом к ним.
+  a.run(`Object.assign(active, { x: ${gate.x - 3.6}, z: ${gate.z}, y: 0, vy: 0, grounded: true, kx: 0, kz: 0 })`);
+  assert.equal(a.run(`gateIsOpen("${gate.id}")`), false);
+  // Идём на поле (вправо по экрану = +x).
+  a.run("keys.add('right')");
+  let opened = false;
+  for (let i = 0; i < 300 && a.run("active.x") < gate.x + 3; i++) {
+    a.tick(1 / 60);
+    opened ||= a.run(`gateIsOpen("${gate.id}")`);
+  }
+  a.run("keys.clear()");
+  assert(opened, "the gate opened");
+  assert(a.run("active.x") > gate.x + 2.5, `out on the field: ${a.run("active.x")}`);
+  // Отошли — закрылись.
+  a.run(`Object.assign(active, { x: ${gate.x + 8}, z: ${gate.z} })`);
+  a.run(`world.gates["${gate.id}"] = Date.now() - 1`);
+  a.tick(0.5);
+  assert.equal(a.run(`gateIsOpen("${gate.id}")`), false);
+  // Закрытые ворота держат: с поля в них не пройти, пока не открылись (открываются, только если подойти).
+  a.run(`world.gates["${gate.id}"] = 0; stepGates = () => {}`);
+  a.run(`Object.assign(active, { x: ${gate.x + 1.5}, z: ${gate.z} })`);
+  a.run("keys.add('left')");
+  a.tick(1);
+  a.run("keys.clear()");
+  assert(a.run("active.x") > gate.x, `the closed gate stops you: ${a.run("active.x")}`);
 });

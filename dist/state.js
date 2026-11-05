@@ -45,6 +45,7 @@ import * as defense from "./defense.js";
 const finite = (v) => typeof v === "number" && Number.isFinite(v);
 const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallback);
 const MAX_MINES = 16;
+export const GATE_OPEN_MS = 2500;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
 // ——— Опрос: один на комнату, как в Telegram — вопрос, 2–10 вариантов, анонимный или открытый,
@@ -135,6 +136,8 @@ export function createState(saved = {}, newId) {
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
     // Защита крепости (только на её карте): с диска — лишь число волн, игра начинается заново.
     defense: map.defense ? defense.loadDefense(sameMap ? saved.defense : null) : null,
+    // Ворота (крепость): до какого момента открыты.
+    gates: {},
     mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
     mineAt: {},
     flags: {},
@@ -181,6 +184,7 @@ export function serializeState(s) {
     scores: s.scores,
     match: s.match ? match.serializeMatch(s.match) : undefined,
     defense: s.defense ? defense.serializeDefense(s.defense) : undefined,
+    gates: s.gates || {},
     mines: (s.mines || []).map(({ id, x, z, by, armAt, triggerAt }) => ({ id, x, z, by, armAt, triggerAt })),
     timer: s.timer,
     poll: s.poll || null,
@@ -544,6 +548,7 @@ export function applyOp(s, op, ctx) {
       s.lifts = {};
       s.lastTouch = {};
       s.defense = map.defense ? defense.createDefense(s.defense?.waves) : null;
+      s.gates = {};
       s.v++;
       // Stickers stay, moved out of anything solid on the new map.
       for (const n of s.notes) Object.assign(n, freeSpot(s, n.x, n.z));
@@ -692,6 +697,18 @@ export function applyOp(s, op, ctx) {
       physics = true;
       break;
     }
+    // Ворота крепости: подошедший открывает их на 2,5 с; пока рядом кто-то есть, его браузер держит их
+    // открытыми, потом они закрываются сами (открыты — пока не прошло время, событие закрытия не нужно).
+    case "gate.open": {
+      const g = (stateMap(s).gates || []).find((x) => x.id === op.id);
+      if (!g || (ctx.pose && Math.hypot(ctx.pose.x - g.x, ctx.pose.z - g.z) > g.reach + 1.5)) return null;
+      s.gates = s.gates || {};
+      const until = ctx.now + GATE_OPEN_MS;
+      if ((s.gates[g.id] || 0) > until - 1000) return null;
+      s.gates[g.id] = until;
+      all({ t: "gate", id: g.id, until });
+      break;
+    }
     // ——— Защита крепости ———
     case "def.ready": {
       if (!s.defense || !defense.ready(s.defense, ctx.peer, ctx.now, ctx.peers || [ctx.peer])) return null;
@@ -787,6 +804,7 @@ export const STATE_OPS = new Set([
   "match.unready",
   "match.dmg",
   "match.dead",
+  "gate.open",
   "def.ready",
   "def.unready",
   "def.config",

@@ -179,7 +179,7 @@ export function projectileDamage(kindId) {
   if (kindId === "icicle") return 0;
   if (["brick", "grenade", "fireball", "mine"].includes(kindId)) return DMG.instant;
   if (kindId === "rock") return DMG.heavy;
-  return DMG.light; // snow, tomato, tennis
+  return DMG.light; // snow, tomato
 }
 // A blast falls off with distance: centre −10, half-way −5, 80% −2, edge 0.
 export function blastDamage(dist, radius) {

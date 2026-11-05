@@ -102,15 +102,15 @@ svg {
 }
 .island {
   position: fixed;
-  bottom: 26px;
+  bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 11px;
+  gap: 1px;
+  padding: 4px 5px;
   border: 1px solid #a899c02c;
-  border-radius: 18px;
+  border-radius: 12px;
   background: linear-gradient(150deg, #34313eeb, #24232ff2);
   box-shadow:
     0 12px 50px #0a09194d,
@@ -124,9 +124,9 @@ svg {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 41px;
-  height: 42px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   color: #b8b1c8;
   transition:
     background 0.18s,
@@ -135,6 +135,12 @@ svg {
 .tool > span[data-icon] {
   display: grid;
   place-items: center;
+}
+/* Миниатюрный остров: иконки 16 px. */
+.island svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
 }
 .tool.active,
 .tool.on {
@@ -152,7 +158,7 @@ svg {
 .tool .slash {
   display: none;
   position: absolute;
-  width: 24px;
+  width: 18px;
   height: 1.6px;
   background: #b59eae;
   transform: rotate(45deg);
@@ -162,11 +168,11 @@ svg {
   display: block;
 }
 .divider {
-  height: 25px;
+  height: 16px;
   width: 1px;
   flex-shrink: 0;
   background: #8e7da32b;
-  margin: 0 4px;
+  margin: 0 3px;
 }
 .logo-button {
   position: relative;
@@ -184,7 +190,7 @@ svg {
 .tip {
   display: none;
   position: absolute;
-  bottom: calc(100% + 17px);
+  bottom: calc(100% + 11px);
   left: 50%;
   transform: translateX(-50%);
   padding: 7px 10px;
@@ -217,7 +223,7 @@ svg {
 }
 .context-island {
   position: fixed;
-  bottom: 108px;
+  bottom: 62px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -252,10 +258,23 @@ svg {
 .context-island[hidden] {
   display: none;
 }
-.timer-island {
+/* Правая колонка под кнопкой настроек: таймер и опрос. */
+.right-stack {
   position: fixed;
-  right: 25px;
-  top: 23px;
+  right: 16px;
+  top: 70px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+.right-stack > * {
+  pointer-events: auto;
+}
+.timer-island {
+  position: relative;
   display: flex;
   gap: 9px;
   align-items: center;
@@ -284,7 +303,7 @@ svg {
 #toast {
   position: fixed;
   left: 50%;
-  bottom: 110px;
+  bottom: 64px;
   transform: translate(-50%, 8px);
   padding: 11px 18px;
   border-radius: 10px;
@@ -581,36 +600,6 @@ kbd {
   white-space: nowrap;
 }
 
-.emotion-picker {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.emotion-picker button {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 19px 5px 14px;
-  background: #ffffff05;
-  border: 1px solid #baa1dd21;
-  border-radius: 13px;
-  transition:
-    background 0.2s,
-    transform 0.2s;
-}
-.emotion-picker button:hover {
-  background: #b89ae721;
-  transform: translateY(-2px);
-}
-.emotion-picker button span {
-  font-size: 31px;
-}
-.emotion-picker button strong {
-  font-size: 10px;
-  font-weight: 500;
-  color: #cdbbdd;
-}
 dialog.avatar-dialog {
   width: min(980px, calc(100vw - 32px));
   padding: 23px;
@@ -962,12 +951,12 @@ dialog.avatar-dialog {
 }
 @media (max-width: 1000px) {
   .island {
-    gap: 2px;
-    padding: 8px;
+    gap: 1px;
+    padding: 4px;
   }
   .tool {
-    width: 35px;
-    height: 38px;
+    width: 28px;
+    height: 28px;
   }
   .divider {
     margin: 0 2px;
@@ -978,8 +967,8 @@ dialog.avatar-dialog {
     font-size: 26px;
   }
   .tool svg {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 }
 @media (max-width: 720px) {
@@ -987,15 +976,15 @@ dialog.avatar-dialog {
     width: calc(100vw - 20px);
     justify-content: center;
     flex-wrap: wrap;
-    bottom: 12px;
+    bottom: 10px;
     gap: 1px;
-    max-width: 480px;
-    border-radius: 15px;
-    padding: 6px;
+    max-width: 420px;
+    border-radius: 12px;
+    padding: 4px;
   }
   .tool {
-    width: 37px;
-    height: 35px;
+    width: 32px;
+    height: 30px;
   }
   .divider {
     display: none;
@@ -1010,7 +999,7 @@ dialog.avatar-dialog {
     display: none;
   }
   .context-island {
-    bottom: 106px;
+    bottom: 92px;
     max-width: 95vw;
     flex-wrap: wrap;
     justify-content: center;
@@ -1033,14 +1022,14 @@ dialog.avatar-dialog {
     padding: 21px;
   }
   #toast {
-    bottom: 108px;
+    bottom: 94px;
     width: max-content;
     max-width: 90vw;
     font-size: 10px;
   }
-  .timer-island {
-    top: 14px;
-    right: 14px;
+  .right-stack {
+    top: 64px;
+    right: 12px;
   }
   .help-grid {
     gap: 7px;
@@ -1403,52 +1392,34 @@ dialog.avatar-dialog {
   background: conic-gradient(#14121cc7 calc(var(--cd) * 360deg), transparent 0);
   pointer-events: none;
 }
-.weapon-picker {
-  position: fixed;
-  bottom: 92px;
-  z-index: 16;
-  width: 240px;
-  padding: 6px;
-  display: grid;
-  gap: 2px;
-  border: 1px solid #a899c033;
-  border-radius: 14px;
-  background: linear-gradient(160deg, #35313ff2, #23222df7);
-  backdrop-filter: blur(20px);
-  box-shadow: 0 16px 50px #07061599;
-}
-.weapon-picker[hidden] {
-  display: none;
-}
-.weapon-picker button {
+/* Снаряды: островок над панелью, как у рисования и эмоций; только значки. */
+.sub-island.weapon-island button {
   position: relative;
-  display: grid;
-  grid-template-columns: 26px 1fr auto;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
+  width: 34px;
+  height: 34px;
   border-radius: 9px;
-  color: var(--text);
-  text-align: left;
-  font-size: 12.5px;
+  font-size: 19px;
+  line-height: 1;
+  transition:
+    background 0.15s,
+    transform 0.15s;
 }
-.weapon-picker button:hover {
-  background: #ffffff0d;
+.sub-island.weapon-island button:hover {
+  background: #b89ae726;
+  transform: translateY(-2px) scale(1.08);
 }
-.weapon-picker button.selected {
-  background: #c1a9fa29;
-  box-shadow: 0 0 0 1px #c1a9fa55 inset;
+.sub-island.weapon-island button.on {
+  background: #c1a9fa38;
+  box-shadow: 0 0 0 1.5px #c1a9fa inset;
 }
-.weapon-picker kbd {
-  color: var(--muted);
-  font-size: 10px;
-}
-.weapon-cd {
+.sub-island.weapon-island button::after {
+  content: "";
   position: absolute;
-  right: 30px;
-  font-style: normal;
-  font-size: 10px;
-  color: #f0c46a;
+  inset: 2px;
+  border-radius: 8px;
+  /* --cd comes from the button (what part of the cooldown is left). */
+  background: conic-gradient(#14121cc7 calc(var(--cd, 0) * 360deg), transparent 0);
+  pointer-events: none;
 }
 .charge-ring {
   --p: 0;
@@ -1534,4 +1505,448 @@ dialog.avatar-dialog {
   height: 2px;
   border-radius: 1px;
   background: var(--c);
+}
+
+/* Эмоции: островок над панелью инструментов. */
+.emotion-island {
+  position: fixed;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #a899c033;
+  border-radius: 14px;
+  background: linear-gradient(150deg, #34313ef2, #24232ff7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px #0a09195c;
+  z-index: 12;
+  animation: island-in 0.16s ease-out;
+}
+.emotion-island[hidden] {
+  display: none;
+}
+.emotion-island button {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  font-size: 25px;
+  line-height: 1;
+  transition:
+    background 0.15s,
+    transform 0.15s;
+}
+.emotion-island button:hover {
+  background: #b89ae726;
+  transform: translateY(-3px) scale(1.12);
+}
+@keyframes island-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.96);
+  }
+}
+
+/* Опрос: карточка справа сверху. */
+.poll-card {
+  width: 300px;
+  max-width: calc(100vw - 28px);
+  padding: 12px 12px 10px;
+  border: 1px solid #ab96c12e;
+  border-radius: 14px;
+  background: linear-gradient(160deg, #332f3df2, #24232ff7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 14px 44px #0a09194d;
+  animation: island-in-right 0.18s ease-out;
+}
+.poll-card[hidden] {
+  display: none;
+}
+.poll-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #a597ba;
+}
+.poll-card header span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.poll-card header svg {
+  width: 13px;
+  height: 13px;
+  color: #c1a9fa;
+}
+.poll-card header button {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #a597ba;
+}
+.poll-card header button:hover {
+  background: #ffffff0d;
+  color: #eadcfb;
+}
+.poll-card h3 {
+  margin: 6px 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #f1e8fb;
+  overflow-wrap: anywhere;
+}
+.poll-list {
+  display: grid;
+  gap: 5px;
+}
+.poll-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #baa1dd24;
+  border-radius: 9px;
+  background: #ffffff06;
+  text-align: left;
+  font-size: 12px;
+  color: #e3d8f0;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.poll-option:hover {
+  background: #b89ae71c;
+  border-color: #c1a9fa55;
+}
+.poll-option i {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 1.6px solid #8f80a6;
+  border-radius: 50%;
+}
+.poll-option i.box {
+  border-radius: 4px;
+}
+.poll-option.picked {
+  border-color: #c1a9fa88;
+  background: #c1a9fa1c;
+}
+.poll-option.picked i {
+  border-color: #c1a9fa;
+  background: #c1a9fa radial-gradient(circle, #2b2536 30%, transparent 32%);
+}
+.poll-option.picked i.box {
+  background: #c1a9fa;
+  box-shadow: inset 0 0 0 2.5px #2b2536;
+}
+.poll-option span,
+.poll-result-row span {
+  overflow-wrap: anywhere;
+}
+.poll-result {
+  display: grid;
+  gap: 4px;
+  padding: 3px 2px;
+}
+.poll-result-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: #e3d8f0;
+}
+.poll-result-row b {
+  min-width: 34px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #d9c6f7;
+  font-variant-numeric: tabular-nums;
+}
+.poll-result-row em {
+  margin-left: auto;
+  font-style: normal;
+  color: #c1a9fa;
+  font-size: 11px;
+}
+.poll-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: #ffffff0d;
+  overflow: hidden;
+}
+.poll-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: #8d7bab;
+  transition: width 0.35s ease-out;
+}
+.poll-result.mine .poll-bar i,
+.poll-result.lead .poll-bar i {
+  background: #c1a9fa;
+}
+.poll-result small {
+  padding-left: 42px;
+  font-size: 10px;
+  color: #9a8daf;
+}
+.poll-card footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: #9a8daf;
+}
+.poll-card footer div {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.poll-card footer button {
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: #ffffff09;
+  font-size: 10.5px;
+  color: #d8c9ec;
+}
+.poll-card footer button:hover {
+  background: #ffffff14;
+}
+.poll-card footer button.primary {
+  padding: 5px 10px;
+  background: #c1a9fa;
+  color: #332940;
+  font-weight: 600;
+}
+.poll-card footer button.primary:hover {
+  background: #cfbcfb;
+}
+.poll-card footer button.primary:disabled {
+  background: #ffffff09;
+  color: #7d7190;
+  cursor: default;
+}
+@keyframes island-in-right {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+/* Окно создания опроса. */
+.poll-form input#pollQuestion {
+  font-size: 14px;
+}
+.poll-form-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+.poll-form-head small {
+  font-size: 10px;
+  color: #9a8daf;
+}
+.poll-options-edit {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+.poll-option-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.poll-option-edit input {
+  flex: 1;
+}
+.poll-option-edit button {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  color: #9a8daf;
+  font-size: 16px;
+}
+.poll-option-edit button:hover {
+  background: #ffffff0d;
+  color: #f0b3c4;
+}
+.poll-switches {
+  display: grid;
+  gap: 2px;
+  margin-top: 14px;
+  border-top: 1px solid #a899c022;
+  padding-top: 10px;
+}
+.poll-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 2px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #e3d8f0;
+}
+.poll-switch span {
+  display: grid;
+  gap: 2px;
+}
+.poll-switch small {
+  font-size: 10px;
+  color: #9a8daf;
+}
+.poll-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.poll-switch i {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: #4a4458;
+  transition: background 0.18s;
+}
+.poll-switch i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #d7cce6;
+  transition: transform 0.18s;
+}
+.poll-switch input:checked + i {
+  background: #c1a9fa;
+}
+.poll-switch input:checked + i::after {
+  transform: translateX(14px);
+  background: #2b2536;
+}
+.poll-switch input:focus-visible + i {
+  outline: 2px solid #c1a9fa;
+  outline-offset: 2px;
+}
+/* Островки инструментов «Рисовать» и «Фигура» над панелью. */
+.sub-island {
+  position: fixed;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 5px;
+  border: 1px solid #a899c033;
+  border-radius: 12px;
+  background: linear-gradient(150deg, #34313ef2, #24232ff7);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px #0a09195c;
+  z-index: 12;
+  max-width: calc(100vw - 24px);
+  animation: island-in 0.16s ease-out;
+}
+.sub-island[hidden] {
+  display: none;
+}
+.sub-island button {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #b8b1c8;
+  font-size: 10.5px;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.sub-island button:hover {
+  background: #ffffff0d;
+  color: #f4e8ff;
+}
+.sub-island button.on {
+  background: #c1a9fa;
+  color: #30283f;
+}
+.sub-island svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+}
+.sub-island .swatch {
+  min-width: 22px;
+  width: 22px;
+  height: 22px;
+  margin: 0 1px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px #0004;
+}
+.sub-island .swatch:hover {
+  background: var(--c);
+  transform: scale(1.12);
+}
+.sub-island .swatch.on {
+  background: var(--c);
+  box-shadow:
+    0 0 0 2px #24232f,
+    0 0 0 3.5px var(--c);
+}
+.sub-island .width i {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sub-island button.armed {
+  padding: 0 8px;
+  background: #ef476f33;
+  color: #ffc2d1;
+}
+.sub-divider {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: #8e7da32b;
+}
+#scene.drawing,
+canvas.drawing {
+  cursor: crosshair;
+}
+
+/* While an island is open above the toolbar, toasts go above it instead of covering it. */
+body:has(.sub-island:not([hidden]), .emotion-island:not([hidden])) #toast {
+  bottom: 106px;
+}
+/* …and the toolbar's hover hints, which would land on the island, are not shown. */
+body:has(.sub-island:not([hidden]), .emotion-island:not([hidden])) .island .tip {
+  display: none;
+}
+@media (max-width: 720px) {
+  /* The toolbar wraps into two rows here: islands go above both. */
+  .sub-island,
+  .emotion-island {
+    bottom: 88px;
+    /* With left: 50% it would otherwise only get half the screen and wrap early. */
+    width: max-content;
+    max-width: calc(100vw - 20px);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  body:has(.sub-island:not([hidden]), .emotion-island:not([hidden])) #toast {
+    bottom: 168px;
+  }
 }

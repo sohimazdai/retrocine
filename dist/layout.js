@@ -69,6 +69,10 @@ export function screenPoint(x, y, inset = 0) {
     z: ROOM.eyeZ + (wallZ(wx) - ROOM.eyeZ) * scale,
   };
 }
+// The inverse of screenPoint for a point on the wall: its wall coordinates (x across, y up).
+export function wallCoords(p) {
+  return { x: (p.x * ROOM.halfWidth) / halfWidthAt(p.y), y: p.y };
+}
 export function floorBack(x) {
   return wallZ(Math.max(-ROOM.halfWidth, Math.min(ROOM.halfWidth, x)));
 }

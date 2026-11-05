@@ -254,8 +254,10 @@ export const defaultBalls = (map) => (map.balls || []).map(makeBall);
 // Skateboards, scooters and bikes: free ones stand where they were left; by — who rides it.
 export const RIDE_KINDS = ["skateboard", "scooter", "bike"];
 export const defaultRides = (map) => (map.rides || []).map((r) => ({ id: r.id, kind: r.kind, x: r.x, z: r.z, a: r.a || 0, by: null }));
-export function makeCube({ id, x, z, y, color }) {
-  return { id, x, z, y: y ?? CUBE_SIZE / 2, size: CUBE_SIZE, color, vx: 0, vy: 0, vz: 0, spin: 0, rotation: 0 };
+// Фигуры, которые можно ставить на поле (инструмент «Фигура», C): физика у всех как у кубика.
+export const CUBE_SHAPES = { cube: "Куб", sphere: "Шар", cylinder: "Цилиндр", cone: "Конус", pyramid: "Пирамида", torus: "Тор", star: "Звезда", gem: "Кристалл", capsule: "Капсула" };
+export function makeCube({ id, x, z, y, color, shape }) {
+  return { id, x, z, y: y ?? CUBE_SIZE / 2, size: CUBE_SIZE, color, shape: CUBE_SHAPES[shape] ? shape : "cube", vx: 0, vy: 0, vz: 0, spin: 0, rotation: 0 };
 }
 export const defaultCubes = (map, newId) => (map.cubes || []).map((c) => makeCube({ ...c, id: newId() }));
 

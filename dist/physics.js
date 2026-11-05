@@ -312,7 +312,9 @@ export function kickCube(cube, from, power = 6) {
   cube.spin = (cube.spin || 0) + 3.5;
 }
 // grip < 1: slippery ground (ice) — loose things slide much farther.
-export function stepCube(c, boxes, dt, grip = 1) {
+// onHit(box, speed, nx, nz): it ran into the side of a box at `speed` (n points from the box to it) —
+// so a movable prop it hits can be pushed.
+export function stepCube(c, boxes, dt, grip = 1, onHit = null) {
   c.x += c.vx * dt;
   c.z += c.vz * dt;
   c.vy -= GRAVITY * dt;
@@ -372,6 +374,7 @@ export function stepCube(c, boxes, dt, grip = 1) {
         c.x = b.x + nx * (b.radius + c.size / 2);
         c.z = b.z + nz * (b.radius + c.size / 2);
         const velocity = c.vx * nx + c.vz * nz;
+        if (velocity < 0) onHit?.(b, -velocity, nx, nz);
         if (velocity < 0) {
           c.vx -= nx * velocity * 1.6;
           c.vz -= nz * velocity * 1.6;
@@ -383,10 +386,14 @@ export function stepCube(c, boxes, dt, grip = 1) {
           pz = b.d / 2 + c.size / 2 - Math.abs(dz);
         if (px > 0 && pz > 0) {
           if (px < pz) {
-            c.x += Math.sign(dx || 1) * px;
+            const n = Math.sign(dx || 1);
+            if (c.vx * n < 0) onHit?.(b, -c.vx * n, n, 0);
+            c.x += n * px;
             c.vx *= -0.55;
           } else {
-            c.z += Math.sign(dz || 1) * pz;
+            const n = Math.sign(dz || 1);
+            if (c.vz * n < 0) onHit?.(b, -c.vz * n, 0, n);
+            c.z += n * pz;
             c.vz *= -0.55;
           }
         }
@@ -419,12 +426,28 @@ export function stepCube(c, boxes, dt, grip = 1) {
   c.rotation = (c.rotation || 0) + (c.spin || 0) * dt;
   return c;
 }
+// Two loose things (cubes, balls) touching. More over each other than side by side, the upper one
+// rests on the lower and is carried along by it (cubes stack into towers); otherwise they push
+// each other apart and trade some speed.
 export function collideCubes(a, b) {
   const dx = b.x - a.x,
     dz = b.z - a.z,
     d = Math.hypot(dx, dz),
-    r = (a.size + b.size) * 0.52;
-  if (d >= r || Math.abs(a.y - b.y) > (a.size + b.size) / 2) return;
+    r = (a.size + b.size) * 0.52,
+    dy = b.y - a.y,
+    reach = (a.size + b.size) / 2;
+  if (d >= r || Math.abs(dy) >= reach) return;
+  if (reach - Math.abs(dy) < r - d && Math.abs(dy) > reach * 0.35) {
+    const top = dy > 0 ? b : a,
+      low = dy > 0 ? a : b;
+    top.y = low.y + reach;
+    if (top.vy < low.vy) top.vy = low.vy - top.vy > 2 ? low.vy + (low.vy - top.vy) * 0.25 : low.vy;
+    // Friction with what it stands on: it rides along with it.
+    top.vx = low.vx + (top.vx - low.vx) * 0.975;
+    top.vz = low.vz + (top.vz - low.vz) * 0.975;
+    top.spin = (top.spin || 0) * 0.975;
+    return;
+  }
   if (d < 0.001) {
     b.x += 0.01;
     return;

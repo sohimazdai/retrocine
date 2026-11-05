@@ -2215,9 +2215,10 @@ function nearPickables(from, to, radius) {
   // 0.8 m: a kart or a blown-away avatar moves about that far in 1/30 s.
   return pickBounds.filter(({ s }) => s && segmentDistance(s.center, from, to) <= s.radius + radius + 0.8).map(({ o }) => o);
 }
-function releaseSnow(player, payload) {
-  const kind = projectile(payload.w);
-  let to = payload.to;
+// Откуда и с какой скоростью вылетает снаряд. Общее для броска и для пунктира прицела, чтобы
+// пунктир показывал ровно тот полёт, который получится.
+function launchOf(player, kind, target, power = 1, vel = null) {
+  let to = target;
   const from = new T.Vector3(player.x, player.y + 1.08, player.z);
   if (to.distanceTo(from) < 0.6)
     to = new T.Vector3(player.x + Math.sin(player.angle) * 3, 0.2, player.z + Math.cos(player.angle) * 3);
@@ -2226,33 +2227,37 @@ function releaseSnow(player, payload) {
   direction.normalize();
   from.addScaledVector(direction, 0.5);
   const g = PROJECTILE_GRAVITY * (kind.gravity ?? 1);
-  let v;
-  if (kind.straight && player.arms?.[1]) {
-    // Пуля вылетает из ствола, а не от лица: рука с пистолетом вытянута вперёд от правого плеча.
-    const shoulder = player.arms[1].getWorldPosition(new T.Vector3()),
-      reach = 0.5 * player.arms[1].getWorldScale(new T.Vector3()).y;
-    from.set(shoulder.x, shoulder.y + reach * 0.06, shoulder.z).addScaledVector(direction, reach);
-  }
   if (kind.straight) {
-    // Пистолет: прямо туда, куда показали; в пол под курсором — на уровне груди, через всю точку и дальше.
+    // Пуля вылетает из ствола, а не от лица: рука с пистолетом вытянута вперёд от правого плеча.
+    if (player.arms?.[1]) {
+      const shoulder = player.arms[1].getWorldPosition(new T.Vector3()),
+        reach = 0.5 * player.arms[1].getWorldScale(new T.Vector3()).y;
+      from.set(shoulder.x, shoulder.y + reach * 0.06, shoulder.z).addScaledVector(direction, reach);
+    }
+    // Прямо туда, куда показали; в пол под курсором — на уровне груди, через всю точку и дальше.
     const aim = to.clone();
     if (aim.y < 0.3) aim.y = from.y - 0.12;
-    v = aim.sub(from).normalize().multiplyScalar(kind.maxSpeed);
-    effects.muzzle(from);
-  } else v = launchVelocity(from, to, kind.maxSpeed * (payload.pw || 1), g, kind.pace);
+    return { from, v: aim.sub(from).normalize().multiplyScalar(kind.maxSpeed), g };
+  }
+  const l = launchVelocity(from, to, kind.maxSpeed * power, g, kind.pace),
+    v = new T.Vector3(l.x, l.y, l.z);
   // Throwing on the move: your speed along the throw (forward or back, not sideways) adds to the
   // shot's speed; the direction stays where you aimed.
-  if (!kind.straight) {
-    const vx = payload.vel?.[0] ?? player.velocityX ?? 0,
-      vz = payload.vel?.[1] ?? player.velocityZ ?? 0,
-      h = Math.hypot(v.x, v.z);
-    if (h > 1e-6) {
-      const along = (vx * v.x + vz * v.z) / h,
-        k = Math.max(0.3, (h + along) / h);
-      v.x *= k;
-      v.z *= k;
-    }
+  const vx = vel?.[0] ?? player.velocityX ?? 0,
+    vz = vel?.[1] ?? player.velocityZ ?? 0,
+    h = Math.hypot(v.x, v.z);
+  if (h > 1e-6) {
+    const along = (vx * v.x + vz * v.z) / h,
+      k = Math.max(0.3, (h + along) / h);
+    v.x *= k;
+    v.z *= k;
   }
+  return { from, v, g };
+}
+function releaseSnow(player, payload) {
+  const kind = projectile(payload.w),
+    { from, v, g } = launchOf(player, kind, payload.to, payload.pw || 1, payload.vel);
+  if (kind.straight) effects.muzzle(from);
   const mesh = projectileMesh(kind);
   mesh.position.copy(from);
   scene.add(mesh);
@@ -2268,7 +2273,136 @@ function releaseSnow(player, payload) {
     spin: new T.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
   });
 }
-const IMPACT_COLORS = { snow: "#faf5ff", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a", bow: "#c9a26a", pistol: "#ffe8a0" };
+// ——— Пунктир полёта: куда полетит снаряд, если бросить сейчас. Только у себя и только с мышью
+// (на сенсорном экране курсора нет). Путь считается теми же launchOf и шагом, что и настоящий полёт,
+// и обрывается там, где снаряд во что-то попадёт: в стену на пути, в пол, в аватара. ———
+const AIM_MAX = 240,
+  AIM_UP = new T.Vector3(0, 1, 0),
+  aimMatrix = new T.Matrix4(),
+  aimQuat = new T.Quaternion(),
+  aimScale = new T.Vector3(),
+  aimMid = new T.Vector3(),
+  aimDir = new T.Vector3();
+const aimDashes = new T.InstancedMesh(
+  new T.CylinderGeometry(1, 1, 1, 6, 1, true),
+  new T.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false }),
+  AIM_MAX,
+);
+aimDashes.count = 0;
+aimDashes.frustumCulled = false;
+aimDashes.renderOrder = 4;
+aimDashes.raycast = () => {};
+scene.add(aimDashes);
+let aimPointer = null,
+  aimKey = "",
+  aimClock = 0;
+// Куда уйдёт бросок при клике сейчас — так же, как в throwSnow; null — клик не бросает.
+function aimTarget() {
+  const h = aimPointer.hit,
+    o = h && owner(h.object);
+  if (["screen", "tile", "share"].includes(o?.userData.kind)) return null;
+  if (o?.userData.kind === "avatar") {
+    const p = players.find((p) => p.profile.id === o.userData.id);
+    if (p) return new T.Vector3(p.x, p.y + 1.05, p.z);
+  }
+  return h ? h.point.clone() : pointerWorld.clone();
+}
+// Точки полёта: через ~0,7 м, до 4 с (или срока жизни снаряда) и не дальше 60 м. Положение — в
+// замкнутом виде того же шага, что в physics() (120 раз в секунду: сначала скорость, потом
+// положение), поэтому пунктир совпадает с настоящим полётом, а не с идеальной параболой. Между
+// точками — та же проверка попадания, что у летящего снаряда.
+const PHYS_DT = 1 / 120;
+function flightPath(kind, to, power) {
+  const { from, v, g } = launchOf(active, kind, to, power),
+    pos = from.clone(),
+    old = new T.Vector3(),
+    pts = [from.clone()],
+    seg = new T.Vector3(),
+    ticks = Math.max(1, Math.round(0.7 / Math.max(v.length(), 0.1) / PHYS_DT)),
+    last = Math.round(Math.min(4, kind.life || 4) / PHYS_DT);
+  let len = 0;
+  for (let n = ticks; len < 60; n += ticks) {
+    const t = Math.min(n, last) * PHYS_DT;
+    old.copy(pos);
+    pos.set(from.x + v.x * t, from.y + v.y * t - (g * t * (t + PHYS_DT)) / 2, from.z + v.z * t);
+    const dist = seg.subVectors(pos, old).length();
+    if (dist < 1e-6) break;
+    raycaster.set(old, seg.divideScalar(dist));
+    raycaster.far = dist + kind.radius;
+    const hit = raycaster
+      .intersectObjects(nearPickables(old, pos, kind.radius).filter((o) => o.userData.id !== active.profile.id), true)
+      .find((h) => visibleObject(h.object));
+    if (hit) {
+      pts.push(hit.point.clone());
+      break;
+    }
+    if (pos.y < kind.radius) {
+      pts.push(old.clone().lerp(pos, clamp((old.y - kind.radius) / (old.y - pos.y), 0, 1)));
+      break;
+    }
+    pts.push(pos.clone());
+    len += dist;
+    if (n >= last) break;
+  }
+  raycaster.far = Infinity;
+  return pts;
+}
+// Штрихи вдоль ломаной: длина штриха и промежутка постоянны в метрах, на больших картах — крупнее.
+function drawDashes(pts) {
+  const s = ROOM.scale || 1,
+    dash = 0.2 * s,
+    period = dash + 0.13 * s,
+    r = 0.02 * s;
+  // Точка на расстоянии d от начала по ломаной (отрезки идут по порядку, поэтому i только растёт).
+  let i = 1,
+    walked = 0;
+  const at = (d, out) => {
+    for (; i < pts.length - 1 && walked + pts[i - 1].distanceTo(pts[i]) < d; i++) walked += pts[i - 1].distanceTo(pts[i]);
+    const len = pts[i - 1].distanceTo(pts[i]) || 1;
+    return out.copy(pts[i - 1]).lerp(pts[i], Math.min(1, (d - walked) / len));
+  };
+  let total = 0;
+  for (let k = 1; k < pts.length; k++) total += pts[k - 1].distanceTo(pts[k]);
+  const a = new T.Vector3(),
+    b = new T.Vector3();
+  let n = 0;
+  // Штрихи откладываются от конца, чтобы пунктир упирался ровно в точку попадания; штрих k — от
+  // total − k·period − dash до total − k·period (на изгибе это хорда, на глаз не отличить).
+  const count = Math.min(AIM_MAX, Math.ceil(total / period));
+  for (; n < count; n++) {
+    const k = count - 1 - n;
+    at(Math.max(0, total - k * period - dash), a);
+    at(total - k * period, b);
+    const len = a.distanceTo(b);
+    aimDir.subVectors(b, a).divideScalar(len || 1);
+    aimQuat.setFromUnitVectors(AIM_UP, len ? aimDir : AIM_UP);
+    aimScale.set(r, Math.max(len, 1e-4), r);
+    aimDashes.setMatrixAt(n, aimMatrix.compose(aimMid.addVectors(a, b).multiplyScalar(0.5), aimQuat, aimScale));
+  }
+  aimDashes.count = n;
+  aimDashes.instanceMatrix.needsUpdate = true;
+}
+function updateAim(dt) {
+  const kind = projectile(weapon),
+    to = tool === "snow" && aimPointer?.mouse && !active.dead && !kind.place && !orbitDrag && weaponAllowed(defenseState(), matchId(), kind.id) ? aimTarget() : null;
+  if (!to) {
+    aimDashes.count = 0;
+    aimKey = "";
+    return;
+  }
+  const power = charge ? 1 + (CHARGE_MAX - 1) * chargeLevel() : 1,
+    key = [kind.id, active.x, active.y, active.z, to.x, to.y, to.z, power, active.velocityX || 0, active.velocityZ || 0].map((x) => (typeof x === "number" ? x.toFixed(2) : x)).join();
+  // Пересчёт — только когда что-то сдвинулось, и не чаще 30 раз в секунду: в нём проверки попадания.
+  aimClock -= dt;
+  if (key !== aimKey && aimClock <= 0) {
+    aimKey = key;
+    aimClock = 1 / 30;
+    drawDashes(flightPath(kind, to, power));
+  }
+  // На перезарядке пунктир бледнеет.
+  aimDashes.material.opacity = performance.now() < (cooldownUntil[kind.id] || 0) ? 0.3 : 0.85;
+}
+const IMPACT_COLORS ={ snow: "#faf5ff", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a", bow: "#c9a26a", pistol: "#ffe8a0" };
 // What a projectile does where it lands: a puff (a tomato bursts), a push for loose objects (thrower only)
 // and a knock for avatars (each avatar's owner applies it, so it travels with their pose).
 function burst(pos, kind, snowOwner = "self", pr = null) {
@@ -3185,6 +3319,7 @@ canvas.addEventListener("pointermove", (e) => {
   const h = rayAt(e),
     o = h && owner(h.object);
   hovered = o;
+  aimPointer = { hit: h, mouse: e.pointerType !== "touch" };
   if (shareDrag) {
     const shareHit = raycaster.intersectObject(featured)[0];
     if (shareHit?.uv) {
@@ -3325,6 +3460,7 @@ canvas.addEventListener("pointermove", (e) => {
 canvas.addEventListener("pointercancel", endDrag);
 canvas.addEventListener("pointerleave", () => {
   $("#objectHint").hidden = true;
+  aimPointer = null;
 });
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("dblclick", (e) => {
@@ -3936,6 +4072,7 @@ function visual(dt) {
   );
   ring.material.opacity = active.grounded ? 0.75 : 0.35;
   ring.scale.setScalar(active.grounded ? 1 : 1 + active.y * 0.1);
+  updateAim(dt);
 }
 let portraitClock = 0;
 function drawRoom(dt) {

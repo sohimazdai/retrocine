@@ -877,6 +877,62 @@ test("weapons: 1–9 and 0 select, heavier things fly shorter, holding the right
   assert.equal(a.w.document.querySelector('[data-tool="snow"] .weapon-emoji').textContent, "🔫");
 });
 
+test("aim: a dashed line shows where the shot will fly and ends where it lands", () => {
+  const a = boot({ offline: true });
+  a.tick(0.1);
+  const lastDash = () =>
+    a.run("(() => { const m = new T.Matrix4(), p = new T.Vector3(); aimDashes.getMatrixAt(aimDashes.count - 1, m); return p.setFromMatrixPosition(m).toArray(); })()");
+  const aimAt = (weapon, x, z) => {
+    a.run(`Object.assign(active,{x:0,z:8,y:0,angle:Math.PI,velocityX:0,velocityZ:0});active.action=null;projectiles.length=0;setTool('snow');setWeapon('${weapon}')`);
+    a.run(`aimPointer={hit:{point:new T.Vector3(${x},0,${z}),object:floor},mouse:true}`);
+    a.tick(0.05);
+  };
+  aimAt("snow", -3, 2);
+  assert(a.run("aimDashes.count") > 10, `dashes: ${a.run("aimDashes.count")}`);
+  const end = lastDash();
+  assert(Math.hypot(end[0] + 3, end[2] - 2) < 0.4 && end[1] < 0.3, `the line ends at the target: ${end.map((v) => v.toFixed(2))}`);
+  // An arc, not a straight line: the middle is above the chord from the first dash to the last.
+  const ys = a.run("(() => { const m = new T.Matrix4(), y = []; for (let i = 0; i < aimDashes.count; i++) { aimDashes.getMatrixAt(i, m); y.push(m.elements[13]); } return y; })()"),
+    mid = ys.length >> 1;
+  assert(ys[mid] > ys[0] + (ys.at(-1) - ys[0]) * (mid / (ys.length - 1)) + 0.15, "the line bends like the throw");
+  // The real throw lands where the line ends.
+  a.run("throwSnow({ point: new T.Vector3(-3, 0, 2), object: floor })");
+  let landed = null;
+  for (let i = 0; i < 600; i++) {
+    a.tick(1 / 120);
+    if (a.run("projectiles.length")) landed = a.run("projectiles[0].mesh.position.toArray()");
+    else if (landed) break;
+  }
+  assert(landed && Math.hypot(landed[0] - end[0], landed[2] - end[2]) < 0.5, `landed ${landed?.map((v) => v.toFixed(2))} vs line ${end.map((v) => v.toFixed(2))}`);
+  // Holding the right button for a stronger throw changes the line.
+  const heights = () => a.run("(() => { const m = new T.Matrix4(); let s = 0; for (let i = 0; i < aimDashes.count; i++) { aimDashes.getMatrixAt(i, m); s += m.elements[13]; } return s / aimDashes.count; })()");
+  aimAt("snow", -3, 2);
+  const normal = heights();
+  a.run("charge = { start: performance.now() - 2000, x: 0, y: 0, target: null }");
+  a.tick(0.05);
+  assert(Math.abs(heights() - normal) > 0.02, `a charged throw flies differently: ${heights().toFixed(3)} vs ${normal.toFixed(3)}`);
+  a.run("charge = null");
+  // The pistol: a straight line, much further than the cursor on the floor.
+  aimAt("pistol", 0, 4);
+  const shotEnd = lastDash();
+  assert(shotEnd[2] < 0, `a bullet goes past the cursor: ends at z=${shotEnd[2].toFixed(1)}`);
+  // No line for a mine, with a finger, off the canvas, and while cooling down it fades.
+  aimAt("mine", -3, 2);
+  assert.equal(a.run("aimDashes.count"), 0);
+  aimAt("snow", -3, 2);
+  a.run("aimPointer.mouse = false");
+  a.tick(0.05);
+  assert.equal(a.run("aimDashes.count"), 0, "touch: no cursor, no line");
+  aimAt("brick", -3, 2);
+  assert.equal(a.run("aimDashes.material.opacity"), 0.85);
+  a.run("throwSnow({ point: new T.Vector3(-3, 0, 2), object: floor })");
+  a.tick(0.05);
+  assert.equal(a.run("aimDashes.material.opacity"), 0.3, "cooling down: faded");
+  a.w.document.querySelector("#world").dispatchEvent(new a.w.MouseEvent("pointerleave"));
+  a.tick(0.05);
+  assert.equal(a.run("aimDashes.count"), 0);
+});
+
 test("cooldowns: grenade every 10 s, fireball every 5 s, brick every second", () => {
   const a = boot();
   a.tick(0.1);

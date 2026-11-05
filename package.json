@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "deploy": "./deploy/deploy.sh",
     "check": "node --check dist/app.js && node --check dist/avatars.js && node --test tests/*.test.mjs && npm --prefix server test && node --test analytics/test/*.test.mjs"
   },
   "dependencies": {

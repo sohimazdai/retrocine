@@ -202,7 +202,7 @@ test("room state persists across server restarts", async () => {
   const a = client(port);
   await a.join("keep");
   a.send({ t: "note.add", text: "Сохранится", type: "good", x: 0, z: 0 });
-  a.send({ t: "struct.move", id: "pyramid", x: 1, z: 1 });
+  a.send({ t: "struct.move", id: "pyramid", x: -6, z: -3 });
   await a.wait((m) => m.t === "note");
   a.close();
   await new Promise((r) => setTimeout(r, 50));
@@ -211,7 +211,7 @@ test("room state persists across server restarts", async () => {
   const b = client(port);
   const w = await b.join("keep");
   assert.equal(w.state.notes[0].text, "Сохранится");
-  assert.deepEqual(w.state.structures.pyramid, { x: 1, z: 1 });
+  assert.deepEqual(w.state.structures.pyramid, { x: -6, z: -3 });
   b.close();
   await app.close();
 });
@@ -635,4 +635,63 @@ test("analytics: visits (one id per browser), opened rooms, throws and how far p
   assert(seen.events.some((e) => e.n === "throw" && e.k.w === "snow"));
   a.close();
   await app.close();
+});
+
+test("drawings and a poll reach everyone in the room and come back after a reconnect", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  await a.join("art", { uid: "browser-a" });
+  await b.join("art", { uid: "browser-b" });
+  a.send({ t: "draw.add", on: "wall", c: "#4cc9f0", w: 0.08, p: [0, 3, 1, 3.5, 2, 3] });
+  const st = await b.wait((m) => m.t === "stroke");
+  assert.deepEqual(st.stroke.p, [0, 3, 1, 3.5, 2, 3]);
+  a.send({ t: "poll.create", q: "Перерыв?", options: ["Да", "Нет"], anon: false });
+  const started = await b.wait((m) => m.t === "poll" && m.started);
+  b.send({ t: "poll.vote", id: started.poll.id, choices: [0] });
+  const voted = await a.wait((m) => m.t === "poll" && Object.keys(m.poll.votes).length === 1);
+  assert.deepEqual(Object.values(voted.poll.votes)[0].c, [0]);
+  b.send({ t: "poll.close", id: started.poll.id });
+  a.send({ t: "poll.close", id: started.poll.id });
+  const closed = await b.wait((m) => m.t === "poll" && m.poll.closed);
+  assert.equal(closed.poll.id, started.poll.id, "only the author's close counts");
+  b.close();
+  const again = client(port),
+    w = await again.join("art", { uid: "browser-b" });
+  assert.equal(w.state.strokes.length, 1);
+  assert.equal(w.state.poll.closed, true);
+  a.close();
+  again.close();
+  await app.close();
+});
+
+test("snowballs, tomatoes and rocks reach others at most twice a second, however fast they are sent", async () => {
+  const { app, port } = await boot();
+  const a = client(port),
+    b = client(port);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    await a.join("throws");
+    await b.join("throws");
+    const seen = (w) => b.inbox.filter((m) => m.t === "act" && m.k === "throw" && m.w === w).length;
+    const t0 = Date.now(),
+      at = (ms) => wait(Math.max(0, t0 + ms - Date.now()));
+    for (const w of ["snow", "tomato", "rock"]) for (let i = 0; i < 5; i++) a.send({ t: "act", k: "throw", w, to: [1, 0, 1] });
+    await at(100);
+    assert.deepEqual(["snow", "tomato", "rock"].map(seen), [1, 1, 1], "a burst: one each");
+    // A little early is forgiven (network jitter)…
+    await at(450);
+    a.send({ t: "act", k: "throw", w: "snow", to: [1, 0, 1] });
+    // …but it does not make the next one sooner: that still waits for 1 s after the first.
+    await at(700);
+    a.send({ t: "act", k: "throw", w: "snow", to: [1, 0, 1] });
+    await at(1000);
+    a.send({ t: "act", k: "throw", w: "snow", to: [1, 0, 1] });
+    await at(1100);
+    assert.equal(seen("snow"), 3, "at 0, 0.45 and 1 s; not at 0.7 s");
+  } finally {
+    a.close();
+    b.close();
+    await app.close();
+  }
 });

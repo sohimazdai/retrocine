@@ -50,10 +50,16 @@
         Сбросить
       </button>
     </div>
-    <div id="timerIsland" class="timer-island" hidden>
-      <button data-action="timer" id="timerToggle" title="Пауза">Ⅱ</button
-      ><button data-action="timerSettings" id="timerText">05:00</button
-      ><button data-action="timerClose" title="Скрыть">×</button>
+    <div id="emotionIsland" class="emotion-island" hidden aria-label="Эмоции"></div>
+    <div id="drawIsland" class="sub-island" hidden aria-label="Рисование"></div>
+    <div id="shapeIsland" class="sub-island" hidden aria-label="Фигуры"></div>
+    <div class="right-stack">
+      <div id="timerIsland" class="timer-island" hidden>
+        <button data-action="timer" id="timerToggle" title="Пауза">Ⅱ</button
+        ><button data-action="timerSettings" id="timerText">05:00</button
+        ><button data-action="timerClose" title="Скрыть">×</button>
+      </div>
+      <section id="pollCard" class="poll-card" hidden aria-label="Опрос"></section>
     </div>
     <nav class="island" aria-label="Инструменты комнаты">
       <button class="tool active" data-tool="snow" title="Снежок — левый клик">
@@ -65,8 +71,10 @@
       ><button class="tool" data-tool="note" title="Поставить стикер (N)">
         <span data-icon="note"></span
         ><span class="tip">Стикер · N</span></button
-      ><button class="tool" data-tool="cube" title="Поставить кубик (C)">
-        <span data-icon="cube"></span><span class="tip">Кубик · C</span></button
+      ><button class="tool" data-tool="cube" title="Поставить фигуру (C)">
+        <span data-icon="cube"></span><span class="tip">Фигура · C</span></button
+      ><button class="tool" data-tool="draw" title="Рисовать на полу и на экране (B)">
+        <span data-icon="pen"></span><span class="tip">Рисовать · B</span></button
       >
       <div class="divider"></div>
       <button class="tool" data-action="board" title="Доска ретро">
@@ -74,6 +82,8 @@
         ><span class="tip">Доска ретро</span></button
       ><button class="tool" data-action="timerSettings" title="Таймер">
         <span data-icon="clock"></span><span class="tip">Таймер</span></button
+      ><button class="tool" data-action="poll" title="Опрос">
+        <span data-icon="pie"></span><span class="tip">Опрос</span></button
       ><button class="tool" data-action="reaction" title="Реакция">
         <span data-icon="smile"></span><span class="tip">Реакция</span>
       </button>
@@ -106,7 +116,7 @@
       </div>
       <button id="touchJump" aria-label="Прыжок">↟</button>
     </div>
-    <div id="weaponPicker" class="weapon-picker" hidden aria-label="Чем бросаться"></div>
+    <div id="weaponPicker" class="sub-island weapon-island" hidden aria-label="Чем бросаться"></div>
     <div id="chargeRing" class="charge-ring" hidden aria-hidden="true"></div>
     <div id="toast" role="status"></div>
     <dialog id="modal"><div id="modalContent"></div></dialog>

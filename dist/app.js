@@ -21,7 +21,7 @@ import {
 } from "./physics.js";
 import { animateRig, startAction } from "./animation.js";
 import { EmotionEffects, EMOTIONS } from "./emotions.js";
-import { ROOM, floorBack, fitNoteText, setWallShape, setRoomScale } from "./layout.js";
+import { ROOM, floorBack, fitNoteText, setWallShape, setRoomScale, wallCoords } from "./layout.js";
 import {
   createFloor,
   reshapeFloor,
@@ -40,8 +40,9 @@ import { startTumble, stepTumble, centerHeight, qrot, qslerp, CENTER, PHASES } f
 import { findClimb, startClimb, stepClimb, zipStart, startZip, HANG, findBar, startBar, isTurnik } from "./climbing.js";
 import "./maps/render.js";
 import { CinemaScreen } from "./cinema.js";
+import { StrokeLayer } from "./drawing.js";
 import { AvatarEditor, editorMarkup } from "./avatar-editor.js";
-import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, iceAt, hoopsOf, DRAG_BOUNDS } from "./world.js";
+import { mapDef, mapProps, clampProp, BALLS, spawnPoint, waterAt, iceAt, hoopsOf, DRAG_BOUNDS, CUBE_SHAPES } from "./world.js";
 import {
   PROJECTILES,
   projectile,
@@ -63,6 +64,7 @@ import {
   stepWorld,
   stepProps,
   propNearest,
+  POLL_MAX_OPTIONS,
   stateObstacles,
   dynamicObjects,
   freeSpot,
@@ -100,6 +102,10 @@ const icons = {
   board:
     '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M15 3v18"/>',
   clock: '<circle cx="12" cy="13" r="8"/><path d="M9 2h6M12 2v3M12 8v6l3 2"/>',
+  pie: '<path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 2.5A9 9 0 0 1 21.5 9H15z"/>',
+  pen: '<path d="M4 20l1-5L16 4a2.1 2.1 0 0 1 3 3L8 18zM14 6l3 3"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   smile:
     '<circle cx="12" cy="12" r="9"/><path d="M8 14s1 3 4 3 4-3 4-3M8 9h.01M16 9h.01"/>',
   mic: '<rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',
@@ -119,6 +125,11 @@ $$("[data-icon]").forEach(
   (e) =>
     (e.innerHTML = `<svg viewBox="0 0 24 24">${icons[e.dataset.icon]}</svg>`),
 );
+function remember(k, v) {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch {}
+}
 function read(k, f) {
   try {
     return JSON.parse(localStorage.getItem(k)) ?? f;
@@ -214,7 +225,8 @@ const camera = new T.PerspectiveCamera(43, innerWidth / innerHeight, 0.1, 400),
 raycaster.params.Line.threshold = 0.02;
 let camElevation = ELEVATION.initial;
 let cinema = null,
-  avatarEditor = null;
+  avatarEditor = null,
+  strokeLayer = null;
 // The near corners of the floor stay in the bottom corners of the viewport at every angle; the wall
 // is refitted so it spans the far edge of the floor and reaches the top of the viewport.
 function updateCamera() {
@@ -223,6 +235,7 @@ function updateCamera() {
   setWallShape(wall.height, wall.edges);
   cinema?.reshape();
   cinema?.updateCamera(camera);
+  strokeLayer?.reshape();
 }
 function resize() {
   renderer.setSize(innerWidth, innerHeight);
@@ -997,22 +1010,51 @@ function clearFloorSpot(x, z, pad = 1.4) {
   }
   return { x, z };
 }
+// Фигуры для поля: куб и абстрактные формы того же размера (физика у всех одна).
+const starShape = (() => {
+  const s = new T.Shape();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? 0.2 : 0.5,
+      a = Math.PI / 2 + (i * Math.PI) / 5;
+    i ? s.lineTo(Math.cos(a) * r, Math.sin(a) * r) : s.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+  }
+  s.closePath();
+  return s;
+})();
+function shapeGeometry(shape, s) {
+  if (shape === "sphere") return new T.SphereGeometry(s / 2, 28, 18);
+  if (shape === "cylinder") return new T.CylinderGeometry(s / 2, s / 2, s, 28);
+  if (shape === "cone") return new T.ConeGeometry(s / 2, s, 28);
+  if (shape === "pyramid") return new T.ConeGeometry(s * 0.62, s, 4).rotateY(Math.PI / 4);
+  if (shape === "torus") return new T.TorusGeometry(s * 0.33, s * 0.15, 16, 36);
+  if (shape === "star") return new T.ExtrudeGeometry(starShape, { depth: s * 0.28, bevelEnabled: true, bevelSize: 0.025, bevelThickness: 0.025, bevelSegments: 2 }).scale(s, s, 1).translate(0, -0.02, -s * 0.14);
+  if (shape === "gem") return new T.IcosahedronGeometry(s * 0.52, 0);
+  if (shape === "capsule") return new T.CapsuleGeometry(s * 0.27, s * 0.46, 8, 18);
+  return null;
+}
 function addCubeMesh(c) {
   const root = new T.Group();
   root.userData = { kind: "cube", id: c.id };
   scene.add(root);
-  const m = box(root, c.size, c.size, c.size, c.color, 0, 0, 0, 0.07);
-  box(
-    root,
-    c.size * 0.72,
-    0.015,
-    c.size * 0.72,
-    new T.MeshStandardMaterial({ color: c.color, roughness: 0.75 }),
-    0,
-    c.size / 2 + 0.003,
-    0,
-    0.02,
-  );
+  const geometry = shapeGeometry(c.shape, c.size);
+  if (geometry) {
+    const mesh = new T.Mesh(geometry, new T.MeshStandardMaterial({ color: c.color, roughness: 0.5, metalness: 0.05, flatShading: c.shape === "gem" || c.shape === "pyramid" }));
+    mesh.castShadow = mesh.receiveShadow = true;
+    root.add(mesh);
+  } else {
+    box(root, c.size, c.size, c.size, c.color, 0, 0, 0, 0.07);
+    box(
+      root,
+      c.size * 0.72,
+      0.015,
+      c.size * 0.72,
+      new T.MeshStandardMaterial({ color: c.color, roughness: 0.75 }),
+      0,
+      c.size / 2 + 0.003,
+      0,
+      0.02,
+    );
+  }
   root.position.set(c.x, c.y, c.z);
   cubeMeshes.set(c.id, root);
   pickables.push(root);
@@ -1242,6 +1284,8 @@ function disposePortrait(entry) {
 players.forEach(portraitTexture);
 cinema = new CinemaScreen(players, portraits);
 scene.add(cinema.group);
+strokeLayer = new StrokeLayer(scene);
+strokeLayer.set(world.strokes || []);
 pickables.push(cinema.group);
 cinema.updateCamera(camera);
 const screenGroup = cinema.group,
@@ -1292,7 +1336,7 @@ function updateShareTools() {
   $("#shareScale").textContent = Math.round(cinema.shareZoom * 100) + "%";
 }
 screenUpdate();
-const emotionEffects = new EmotionEffects(scene);
+const emotionEffects = new EmotionEffects(scene, () => document.createElement("canvas"));
 function refreshParticipants() {
   cinema.setPlayers(players);
   screenTiles = cinema.tiles;
@@ -1396,12 +1440,123 @@ function setTool(t) {
   $$("[data-tool]").forEach((b) =>
     b.classList.toggle("active", b.dataset.tool === t),
   );
+  renderDrawIsland();
+  renderShapeIsland();
+  canvas.classList.toggle("drawing", t === "draw");
   canvas.classList.toggle("interact", t === "interact");
   if (t === "interact")
     toast(
       "Тяните объекты мышью. Клик — действия; двойной клик по стикеру — редактировать.",
     );
   if (t === "snow") closeContext();
+  else toggleWeaponPicker(false);
+}
+// ——— Фигуры: выбор формы над панелью, пока выбран инструмент «Фигура» ———
+let cubeShape = CUBE_SHAPES[read("kino-shape", "cube")] ? read("kino-shape", "cube") : "cube";
+const SHAPE_ICONS = {
+  cube: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/>',
+  sphere: '<circle cx="12" cy="12" r="8"/><path d="M4 12c3 3 13 3 16 0"/>',
+  cylinder: '<ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3 2.5 7 2.5s7-1.1 7-2.5V6"/>',
+  cone: '<path d="M12 3 5 18c0 1.4 3 2.5 7 2.5s7-1.1 7-2.5z"/>',
+  pyramid: '<path d="M12 3 3 18l9 3 9-3zM12 3v18"/>',
+  torus: '<ellipse cx="12" cy="12" rx="9" ry="6"/><ellipse cx="12" cy="11.5" rx="3.5" ry="1.8"/>',
+  star: '<path d="m12 3 2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z"/>',
+  gem: '<path d="M7 4h10l4 5-9 11L3 9zM3 9h18M9.5 4 8 9l4 11M14.5 4 16 9l-4 11"/>',
+  capsule: '<rect x="7" y="3" width="10" height="18" rx="5"/>',
+};
+function renderShapeIsland() {
+  const island = $("#shapeIsland");
+  island.hidden = tool !== "cube";
+  if (island.hidden) return;
+  island.innerHTML = Object.entries(CUBE_SHAPES)
+    .map(([id, label]) => `<button data-shape="${id}" class="${id === cubeShape ? "on" : ""}" title="${label}" aria-label="${label}" aria-pressed="${id === cubeShape}"><svg viewBox="0 0 24 24">${SHAPE_ICONS[id]}</svg></button>`)
+    .join("");
+}
+// ——— Рисование на полу и на экране-доске ———
+const PEN_COLORS = ["#f6f2ea", "#f4d35e", "#f79d3c", "#ef476f", "#ff8fd0", "#c1a9fa", "#4cc9f0", "#06d6a0"],
+  PEN_WIDTHS = [
+    [0.04, "Тонкая"],
+    [0.08, "Средняя"],
+    [0.16, "Толстая"],
+  ];
+let penColor = PEN_COLORS.includes(read("kino-pen-color", "")) ? read("kino-pen-color", "") : PEN_COLORS[1],
+  penWidth = PEN_WIDTHS.some(([w]) => w === read("kino-pen-width", 0)) ? read("kino-pen-width", 0) : 0.08,
+  pen = null,
+  clearArmed = false;
+function renderDrawIsland() {
+  const island = $("#drawIsland");
+  island.hidden = tool !== "draw";
+  if (island.hidden) {
+    clearArmed = false;
+    return;
+  }
+  island.innerHTML =
+    PEN_COLORS.map((c) => `<button data-pen-color="${c}" class="swatch${c === penColor ? " on" : ""}" style="--c:${c}" aria-label="Цвет ${c}" aria-pressed="${c === penColor}"></button>`).join("") +
+    '<span class="sub-divider"></span>' +
+    PEN_WIDTHS.map(([w, label]) => `<button data-pen-width="${w}" class="width${w === penWidth ? " on" : ""}" title="${label}" aria-label="${label} линия"><i style="width:${4 + w * 60}px;height:${4 + w * 60}px"></i></button>`).join("") +
+    '<span class="sub-divider"></span>' +
+    `<button data-pen-undo title="Отменить свой последний штрих"><svg viewBox="0 0 24 24">${icons.undo}</svg></button>` +
+    `<button data-pen-clear class="${clearArmed ? "armed" : ""}" title="Стереть все рисунки">${clearArmed ? "Стереть всё?" : `<svg viewBox="0 0 24 24">${icons.trash}</svg>`}</button>`;
+}
+function penPoint(e, on) {
+  if (on === "floor") {
+    const p = groundAt(e);
+    return p && Math.abs(p.x) < ROOM.halfWidth && p.z < ROOM.front && p.z > floorBack(p.x) ? [Math.round(p.x * 100) / 100, Math.round(p.z * 100) / 100] : null;
+  }
+  pointerNDC.set((e.clientX / innerWidth) * 2 - 1, 1 - (e.clientY / innerHeight) * 2);
+  raycaster.setFromCamera(pointerNDC, camera);
+  const h = raycaster.intersectObject(screenGroup, true)[0];
+  if (!h) return null;
+  const w = wallCoords(h.point);
+  return [Math.round(w.x * 100) / 100, Math.round(w.y * 100) / 100];
+}
+function penStart(e, onWall) {
+  const on = onWall ? "wall" : "floor",
+    p = penPoint(e, on);
+  if (!p) return false;
+  pen = { on, c: penColor, w: penWidth, p: [...p] };
+  strokeLayer.preview(pen);
+  canvas.setPointerCapture(e.pointerId);
+  return true;
+}
+function penMove(e) {
+  const p = penPoint(e, pen.on);
+  if (!p) return;
+  const n = pen.p.length;
+  if (Math.hypot(p[0] - pen.p[n - 2], p[1] - pen.p[n - 1]) < 0.03) return;
+  pen.p.push(...p);
+  // A very long stroke is sent in pieces.
+  if (pen.p.length >= 1200) {
+    const last = pen.p.slice(-2);
+    penEnd();
+    pen = { ...pen, p: last };
+  }
+  strokeLayer.preview(pen);
+}
+function penEnd() {
+  if (!pen) return;
+  const st = pen;
+  pen = null;
+  strokeLayer.preview(null);
+  // A single click is a dot.
+  if (st.p.length === 2) st.p.push(st.p[0] + 0.005, st.p[1]);
+  op({ t: "draw.add", on: st.on, c: st.c, w: st.w, p: st.p });
+}
+function penClick(b) {
+  if (b.dataset.penColor) {
+    penColor = b.dataset.penColor;
+    remember("kino-pen-color", penColor);
+  }
+  if (b.dataset.penWidth) {
+    penWidth = +b.dataset.penWidth;
+    remember("kino-pen-width", penWidth);
+  }
+  if (b.dataset.penUndo != null) op({ t: "draw.undo" });
+  if (b.dataset.penClear != null) {
+    if (clearArmed) op({ t: "draw.clear" });
+    clearArmed = !clearArmed;
+  } else clearArmed = false;
+  renderDrawIsland();
 }
 function owner(o) {
   while (o && o !== scene) {
@@ -1496,8 +1651,8 @@ function highlight() {
       (players.find((p) => p.profile.id === obj.id)?.profile.name || "Аватар") +
       (self ? " · вы" : "");
     buttons = self
-      ? '<button data-context="customize">Настроить</button><button data-context="wave">Помахать</button>'
-      : '<button data-context="wave">Помахать</button>' +
+      ? '<button data-context="customize">Настроить</button><button data-context="wave">❤️ Сердце</button>'
+      : '<button data-context="wave">❤️ Сердце</button>' +
         (cinema.media?.share ? "" : '<button data-context="pin">На весь экран</button>');
   }
   if (["screen", "tile", "share"].includes(obj.kind)) {
@@ -1528,7 +1683,7 @@ function select(o) {
   selected = { kind: o.userData.kind, id: o.userData.id };
   highlight();
 }
-// ——— Throwing: snowballs, tomatoes, tennis balls, rocks, bricks, grenades, fireballs ———
+// ——— Throwing: snowballs, tomatoes, rocks, bricks, grenades, fireballs, icicles, mines ———
 const effects = new Effects(scene);
 let weapon = read("kino-weapon-v1", "snow");
 if (!PROJECTILES.some((k) => k.id === weapon)) weapon = "snow";
@@ -1554,31 +1709,34 @@ function renderWeapon() {
   if (icon) icon.outerHTML = `<span class="weapon-emoji" aria-hidden="true">${kind.emoji}</span>`;
   const tip = btn.querySelector(".tip");
   if (tip) tip.textContent = `${kind.label} · клик, ПКМ — сильнее`;
-  btn.title = kind.place ? `${kind.label}: клик — поставить под ноги. 1–9 — выбрать` : `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–9 — выбрать снаряд`;
-  if (!$("#weaponPicker").hidden) renderWeaponPicker();
+  btn.title = kind.place ? `${kind.label}: клик — поставить под ноги. 1–${PROJECTILES.length} — выбрать` : `${kind.label}: клик — бросок, удерживать ПКМ — сильнее. 1–${PROJECTILES.length} — выбрать снаряд`;
+  $$("#weaponPicker [data-weapon]").forEach((b) => {
+    b.classList.toggle("on", b.dataset.weapon === weapon);
+    b.setAttribute("aria-pressed", b.dataset.weapon === weapon);
+  });
 }
+// Снаряды: островок над панелью, только значки (название и клавиша — в подсказке).
 function renderWeaponPicker() {
-  const now = performance.now();
-  $("#weaponPicker").innerHTML = PROJECTILES.map((k) => {
-    const left = Math.max(0, ((cooldownUntil[k.id] || 0) - now) / 1000);
-    return `<button data-weapon="${k.id}" class="${k.id === weapon ? "selected" : ""}" title="${k.label}"><span class="weapon-emoji">${k.emoji}</span><span class="weapon-name">${k.label}</span><kbd>${k.key}</kbd>${left > 0 ? `<i class="weapon-cd">${Math.ceil(left)}</i>` : ""}</button>`;
-  }).join("");
+  $("#weaponPicker").innerHTML = PROJECTILES.map(
+    (k) => `<button data-weapon="${k.id}" class="${k.id === weapon ? "on" : ""}" title="${k.label} · ${k.key}" aria-label="${k.label}" aria-pressed="${k.id === weapon}"><span aria-hidden="true">${k.emoji}</span></button>`,
+  ).join("");
+  renderCooldowns();
 }
 function toggleWeaponPicker(force) {
-  const open = force ?? $("#weaponPicker").hidden;
-  $("#weaponPicker").hidden = !open;
-  if (open) {
-    renderWeaponPicker();
-    const r = $('[data-tool="snow"]').getBoundingClientRect();
-    $("#weaponPicker").style.left = Math.max(8, r.left + r.width / 2 - 120) + "px";
-  }
+  const island = $("#weaponPicker"),
+    open = force ?? island.hidden;
+  if (open && !island.children.length) renderWeaponPicker();
+  island.hidden = !open;
+  if (open) renderCooldowns();
 }
-// Cooldown shown on the throw button and in the picker.
+// Cooldowns (a second and longer) sweep over the throw button and the island's buttons; the buttons
+// are updated in place, so a click is never lost to a redraw.
 function renderCooldowns() {
-  const kind = projectile(weapon),
-    left = Math.max(0, (cooldownUntil[kind.id] || 0) - performance.now());
-  $('[data-tool="snow"]')?.style.setProperty("--cd", kind.cooldown >= 1 ? (left / (kind.cooldown * 1000)).toFixed(3) : 0);
-  if (!$("#weaponPicker").hidden) renderWeaponPicker();
+  const now = performance.now(),
+    left = (k) => (k.cooldown >= 1 ? Math.max(0, (cooldownUntil[k.id] || 0) - now) / (k.cooldown * 1000) : 0);
+  $('[data-tool="snow"]')?.style.setProperty("--cd", left(projectile(weapon)).toFixed(3));
+  if ($("#weaponPicker").hidden) return;
+  $$("#weaponPicker [data-weapon]").forEach((b) => b.style.setProperty("--cd", left(projectile(b.dataset.weapon)).toFixed(3)));
 }
 function chargeLevel() {
   return charge ? Math.min(1, (performance.now() - charge.start) / 1000 / CHARGE_TIME) : 0;
@@ -1605,6 +1763,36 @@ function throwSnow(hit, power = 1) {
     net.send({ t: "act", k: "throw", to: [to.x, to.y, to.z].map(r3), w: kind.id, pw: Math.round(power * 100) / 100, pid, vel });
     renderCooldowns();
   }
+}
+// Broad phase for flying things. A raycast through every object in the room costs ~0.8 ms and each
+// projectile in the air made one every physics step (120 a second): a dozen bouncing tennis balls
+// took a whole CPU core. Now each object has a bounding sphere (refreshed up to 30 times a second,
+// with a margin for how far things move meanwhile) and only those near the projectile's path are
+// raycast.
+let pickBounds = [],
+  pickBoundsOf = null,
+  pickBoundsAt = -Infinity;
+const pickBox = new T.Box3(),
+  segAB = new T.Vector3(),
+  segAC = new T.Vector3();
+function segmentDistance(c, a, b) {
+  segAB.subVectors(b, a);
+  segAC.subVectors(c, a);
+  const l = segAB.lengthSq(),
+    t = l > 0 ? clamp(segAC.dot(segAB) / l, 0, 1) : 0;
+  return segAC.addScaledVector(segAB, -t).length();
+}
+function nearPickables(from, to, radius) {
+  if (worldTime - pickBoundsAt > 1 / 30 || pickBoundsOf !== pickables || pickBounds.length !== pickables.length) {
+    pickBoundsAt = worldTime;
+    pickBoundsOf = pickables;
+    pickBounds = pickables.map((o) => {
+      pickBox.setFromObject(o);
+      return { o, s: pickBox.isEmpty() ? null : pickBox.getBoundingSphere(new T.Sphere()) };
+    });
+  }
+  // 0.8 m: a kart or a blown-away avatar moves about that far in 1/30 s.
+  return pickBounds.filter(({ s }) => s && segmentDistance(s.center, from, to) <= s.radius + radius + 0.8).map(({ o }) => o);
 }
 function releaseSnow(player, payload) {
   const kind = projectile(payload.w);
@@ -1646,18 +1834,15 @@ function releaseSnow(player, payload) {
     spin: new T.Vector3((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14),
   });
 }
-const IMPACT_COLORS = { snow: "#faf5ff", tomato: "#d1352a", tennis: "#d8ef4a", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a" };
-// What a projectile does where it lands: a puff or a splat, a push for loose objects (thrower only)
+const IMPACT_COLORS = { snow: "#faf5ff", rock: "#8b8680", brick: "#a8543b", grenade: "#6a7458", fireball: "#ff8a2a" };
+// What a projectile does where it lands: a puff (a tomato bursts), a push for loose objects (thrower only)
 // and a knock for avatars (each avatar's owner applies it, so it travels with their pose).
 function burst(pos, kind, snowOwner = "self", pr = null) {
   const k = pr?.kind || projectile("snow"),
     speed = pr ? pr.v.length() : 12,
     normal = pr?.normal || new T.Vector3(0, 1, 0);
-  if (k.splat) {
-    const parent = ["avatar", "cube", "ball", "structure"].includes(kind?.userData.kind) ? kind : null;
-    effects.splat(pos, normal, k.splat, parent);
-    effects.puff(pos, k.splat, 6, 2.6, 0.03);
-  } else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : k.id === "tennis" ? 3 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
+  if (k.id === "tomato") effects.tomato(pos, normal, pr?.v);
+  else effects.puff(pos, IMPACT_COLORS[k.id], k.id === "brick" ? 14 : 10, k.id === "brick" ? 3.6 : 3, k.id === "brick" ? 0.05 : 0.035);
   if (["cube", "ball"].includes(kind?.userData.kind) && snowOwner === "self") {
     const c = findObject(world, kind.userData.id);
     if (c) {
@@ -1964,6 +2149,138 @@ function react(type, p = active) {
   emotionEffects.start(p, type, worldTime);
   if (p === active) net.send({ t: "act", k: "emote", e: String(type) });
 }
+// Эмоции: островок над панелью инструментов; нажатая эмоция всплывает над вашим аватаром.
+function toggleEmotions(show = $("#emotionIsland").hidden) {
+  const island = $("#emotionIsland");
+  if (show && !island.children.length)
+    island.innerHTML = EMOTIONS.map(([id, emoji, label]) => `<button data-emoji="${id}" title="${label}" aria-label="${label}">${emoji}</button>`).join("");
+  island.hidden = !show;
+  $('[data-action="reaction"]')?.classList.toggle("on", show);
+}
+// ——— Опрос (как в Telegram): создание в окне, карточка справа сверху, голоса у всех сразу ———
+let pollHidden = null,
+  pollPick = new Set();
+const myPollVote = () => world.poll?.votes?.[myVoter]?.c || null;
+function showPoll() {
+  pollHidden = null;
+  renderPoll();
+}
+function pollModal() {
+  modal(
+    "Новый опрос",
+    `<form id="pollForm" class="poll-form"><label class="field-label" for="pollQuestion">Вопрос</label><input id="pollQuestion" maxlength="200" placeholder="Задайте вопрос" required autocomplete="off"><div class="poll-form-head"><span class="field-label">Варианты ответа</span><small id="pollLeft"></small></div><div id="pollOptions" class="poll-options-edit"></div><div class="poll-switches"><label class="poll-switch"><span>Анонимное голосование<small>Никто не увидит, кто как ответил</small></span><input type="checkbox" id="pollAnon" checked><i></i></label><label class="poll-switch"><span>Несколько ответов<small>Можно выбрать несколько вариантов</small></span><input type="checkbox" id="pollMulti"><i></i></label></div>${world.poll && !world.poll.closed ? '<p class="modal-text">Текущий опрос будет заменён новым.</p>' : ""}<div class="modal-actions"><button class="primary" id="pollCreate" disabled>Создать опрос</button></div></form>`,
+  );
+  const list = $("#pollOptions");
+  // Как в Telegram: новое поле появляется само, когда заполнено последнее; пустые лишние исчезают.
+  const sync = () => {
+    const inputs = [...list.querySelectorAll("input")];
+    while (inputs.length > 2 && !inputs.at(-1).value && !inputs.at(-2).value && document.activeElement !== inputs.at(-2)) inputs.pop().closest(".poll-option-edit").remove();
+    if ((!inputs.length || inputs.at(-1).value) && inputs.length < POLL_MAX_OPTIONS) addOption();
+    const rows = [...list.querySelectorAll("input")];
+    const filled = rows.filter((i) => i.value.trim()).length;
+    $("#pollLeft").textContent = rows.length >= POLL_MAX_OPTIONS ? "Это максимум" : `Можно добавить ещё ${POLL_MAX_OPTIONS - rows.length + (rows.at(-1)?.value ? 0 : 1)}`;
+    $("#pollCreate").disabled = !$("#pollQuestion").value.trim() || filled < 2;
+  };
+  const addOption = (value = "") => {
+    const row = document.createElement("div");
+    row.className = "poll-option-edit";
+    row.innerHTML = `<input maxlength="100" placeholder="Вариант ответа" autocomplete="off"><button type="button" aria-label="Убрать вариант">×</button>`;
+    row.querySelector("input").value = value;
+    row.querySelector("button").onclick = () => {
+      row.remove();
+      sync();
+    };
+    list.append(row);
+  };
+  addOption();
+  addOption();
+  list.addEventListener("input", sync);
+  list.addEventListener("focusout", () => setTimeout(sync));
+  $("#pollQuestion").addEventListener("input", sync);
+  // Enter в варианте — к следующему полю.
+  list.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const inputs = [...list.querySelectorAll("input")],
+      i = inputs.indexOf(e.target);
+    (inputs[i + 1] || $("#pollCreate")).focus();
+  });
+  sync();
+  $("#pollQuestion").focus();
+  $("#pollForm").onsubmit = (e) => {
+    e.preventDefault();
+    const options = [...list.querySelectorAll("input")].map((i) => i.value.trim()).filter(Boolean);
+    op({ t: "poll.create", q: $("#pollQuestion").value.trim(), options, anon: $("#pollAnon").checked, multi: $("#pollMulti").checked });
+    $("#modal").close();
+  };
+}
+const plural = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many);
+function renderPoll() {
+  const card = $("#pollCard"),
+    p = world.poll;
+  if (!p || pollHidden === p.id) {
+    card.hidden = true;
+    $('[data-action="poll"]')?.classList.toggle("on", false);
+    return;
+  }
+  card.hidden = false;
+  $('[data-action="poll"]')?.classList.toggle("on", true);
+  const mine = myPollVote(),
+    voters = Object.values(p.votes || {}),
+    total = voters.length,
+    counts = p.options.map((_, i) => voters.filter((v) => v.c.includes(i)).length),
+    showResults = !!mine || p.closed,
+    owner = !p.owner || p.owner === myVoter,
+    top = Math.max(...counts);
+  const kind = `${p.anon ? "Анонимный опрос" : "Открытый опрос"}${p.multi ? " · несколько ответов" : ""}${p.closed ? " · завершён" : ""}`;
+  const option = (text, i) => {
+    if (!showResults) {
+      const picked = pollPick.has(i);
+      return `<button class="poll-option${picked ? " picked" : ""}" data-poll-pick="${i}"><i class="${p.multi ? "box" : "dot"}"></i><span>${esc(text)}</span></button>`;
+    }
+    const share = total ? Math.round((counts[i] / total) * 100) : 0,
+      names = p.anon ? "" : voters.filter((v) => v.c.includes(i)).map((v) => v.n || "Гость");
+    return `<div class="poll-result${mine?.includes(i) ? " mine" : ""}${p.closed && counts[i] === top && top > 0 ? " lead" : ""}"><div class="poll-result-row"><b>${share}%</b><span>${esc(text)}</span>${mine?.includes(i) ? '<em aria-label="Ваш ответ">✓</em>' : ""}</div><div class="poll-bar"><i style="width:${share}%"></i></div>${names && names.length ? `<small>${esc(names.slice(0, 4).join(", "))}${names.length > 4 ? ` и ещё ${names.length - 4}` : ""}</small>` : ""}</div>`;
+  };
+  const actions = [
+    !showResults && p.multi ? `<button class="primary" data-poll-submit ${pollPick.size ? "" : "disabled"}>Голосовать</button>` : "",
+    mine && !p.closed ? '<button data-poll-retract>Отменить голос</button>' : "",
+    owner && !p.closed ? '<button data-poll-close>Завершить</button>' : "",
+    owner || p.closed ? '<button data-poll-clear>Убрать</button>' : "",
+  ].join("");
+  card.innerHTML = `<header><span><svg viewBox="0 0 24 24">${icons.pie}</svg>${kind}</span><button data-poll-hide aria-label="Свернуть" title="Свернуть">×</button></header><h3>${esc(p.q)}</h3><div class="poll-list">${p.options.map(option).join("")}</div><footer><span>${total} ${plural(total, "голос", "голоса", "голосов")} · ${esc(p.by)}</span><div>${actions}</div></footer>`;
+}
+function pollClick(b) {
+  const p = world.poll;
+  if (!p) return;
+  if (b.dataset.pollPick != null) {
+    const i = +b.dataset.pollPick;
+    if (!p.multi) return op({ t: "poll.vote", id: p.id, choices: [i] });
+    pollPick.has(i) ? pollPick.delete(i) : pollPick.add(i);
+    return renderPoll();
+  }
+  if (b.dataset.pollSubmit != null && pollPick.size) {
+    op({ t: "poll.vote", id: p.id, choices: [...pollPick] });
+    pollPick = new Set();
+  }
+  if (b.dataset.pollRetract != null) op({ t: "poll.vote", id: p.id, choices: [] });
+  if (b.dataset.pollClose != null) op({ t: "poll.close", id: p.id });
+  if (b.dataset.pollClear != null) op({ t: "poll.clear", id: p.id });
+  if (b.dataset.pollHide != null) {
+    pollHidden = p.id;
+    renderPoll();
+  }
+}
+function onPoll(m) {
+  const fresh = m.poll && m.poll.id !== world.poll?.id;
+  world.poll = m.poll;
+  if (fresh) {
+    pollPick = new Set();
+    pollHidden = null;
+    if (m.by && m.by !== net.id && m.by !== "self") toast(`${m.poll.by} начинает опрос: «${m.poll.q}»`, 3500);
+  }
+  renderPoll();
+}
 function publicProfile() {
   const { id, ...rest } = active.profile;
   return rest;
@@ -2185,11 +2502,8 @@ const actions = {
     url.searchParams.delete("r");
     location.href = url.toString();
   },
-  reaction: () =>
-    modal(
-      "Эмоции",
-      `<div class="emotion-picker">${EMOTIONS.map(([id, emoji, label]) => `<button data-emoji="${id}" aria-label="${label}"><span>${emoji}</span><strong>${label}</strong></button>`).join("")}</div>`,
-    ),
+  reaction: () => toggleEmotions(),
+  poll: () => (world.poll && $("#pollCard").hidden ? showPoll() : pollModal()),
   view: () => openSettings("view"),
   settings: () => (settingsOpen() ? closeSettings() : openSettings()),
   settingsClose: () => closeSettings(),
@@ -2251,7 +2565,7 @@ function contextAction(action) {
     op({ t: "note.vote", id });
   }
   if (action === "wave") {
-    react("salute");
+    react("heart");
     closeContext();
   }
   if (action === "customize") avatarModal(active);
@@ -2274,8 +2588,8 @@ document.addEventListener("click", (e) => {
   if (!b) return;
   if (b.dataset.action) actions[b.dataset.action]?.();
   if (b.dataset.tool) {
-    if (b.dataset.tool === "snow" && tool === "snow") toggleWeaponPicker();
-    else toggleWeaponPicker(false);
+    // The throw button opens the island of projectiles (a second click closes it).
+    if (b.dataset.tool === "snow") toggleWeaponPicker(tool === "snow" ? undefined : true);
     setTool(b.dataset.tool);
     canvas.focus();
   }
@@ -2290,8 +2604,21 @@ document.addEventListener("click", (e) => {
   if (b.dataset.add) noteModal(null, null, b.dataset.add);
   if (b.dataset.emoji) {
     react(b.dataset.emoji);
-    $("#modal").close();
+    toggleEmotions(false);
   }
+  if (b.closest("#pollCard")) pollClick(b);
+  if (b.closest("#drawIsland")) penClick(b);
+  if (b.dataset.shape) {
+    cubeShape = b.dataset.shape;
+    remember("kino-shape", cubeShape);
+    renderShapeIsland();
+    canvas.focus();
+  }
+});
+// A click anywhere else closes the emotions and projectiles islands.
+document.addEventListener("pointerdown", (e) => {
+  if (!$("#emotionIsland").hidden && !e.target.closest?.('#emotionIsland, [data-action="reaction"]')) toggleEmotions(false);
+  if (!$("#weaponPicker").hidden && !e.target.closest?.('#weaponPicker, [data-tool="snow"]')) toggleWeaponPicker(false);
 });
 $("#modal").addEventListener("close", () => {
   keys.clear();
@@ -2359,6 +2686,11 @@ canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture(e.pointerId);
     return;
   }
+  // Карандаш: по экрану — рисунок на доске, иначе — на полу.
+  if (tool === "draw") {
+    penStart(e, ["screen", "tile", "share"].includes(o?.userData.kind));
+    return;
+  }
   if (["screen", "tile", "share"].includes(o?.userData.kind)) {
     select(o);
     return;
@@ -2377,10 +2709,10 @@ canvas.addEventListener("pointerdown", (e) => {
   if (tool === "cube") {
     if (validPos(pos)) {
       if (cubes.length >= 24) {
-        toast("На площадке уже 24 кубика");
+        toast("На площадке уже 24 фигуры");
         return;
       }
-      op({ t: "cube.add", x: pos.x, z: pos.z });
+      op({ t: "cube.add", x: pos.x, z: pos.z, shape: cubeShape });
     }
     setTool("snow");
     return;
@@ -2405,6 +2737,10 @@ canvas.addEventListener("pointerdown", (e) => {
   }
 });
 canvas.addEventListener("pointermove", (e) => {
+  if (pen) {
+    penMove(e);
+    return;
+  }
   const h = rayAt(e),
     o = h && owner(h.object);
   hovered = o;
@@ -2521,6 +2857,7 @@ function endDrag() {
   canvas.classList.remove("dragging");
 }
 canvas.addEventListener("pointerup", endDrag);
+window.addEventListener("pointerup", () => penEnd());
 function cancelCharge() {
   charge = null;
   $("#chargeRing").hidden = true;
@@ -2596,7 +2933,7 @@ document.addEventListener("keydown", (e) => {
     shiftHeld = true;
   }
   const digit = /^Digit([1-9])$/.exec(e.code);
-  if (digit && !e.repeat) setWeapon(PROJECTILES[+digit[1] - 1].id);
+  if (digit && !e.repeat && PROJECTILES[+digit[1] - 1]) setWeapon(PROJECTILES[+digit[1] - 1].id);
   if (e.code === "Space") {
     e.preventDefault();
     spaceHeld = true;
@@ -2615,6 +2952,7 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "KeyX") setTool("snow");
   if (e.code === "KeyN") setTool("note");
   if (e.code === "KeyC") setTool("cube");
+  if (e.code === "KeyB") setTool("draw");
   if (e.code === "Escape" && settingsOpen()) {
     closeSettings();
     return;
@@ -2622,6 +2960,8 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Escape") {
     closeTrackChooser();
     closeContext();
+    toggleEmotions(false);
+    toggleWeaponPicker(false);
     setTool("snow");
   }
 });
@@ -2808,7 +3148,7 @@ function physics(dt) {
       if (result === "pull") {
         const n = p.climb.count;
         toast(n === 1 ? "Подтянулся!" : `Подтягиваний: ${n}`, 900);
-        if (n % 5 === 0) emotionEffects.start(p, "fire", worldTime);
+        if (n % 5 === 0) emotionEffects.start(p, "firework", worldTime);
       }
     } else if (!p.remote && p.ride) {
       const was = { x: p.x, z: p.z };
@@ -2869,7 +3209,7 @@ function physics(dt) {
   }
   // Cubes and balls: the same simulation as the server (currents, river wrap, goals, hoops).
   // Online the server is the referee and its corrections arrive; offline the browser announces.
-  const events = stepWorld(world, dt, (o) => drag?.moved && drag.id === o.id);
+  const events = stepWorld(world, dt, (o) => drag?.moved && drag.id === o.id, { props: !net.connected });
   if (!net.connected) for (const event of events) onServer(event);
   // Props knocked about move on their own: here without a server (online the server sends them).
   if (!net.connected && world.motion && Object.keys(world.motion).length) {
@@ -2913,7 +3253,7 @@ function physics(dt) {
       raycaster.set(old, delta.divideScalar(dist));
       raycaster.far = dist + k.radius;
       hit = raycaster
-        .intersectObjects(pickables.filter((o) => o.userData.id !== pr.owner || pr.age > 0.3), true)
+        .intersectObjects(nearPickables(old, pos, k.radius).filter((o) => o.userData.id !== pr.owner || pr.age > 0.3), true)
         .find((h) => visibleObject(h.object));
     }
     if (!hit && !pr.resting && pos.y < k.radius)
@@ -3437,6 +3777,8 @@ function loadState(fresh, objs) {
     motion: fresh.motion || {},
     scores: fresh.scores,
     timer: fresh.timer,
+    poll: fresh.poll || null,
+    strokes: fresh.strokes || [],
     match: fresh.match,
     mines: fresh.mines || [],
     flags: {},
@@ -3466,6 +3808,8 @@ function loadState(fresh, objs) {
   cubes.forEach(addCubeMesh);
   refreshNotes();
   renderTimer();
+  renderPoll();
+  strokeLayer?.set(world.strokes || []);
   for (const id of Object.keys(liftedBy)) delete liftedBy[id];
   buildRides();
   // Back on the ride you were on (a reconnect), or off it if the room says so.
@@ -3639,6 +3983,21 @@ function onServer(m, at) {
     case "timer":
       world.timer = m.timer;
       renderTimer();
+      break;
+    case "poll":
+      onPoll(m);
+      break;
+    case "stroke":
+      (world.strokes ||= []).push(m.stroke);
+      strokeLayer.add(m.stroke);
+      break;
+    case "stroke.del":
+      world.strokes = (world.strokes || []).filter((st) => st.id !== m.id);
+      strokeLayer.remove(m.id);
+      break;
+    case "strokes":
+      world.strokes = m.strokes || [];
+      strokeLayer.set(world.strokes);
       break;
     case "error":
       toast(m.message, 6000);

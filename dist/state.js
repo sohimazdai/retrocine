@@ -46,6 +46,42 @@ const num = (v, lo, hi, fallback = 0) => (finite(v) ? clamp(v, lo, hi) : fallbac
 const MAX_MINES = 16;
 const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
 
+// ——— Опрос: один на комнату, как в Telegram — вопрос, 2–10 вариантов, анонимный или открытый,
+// один ответ или несколько. Голос хранится по voter (обезличенный id участника в комнате); в
+// открытом опросе — ещё и имя. ———
+export const POLL_MAX_OPTIONS = 10;
+export function sanitizePoll(p) {
+  if (!p || typeof p !== "object") return null;
+  const q = str(p.q, 200).trim(),
+    options = (Array.isArray(p.options) ? p.options : []).map((o) => str(o, 100).trim()).filter(Boolean).slice(0, POLL_MAX_OPTIONS);
+  if (!q || options.length < 2) return null;
+  const votes = {};
+  for (const [voter, v] of Object.entries(p.votes && typeof p.votes === "object" ? p.votes : {}).slice(0, 500)) {
+    const c = [...new Set((Array.isArray(v?.c) ? v.c : []).filter((i) => Number.isInteger(i) && i >= 0 && i < options.length))];
+    if (!c.length || !/^[\w-]{1,40}$/.test(voter)) continue;
+    votes[voter] = { c: p.multi ? c : c.slice(0, 1), ...(!p.anon && str(v.n, 32) ? { n: str(v.n, 32) } : {}) };
+  }
+  return { id: str(p.id, 40) || "poll", q, options, multi: !!p.multi, anon: p.anon !== false, by: str(p.by, 32) || "Гость", owner: str(p.owner, 40) || null, at: finite(p.at) ? p.at : 0, closed: !!p.closed, votes };
+}
+// ——— Рисунки на полу и на экране-доске: штрихи с цветом, толщиной и точками (пол — x, z; стена —
+// её координаты x, y). Не больше MAX_STROKES, у каждого до 600 точек. ———
+export const MAX_STROKES = 400;
+export function sanitizeStroke(st, id, by) {
+  if (!st || typeof st !== "object" || !Array.isArray(st.p)) return null;
+  const on = st.on === "wall" ? "wall" : "floor",
+    c = typeof st.c === "string" && /^#[0-9a-fA-F]{6}$/.test(st.c) ? st.c : "#f4d35e",
+    w = finite(st.w) ? clamp(st.w, 0.02, 0.3) : 0.08,
+    lim = on === "wall" ? [-60, 60, -1, 60] : [-ROOM.halfWidth - 1, ROOM.halfWidth + 1, ROOM.back - 1, ROOM.front + 1];
+  const p = [];
+  for (let i = 0; i + 1 < st.p.length && p.length < 1200; i += 2) {
+    const a = st.p[i],
+      b = st.p[i + 1];
+    if (!finite(a) || !finite(b)) return null;
+    p.push(Math.round(clamp(a, lim[0], lim[1]) * 100) / 100, Math.round(clamp(b, lim[2], lim[3]) * 100) / 100);
+  }
+  if (p.length < 2) return null;
+  return { id: str(id, 40) || "s", by: str(by, 40) || null, on, c, w, p };
+}
 export function createState(saved = {}, newId) {
   const map = mapDef(saved.map);
   setRoomScale(map.scale || 1);
@@ -87,11 +123,13 @@ export function createState(saved = {}, newId) {
     notes: (saved.notes || []).slice(0, MAX_NOTES).map((n) => sanitizeNote(n, n.id || newId())),
     cubes: cubes
       .slice(0, MAX_CUBES)
-      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -LIMITS.x, LIMITS.x), z: num(c.z, ROOM.back, LIMITS.z), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0] })),
+      .map((c) => makeCube({ id: c.id || newId(), x: num(c.x, -LIMITS.x, LIMITS.x), z: num(c.z, ROOM.back, LIMITS.z), y: c.y, color: str(c.color, 16) || CUBE_COLORS[0], shape: c.shape })),
     balls,
     rides,
     structures,
     motion,
+    poll: sanitizePoll(saved.poll),
+    strokes: (Array.isArray(saved.strokes) ? saved.strokes : []).slice(-MAX_STROKES).map((st) => sanitizeStroke(st, st?.id || newId(), st?.by)).filter(Boolean),
     scores: sameMap && saved.scores && typeof saved.scores === "object" ? sanitizeScores(saved.scores) : {},
     match: sameMap ? match.loadMatch(saved.match) : match.createMatch(),
     mines: sameMap && Array.isArray(saved.mines) ? saved.mines.slice(0, MAX_MINES).filter((m) => m && finite(m.x) && finite(m.z) && typeof m.id === "string").map((m) => ({ id: m.id, x: num(m.x, -LIMITS.x, LIMITS.x), z: num(m.z, ROOM.back, LIMITS.z), by: str(m.by, 32) || null, armAt: finite(m.armAt) ? m.armAt : 0, triggerAt: finite(m.triggerAt) ? m.triggerAt : null })) : [],
@@ -133,7 +171,7 @@ export function serializeState(s) {
   return {
     map: s.map,
     notes: s.notes,
-    cubes: s.cubes.map(({ id, x, y, z, color, size }) => ({ id, x, y, z, color, size })),
+    cubes: s.cubes.map(({ id, x, y, z, color, size, shape }) => ({ id, x, y, z, color, size, shape })),
     balls: s.balls.map(({ id, kind, x, y, z, size }) => (BALLS[kind]?.grows ? { id, kind, x, y, z, size } : { id, kind, x, y, z })),
     rides: (s.rides || []).map(({ id, kind, x, z, a, by }) => ({ id, kind, x, z, a, by })),
     structures: s.structures,
@@ -141,6 +179,8 @@ export function serializeState(s) {
     match: s.match ? match.serializeMatch(s.match) : undefined,
     mines: (s.mines || []).map(({ id, x, z, by, armAt, triggerAt }) => ({ id, x, z, by, armAt, triggerAt })),
     timer: s.timer,
+    poll: s.poll || null,
+    strokes: s.strokes || [],
   };
 }
 export const stateMap = (s) => mapDef(s.map);
@@ -204,7 +244,8 @@ export function freeSpot(s, x, z, pad = 1.2) {
 
 // Fixed-step simulation of cubes and balls: water currents, wrap-around at river ends, goals and
 // hoops. Returns the scoring events of this step.
-export function stepWorld(s, dt, skip = () => false) {
+// props: false — props are not simulated here (a browser online: the server does that).
+export function stepWorld(s, dt, skip = () => false, { props = true } = {}) {
   fitRoom(s);
   const map = stateMap(s),
     obs = stateObstacles(s),
@@ -230,7 +271,9 @@ export function stepWorld(s, dt, skip = () => false) {
         else if (o.vz < 0 && next < floorBack(o.x) + o.size / 2 + 0.05) o.z = LIMITS.z - o.size / 2 - 0.3;
       }
     }
-    stepCube(o, obs, dt, grip);
+    // A ball or cube that runs into a movable prop pushes it (a little: they are light).
+    const hit = props ? (b, speed, nx, nz) => speed > 1.5 && b.prop && pushProp(s, b.prop, [-nx * looseMass(o) * speed * 0.3, 0, -nz * looseMass(o) * speed * 0.3], { x: o.x, y: o.y, z: o.z }, 0.5) : null;
+    stepCube(o, obs, dt, grip, hit);
     // A snowball rolled over snow (not ice) picks it up and grows, slower as it gets big.
     const grows = BALLS[o.kind]?.grows;
     if (grows && grip === 1 && o.y <= o.size / 2 + 0.02 && o.size < grows.max) {
@@ -333,6 +376,7 @@ export function applyOp(s, op, ctx) {
         z,
         y: supportHeight(x, z, stateMap(s), s.structures) + 0.36,
         color: CUBE_COLORS[s.cubes.length % CUBE_COLORS.length],
+        shape: op.shape,
       });
       s.cubes.push(cube);
       all({ t: "cube", cube });
@@ -401,12 +445,27 @@ export function applyOp(s, op, ctx) {
     case "struct.move": {
       const info = propInfo(stateMap(s), op.id);
       if (!info || !finite(op.x) || !finite(op.z) || s.lifts?.[op.id] || !finite(info.weight)) return null;
-      // Dragged: it keeps how it stands (or lies) and stops moving.
-      const { yaw, ta, td } = s.structures[op.id] || {};
-      s.structures[op.id] = { ...clampProp(info, op.x, op.z), ...(yaw ? { yaw } : {}), ...(ta ? { ta, td } : {}) };
+      // Dragged: it keeps how it stands (or lies) and stops moving. Into something, it stops where
+      // it touches it (the dragger is told where, so the prop does not stay inside on their screen).
+      const cur = s.structures[op.id] || { x: info.x, z: info.z },
+        { yaw, ta, td } = cur,
+        to = { ...clampProp(info, op.x, op.z), ...(yaw ? { yaw } : {}), ...(ta ? { ta, td } : {}) };
+      let next = to;
+      if (overlapsOthers(s, info, to)) {
+        let lo = 0,
+          hi = 1;
+        for (let i = 0; i < 10; i++) {
+          const mid = (lo + hi) / 2;
+          if (overlapsOthers(s, info, { ...to, x: cur.x + (to.x - cur.x) * mid, z: cur.z + (to.z - cur.z) * mid })) hi = mid;
+          else lo = mid;
+        }
+        next = { ...to, x: cur.x + (to.x - cur.x) * lo, z: cur.z + (to.z - cur.z) * lo };
+      }
+      s.structures[op.id] = next;
       if (s.motion) delete s.motion[op.id];
       s.v++;
-      others({ t: "struct", id: op.id, ...s.structures[op.id] });
+      if (next === to) others({ t: "struct", id: op.id, ...next });
+      else all({ t: "struct", id: op.id, ...next });
       physics = true;
       break;
     }
@@ -470,6 +529,8 @@ export function applyOp(s, op, ctx) {
       s.map = map.id;
       fitRoom(s);
       s.motion = {};
+      // Рисунки на полу уходят вместе с картой, на доске — остаются.
+      s.strokes = (s.strokes || []).filter((st) => st.on === "wall");
       s.structures = defaultPositions(map);
       s.balls = defaultBalls(map);
       s.cubes = defaultCubes(map, ctx.newId);
@@ -511,6 +572,62 @@ export function applyOp(s, op, ctx) {
       }
       if (finite(op.a)) r.a = clamp(op.a, -10, 10);
       all({ t: "ride", ride: { ...r } });
+      break;
+    }
+    case "draw.add": {
+      const stroke = sanitizeStroke(op, ctx.newId(), ctx.uid);
+      if (!stroke) return null;
+      (s.strokes ||= []).push(stroke);
+      if (s.strokes.length > MAX_STROKES) s.strokes.splice(0, s.strokes.length - MAX_STROKES);
+      all({ t: "stroke", stroke });
+      break;
+    }
+    case "draw.undo": {
+      // Your own last stroke.
+      const i = (s.strokes || []).map((st) => st.by).lastIndexOf(ctx.uid);
+      if (i < 0 || !ctx.uid) return null;
+      const [gone] = s.strokes.splice(i, 1);
+      all({ t: "stroke.del", id: gone.id });
+      break;
+    }
+    case "draw.clear": {
+      // Стереть всё (или только на полу / только на доске).
+      const on = op.on === "floor" || op.on === "wall" ? op.on : null;
+      s.strokes = on ? (s.strokes || []).filter((st) => st.on !== on) : [];
+      all({ t: "strokes", strokes: s.strokes });
+      break;
+    }
+    case "poll.create": {
+      // Новый опрос заменяет прежний.
+      const poll = sanitizePoll({ q: op.q, options: op.options, multi: op.multi, anon: op.anon, by: ctx.name, owner: ctx.uid, at: ctx.now, id: ctx.newId() });
+      if (!poll) return null;
+      s.poll = poll;
+      all({ t: "poll", poll, by: ctx.peer, started: true });
+      break;
+    }
+    case "poll.vote": {
+      // choices: номера вариантов; пустой список — отозвать голос.
+      const p = s.poll;
+      if (!p || p.closed || op.id !== p.id || !ctx.uid || !Array.isArray(op.choices)) return null;
+      const c = [...new Set(op.choices.filter((i) => Number.isInteger(i) && i >= 0 && i < p.options.length))].slice(0, p.multi ? p.options.length : 1);
+      if (c.length) p.votes[ctx.uid] = { c, ...(p.anon ? {} : { n: str(ctx.name, 32) || "Гость" }) };
+      else delete p.votes[ctx.uid];
+      all({ t: "poll", poll: p });
+      break;
+    }
+    case "poll.close": {
+      // Завершить может автор; убрать — автор или кто угодно, когда опрос уже завершён.
+      const p = s.poll;
+      if (!p || op.id !== p.id || (p.owner && p.owner !== ctx.uid)) return null;
+      p.closed = true;
+      all({ t: "poll", poll: p });
+      break;
+    }
+    case "poll.clear": {
+      const p = s.poll;
+      if (!p || op.id !== p.id || (!p.closed && p.owner && p.owner !== ctx.uid)) return null;
+      s.poll = null;
+      all({ t: "poll", poll: null });
       break;
     }
     case "boom": {
@@ -612,6 +729,13 @@ export const STATE_OPS = new Set([
   "ride.leave",
   "boom",
   "timer.start",
+  "draw.add",
+  "draw.undo",
+  "draw.clear",
+  "poll.create",
+  "poll.vote",
+  "poll.close",
+  "poll.clear",
   "timer.toggle",
   "timer.hide",
   "mine.place",
@@ -670,23 +794,7 @@ function propBox(prop, pos, pad = 0) {
   return { x0: pos.x + prop.cx - prop.hw - pad, x1: pos.x + prop.cx + prop.hw + pad, z0: pos.z + prop.cz - prop.hd - pad, z1: pos.z + prop.cz + prop.hd + pad };
 }
 function overlapsOthers(s, prop, pos) {
-  if (pos.y) return false;
-  const a = propBox(prop, pos, -0.05);
-  const map = stateMap(s);
-  const hitStatic = (map.statics || []).some((b) => {
-    if (b.h < 0.2) return false;
-    const hw = b.shape === "cylinder" ? b.radius : b.w / 2,
-      hd = b.shape === "cylinder" ? b.radius : b.d / 2;
-    return a.x0 < b.x + hw && a.x1 > b.x - hw && a.z0 < b.z + hd && a.z1 > b.z - hd;
-  });
-  if (hitStatic) return true;
-  return mapProps(map).some((other) => {
-    if (other.id === prop.id) return false;
-    const op = s.structures[other.id];
-    if (!op || op.y) return false;
-    const b = propBox(other, op);
-    return a.x0 < b.x1 && a.x1 > b.x0 && a.z0 < b.z1 && a.z1 > b.z0;
-  });
+  return worsens(s, prop, pos);
 }
 function gapTo(prop, pos, x, z) {
   const dx = x - (pos.x + prop.cx),
@@ -857,32 +965,108 @@ export function raiseProp(s, id) {
   mo.idle = 0;
   return true;
 }
-// Two colliders touching (side by side and at overlapping heights).
-function touching(a, b) {
-  if ((a.y || 0) >= b.h - 0.02 || (b.y || 0) >= a.h - 0.02) return false;
-  const ac = a.shape === "cylinder",
-    bc = b.shape === "cylinder";
-  if (ac && bc) return Math.hypot(a.x - b.x, a.z - b.z) < a.radius + b.radius;
-  if (ac || bc) {
-    const c = ac ? a : b,
-      r = ac ? b : a,
-      nx = clamp(c.x, r.x - r.w / 2, r.x + r.w / 2),
-      nz = clamp(c.z, r.z - r.d / 2, r.z + r.d / 2);
-    return Math.hypot(c.x - nx, c.z - nz) < c.radius;
-  }
-  return Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.z - b.z) < (a.d + b.d) / 2;
-}
 const offFloor = (c) => {
   const hw = c.shape === "cylinder" ? c.radius : c.w / 2,
     hd = c.shape === "cylinder" ? c.radius : c.d / 2;
   return Math.abs(c.x) + hw > ROOM.halfWidth - 0.05 || c.z + hd > ROOM.front - 0.05 || c.z - hd < Math.max(floorBack(c.x - hw), floorBack(c.x + hw)) + 0.05;
 };
+// How deep two colliders overlap (side by side, at overlapping heights); 0 — they do not.
+function depth(a, b) {
+  if ((a.y || 0) >= b.h - 0.02 || (b.y || 0) >= a.h - 0.02) return 0;
+  const ac = a.shape === "cylinder",
+    bc = b.shape === "cylinder";
+  if (ac && bc) return Math.max(0, a.radius + b.radius - Math.hypot(a.x - b.x, a.z - b.z));
+  if (ac || bc) {
+    const c = ac ? a : b,
+      r = ac ? b : a,
+      nx = clamp(c.x, r.x - r.w / 2, r.x + r.w / 2),
+      nz = clamp(c.z, r.z - r.d / 2, r.z + r.d / 2),
+      d = Math.hypot(c.x - nx, c.z - nz);
+    if (d > 1e-6) return Math.max(0, c.radius - d);
+    return c.radius + Math.min(r.x + r.w / 2 - c.x, c.x - (r.x - r.w / 2), r.z + r.d / 2 - c.z, c.z - (r.z - r.d / 2));
+  }
+  const ox = (a.w + b.w) / 2 - Math.abs(a.x - b.x),
+    oz = (a.d + b.d) / 2 - Math.abs(a.z - b.z);
+  return ox > 0 && oz > 0 ? Math.min(ox, oz) : 0;
+}
+// What a prop can bump into: scenery and the other props (not roads, rails or low things).
+const blockersFor = (s, id) => stateObstacles(s).filter((b) => b.prop !== id && b.shape !== "path" && !b.rail && b.h > 0.15);
+// How deep a prop in a pose overlaps everything else, and with what the most.
+function overlap(info, pose, blockers) {
+  let total = 0,
+    worst = null,
+    most = 0;
+  for (const c of propColliders(info, pose))
+    for (const b of blockers) {
+      const d = depth(c, b);
+      total += d;
+      if (d > most) {
+        most = d;
+        worst = b;
+      }
+    }
+  return { total, worst };
+}
+// Would moving a prop to `next` push it further into something? (Already overlapping — e.g. dragged
+// in — it may still move out, but not deeper.) Lifted props pass over everything.
+function worsens(s, info, next) {
+  if (next.y > 0) return false;
+  const blockers = blockersFor(s, info.id);
+  return overlap(info, next, blockers).total > overlap(info, s.structures[info.id], blockers).total + 1e-3;
+}
+// A moving prop shoves the loose things (balls, cubes) in its way and gives them its speed.
+function shove(s, info, pos, mo) {
+  const cs = propColliders(info, pos);
+  for (const o of dynamicObjects(s)) {
+    if (o.dragBy) continue;
+    for (const c of cs) {
+      if (o.y - o.size / 2 >= c.h - 0.02 || o.y + o.size / 2 <= (c.y || 0)) continue;
+      let nx, nz, pen;
+      if (c.shape === "cylinder") {
+        const dx = o.x - c.x,
+          dz = o.z - c.z,
+          d = Math.hypot(dx, dz);
+        [nx, nz] = d > 1e-4 ? [dx / d, dz / d] : [1, 0];
+        pen = c.radius + o.size / 2 - d;
+      } else {
+        const qx = clamp(o.x, c.x - c.w / 2, c.x + c.w / 2),
+          qz = clamp(o.z, c.z - c.d / 2, c.z + c.d / 2),
+          dx = o.x - qx,
+          dz = o.z - qz,
+          d = Math.hypot(dx, dz);
+        if (d > 1e-4) {
+          [nx, nz] = [dx / d, dz / d];
+          pen = o.size / 2 - d;
+        } else {
+          const exits = [
+            [c.x + c.w / 2 - o.x, 1, 0],
+            [o.x - (c.x - c.w / 2), -1, 0],
+            [c.z + c.d / 2 - o.z, 0, 1],
+            [o.z - (c.z - c.d / 2), 0, -1],
+          ].sort((a, b) => a[0] - b[0])[0];
+          [nx, nz] = [exits[1], exits[2]];
+          pen = exits[0] + o.size / 2;
+        }
+      }
+      if (pen <= 0) continue;
+      o.x += nx * pen;
+      o.z += nz * pen;
+      const vn = o.vx * nx + o.vz * nz,
+        pn = mo.vx * nx + mo.vz * nz;
+      if (vn < pn * 1.2) {
+        o.vx += (pn * 1.2 - vn) * nx;
+        o.vz += (pn * 1.2 - vn) * nz;
+        if (pn > 2) o.vy = Math.max(o.vy, pn * 0.3);
+      }
+    }
+  }
+}
+// The mass of a loose thing, for the push it gives a prop it runs into.
+const looseMass = (o) => (o.kind ? clamp(o.size ** 3 * 1.2, 0.08, 1.5) : 0.6);
 export function stepProps(s, dt) {
   if (!propsMoving(s)) return [];
   fitRoom(s);
   const map = stateMap(s),
-    props = mapProps(map),
-    statics = (map.statics || []).filter((b) => b.shape !== "path" && b.h > 0.15 && !b.rail),
     moved = [];
   for (const id of Object.keys(s.motion)) {
     const info = propInfo(map, id),
@@ -893,15 +1077,15 @@ export function stepProps(s, dt) {
       continue;
     }
     mo.lean = false;
-    // Whatever it already overlaps does not hold it (it started there).
-    const own = propColliders(info, pos),
-      others = props.filter((p) => p.id !== id && s.structures[p.id]).flatMap((p) => propColliders(p, s.structures[p.id]));
-    const blockers = [...statics, ...others].filter((b) => !own.some((c) => touching(c, b)));
-    const wasOff = own.some(offFloor);
+    // What it may bump into; anything it already overlaps (dragged in, pushed in) it may leave but
+    // not go deeper into.
+    const blockers = blockersFor(s, id),
+      base = overlap(info, pos, blockers).total,
+      wasOff = propColliders(info, pos).some(offFloor);
     const blockedBy = (pose) => {
-      const cs = propColliders(info, pose);
-      if (!wasOff && cs.some(offFloor)) return { wall: true };
-      return blockers.find((b) => cs.some((c) => touching(c, b))) || null;
+      if (!wasOff && propColliders(info, pose).some(offFloor)) return { wall: true };
+      const o = overlap(info, pose, blockers);
+      return o.total > base + 1e-3 ? o.worst || { wall: true } : null;
     };
     // Up and down: a hop from a blast, then falling back.
     let y = pos.y || 0;
@@ -994,6 +1178,8 @@ export function stepProps(s, dt) {
     if (!pos.yaw) delete pos.yaw;
     if (!pos.ta) delete pos.ta;
     moved.push(id);
+    s.v++;
+    shove(s, info, pos, mo);
     // Calm for a moment: it rests.
     const still = !(pos.y > 0) && mo.vy === 0 && Math.hypot(mo.vx, mo.vz) < 0.06 && Math.abs(mo.wy) < 0.08 && Math.abs(mo.wt) < 0.08;
     const settled = !pos.ta || pos.ta === TIP_LIE || mo.lean;

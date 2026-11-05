@@ -4,49 +4,30 @@ import * as T from "three";
 import { avatar } from "../dist/avatars.js";
 import { animateRig } from "../dist/animation.js";
 
-test("clapping hands meet and separate during the applause cycle", () => {
+test("heart: both hands come up in front of the chest, and the pose is let go afterwards", () => {
   const rig = avatar({ id: "test" });
-  let nearest = Infinity,
-    farthest = 0;
-  for (let time = 0.3; time < 1; time += 0.01) {
-    animateRig(
-      rig,
-      {
-        time,
-        grounded: true,
-        emote: { type: "applause", started: 0, duration: 3 },
-      },
-      0.01,
-    );
+  const hands = () => {
     rig.root.updateMatrixWorld(true);
-    const distance = rig.hands[0]
-      .getWorldPosition(new T.Vector3())
-      .distanceTo(rig.hands[1].getWorldPosition(new T.Vector3()));
-    nearest = Math.min(nearest, distance);
-    farthest = Math.max(farthest, distance);
-  }
-  assert(nearest < 0.16);
-  assert(farthest > 0.35);
-});
-test("salute raises the right hand to the head and releases the pose afterwards", () => {
-  const rig = avatar({ id: "test" });
-  animateRig(
-    rig,
-    {
-      time: 0.8,
-      grounded: true,
-      emote: { type: "salute", started: 0, duration: 3 },
-    },
-    0.016,
-  );
-  rig.root.updateMatrixWorld(true);
-  const hand = rig.hands[1].getWorldPosition(new T.Vector3()),
-    head = rig.head.getWorldPosition(new T.Vector3());
-  assert(hand.y > head.y);
-  assert(hand.distanceTo(head) < 0.65);
+    return rig.hands.map((h) => h.getWorldPosition(new T.Vector3()));
+  };
+  animateRig(rig, { time: 0.2, grounded: true }, 0.016);
+  const rest = hands();
+  animateRig(rig, { time: 0.8, grounded: true, emote: { type: "heart", started: 0, duration: 2.6 } }, 0.016);
+  const up = hands();
+  for (let i = 0; i < 2; i++) assert(up[i].y > rest[i].y + 0.1, "hands up");
+  assert(up[0].distanceTo(up[1]) < rest[0].distanceTo(rest[1]), "hands together");
   animateRig(rig, { time: 4, grounded: true }, 0.016);
-  assert.equal(rig.arms[1].scale.y, 1);
-  assert.equal(rig.arms[1].position.y, 0.12);
+  const after = hands();
+  for (let i = 0; i < 2; i++) assert(Math.abs(after[i].y - rest[i].y) < 0.02, "back at rest");
+});
+test("laugh: eyes squeezed shut and the mouth open; sadness droops the head; both let go afterwards", () => {
+  const rig = avatar({ id: "test" });
+  animateRig(rig, { time: 0.8, grounded: true, emote: { type: "laugh", started: 0, duration: 2.8 } }, 0.016);
+  assert(rig.eyes.every((e) => e.scale.y < 0.5) && rig.mouthOpen.visible);
+  animateRig(rig, { time: 0.8, grounded: true, emote: { type: "sad", started: 0, duration: 3 } }, 0.016);
+  assert(rig.head.rotation.x > 0.2, "head down");
+  animateRig(rig, { time: 5, grounded: true }, 0.016);
+  assert(rig.eyes.every((e) => Math.abs(e.scale.y - 1) < 1e-6) && !rig.mouthOpen.visible);
 });
 test("the fire shader advances over time in all uses of the rig", () => {
   const rig = avatar({ id: "test", hairstyle: "flame" });

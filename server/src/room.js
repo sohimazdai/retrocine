@@ -162,7 +162,7 @@ export class Room {
       tokens: 240,
       poseTokens: 60,
       thrown: new Map(),
-      lastThrow: {},
+      nextThrow: {},
       last: now(),
       dropped: 0,
     };
@@ -272,10 +272,14 @@ export class Room {
         if (msg.k === "throw") {
           if (!Array.isArray(msg.to) || msg.to.length !== 3 || !msg.to.every(Number.isFinite)) return;
           const kind = projectile(msg.w);
-          // Cooldowns per projectile (bricks 1 s, fireballs 5 s, grenades 10 s), with a little slack.
-          const t = now();
-          if (t - (peer.lastThrow[kind.id] || 0) < kind.cooldown * 1000 - 150) return;
-          peer.lastThrow[kind.id] = t;
+          // Cooldowns per projectile (snowballs, tomatoes, rocks 0.5 s, bricks 1 s, fireballs 5 s,
+          // grenades 10 s). A throw may come a little early (network jitter), but each one moves the
+          // next allowed time a full cooldown on, so on average it is never faster.
+          const t = now(),
+            cd = kind.cooldown * 1000,
+            next = peer.nextThrow[kind.id] || 0;
+          if (t < next - Math.min(150, cd * 0.3)) return;
+          peer.nextThrow[kind.id] = Math.max(t, next) + cd;
           out.to = msg.to.map((v) => r3(clamp(v, -40, 40)));
           out.w = kind.id;
           this.analytics?.event("throw", 1, { k: { w: kind.id } });

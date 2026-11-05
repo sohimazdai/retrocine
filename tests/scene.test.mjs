@@ -25,6 +25,7 @@ import * as propsModule from "../dist/props.js";
 import * as hitboxesModule from "../dist/hitboxes.js";
 import * as ridingModule from "../dist/riding.js";
 import * as ridesModule from "../dist/rides.js";
+import * as drawingModule from "../dist/drawing.js";
 import * as climbingModule from "../dist/climbing.js";
 import * as kartingModule from "../dist/karting.js";
 import * as kartsModule from "../dist/karts.js";
@@ -112,6 +113,12 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     },
     putImageData() {},
     clearRect() {},
+    quadraticCurveTo() {},
+    bezierCurveTo() {},
+    ellipse() {},
+    createRadialGradient() {
+      return { addColorStop() {} };
+    },
     beginPath() {},
     moveTo() {},
     lineTo() {},
@@ -227,6 +234,7 @@ function boot({ pixelRatio = 1, offline = false, peers = DEMO_PEERS, notes = DEM
     ...hitboxesModule,
     ...ridingModule,
     ...ridesModule,
+    ...drawingModule,
     ...climbingModule,
     ...kartingModule,
     ...kartsModule,
@@ -808,7 +816,7 @@ test("room link, presence chip and media fallbacks", () => {
 });
 
 // ——— Throwing and Shift ———
-test("weapons: 1–7 select, heavier things fly shorter, holding the right button throws harder", () => {
+test("weapons: 1–8 select, heavier things fly shorter, holding the right button throws harder", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
   const flight = (weapon, pw = 1) => {
@@ -827,8 +835,10 @@ test("weapons: 1–7 select, heavier things fly shorter, holding the right butto
     brickHard = flight("brick", 1.6);
   assert(brick < rock && rock < snow, `brick ${brick} < rock ${rock} < snow ${snow}`);
   assert(brickHard > brick * 1.8, `charged brick ${brickHard} vs ${brick}`);
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit6", key: "6", bubbles: true }));
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit5", key: "5", bubbles: true }));
   assert.equal(a.run("weapon"), "grenade");
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit9", key: "9", bubbles: true }));
+  assert.equal(a.run("weapon"), "grenade", "there is no ninth");
   assert.equal(a.w.document.querySelector('[data-tool="snow"] .weapon-emoji').textContent, "💣");
 });
 
@@ -877,15 +887,95 @@ test("a fireball explodes on contact; online the blast comes back from the serve
   assert(a.run("active.vy") > 3, "and up");
 });
 
-test("tomatoes leave splats; tennis balls bounce", () => {
+test("a tomato leaves no stain: it bursts into juice, chunks and its green top, and all of it is gone in two seconds", () => {
   const a = boot({ offline: true });
   a.tick(0.1);
+  assert.equal(a.run("PROJECTILES.some(k=>k.id==='tennis')"), false, "no tennis balls any more");
   a.run("Object.assign(active,{x:0,z:8,y:0});setWeapon('tomato');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,4),w:'tomato',pw:1,pid:'t'})");
-  a.tick(1.2);
-  assert(a.run("effects.splats.length") >= 1);
-  a.run("setWeapon('tennis');active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,3),w:'tennis',pw:1,pid:'b'})");
-  a.tick(1.2);
-  assert(a.run("projectiles.length===0 || projectiles[0].bounces>=1"), "the ball bounced");
+  let pieces = null;
+  for (let i = 0; i < 240 && !pieces; i++) {
+    a.tick(1 / 120);
+    pieces = a.run("(()=>{const m=effects.items.filter(it=>it.object.isInstancedMesh).map(it=>it.object.count);return m.length?m:null})()");
+  }
+  assert(pieces, "it burst");
+  assert(pieces[0] >= 25 && pieces[1] >= 10, `juice ${pieces[0]}, chunks ${pieces[1]}`);
+  a.tick(0.25);
+  assert(a.run("effects.items.some(it=>it.object.isInstancedMesh && (()=>{const m=new T.Matrix4(),p=new T.Vector3();it.object.getMatrixAt(0,m);p.setFromMatrixPosition(m);return p.distanceTo(new T.Vector3(0,0,4))>0.3})())"), "the pieces fly apart");
+  a.tick(2);
+  assert.equal(a.run("effects.items.length"), 0, "nothing stays behind");
+  // An old client's tennis ball flies here as a snowball.
+  a.run("active.action=null;startAction(active,'throw',worldTime,{to:new T.Vector3(0,0,0),w:'tennis',pw:1,pid:'old'})");
+  for (let i = 0; i < 120 && !a.run("projectiles.length"); i++) a.tick(1 / 120);
+  assert.equal(a.run("projectiles[0].kind.id"), "snow");
+});
+
+test("projectiles are chosen on an island of icons above the toolbar: no names, the cooldown sweeps over them", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.tick(0.1);
+  const island = d.querySelector("#weaponPicker");
+  assert.equal(island.hidden, true);
+  d.querySelector('[data-tool="snow"]').click();
+  assert.equal(island.hidden, false);
+  assert(island.classList.contains("sub-island"));
+  const buttons = [...island.querySelectorAll("[data-weapon]")];
+  assert.deepEqual(buttons.map((b) => b.dataset.weapon), ["snow", "tomato", "rock", "brick", "grenade", "fireball", "icicle", "mine"]);
+  for (const b of buttons) assert(!/[А-Яа-я0-9]/.test(b.textContent), `only an icon: "${b.textContent}"`);
+  assert.equal(buttons[0].title, "Снежок · 1");
+  assert(buttons[0].classList.contains("on"));
+  island.querySelector('[data-weapon="grenade"]').click();
+  assert.equal(a.run("weapon"), "grenade");
+  assert.equal(island.hidden, true, "closes once chosen");
+  a.run("active.action=null;throwSnow(null)");
+  d.querySelector('[data-tool="snow"]').click();
+  const grenade = island.querySelector('[data-weapon="grenade"]');
+  assert(grenade.classList.contains("on"));
+  assert(+grenade.style.getPropertyValue("--cd") > 0.9, "the grenade is cooling down");
+  assert.equal(+island.querySelector('[data-weapon="snow"]').style.getPropertyValue("--cd"), 0);
+  // A click on the room, Escape or another tool closes it.
+  a.pointer("pointerdown", 600, 500);
+  assert.equal(island.hidden, true);
+  d.querySelector('[data-tool="snow"]').click();
+  d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Escape", bubbles: true }));
+  assert.equal(island.hidden, true);
+  d.querySelector('[data-tool="snow"]').click();
+  d.querySelector('[data-tool="draw"]').click();
+  assert.equal(island.hidden, true);
+  // From another tool, the throw button opens the island straight away.
+  d.querySelector('[data-tool="snow"]').click();
+  assert.equal(island.hidden, false);
+});
+
+test("snowballs, tomatoes and rocks: at most twice a second", () => {
+  const a = boot();
+  a.tick(0.1);
+  for (const w of ["snow", "tomato", "rock"]) {
+    a.run(`setWeapon('${w}')`);
+    for (let i = 0; i < 20; i++) {
+      a.run("active.action=null;throwSnow(null)");
+      a.tick(0.1);
+    }
+    const sent = a.server.of("act").filter((m) => m.k === "throw" && m.w === w).length;
+    assert.equal(sent, 4, `${w}: ${sent} throws in 2 s`);
+  }
+});
+
+test("a projectile tests only the objects next to its path, and still hits a moving avatar", () => {
+  const a = boot();
+  a.tick(0.2);
+  const all = a.run("pickables.length"),
+    near = a.run("nearPickables(new T.Vector3(1,1.2,6), new T.Vector3(1.1,1.2,6), 0.09).length");
+  assert(near < all / 2, `${near} of ${all} objects checked`);
+  assert(a.run("nearPickables(new T.Vector3(1,0.05,6), new T.Vector3(1.1,0.05,6), 0.09).includes(floor)"));
+  const anya = "players.find(p=>p.profile.id==='anya')";
+  a.run(`(${anya}).hit=0;Object.assign(active,{x:-5,z:2,y:0,angle:-Math.PI/2});active.action=null`);
+  a.run(`startAction(active,'throw',worldTime,{to:new T.Vector3((${anya}).x,1.05,(${anya}).z),w:'snow',pw:1,pid:'s'})`);
+  let hit = 0;
+  for (let i = 0; i < 180 && !hit; i++) {
+    a.tick(1 / 120);
+    hit = a.run(`(${anya}).hit`);
+  }
+  assert(hit > 0, "the snowball hit Аня");
 });
 
 test("Shift: faster running and pushing a light prop; the pose tells the server", () => {
@@ -1391,12 +1481,12 @@ test("icicle: everyone in the zone is slowed by half for 3 s and Shift does noth
   assert.equal(a.run("active.slow"), 0);
 });
 
-test("mine: key 9 sets it at your feet; stepped on, it blinks with a light and blows 3 s later, hurting whoever is close in a match", () => {
+test("mine: key 8 sets it at your feet; stepped on, it blinks with a light and blows 3 s later, hurting whoever is close in a match", () => {
   const a = boot({ offline: true });
   a.run('op({ t: "map.set", id: "paintball" })');
   a.tick(0.2);
   a.run("Object.assign(active, { x: 0, z: 4.8, y: 0, vy: 0, grounded: true })");
-  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit9", bubbles: true }));
+  a.w.document.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "Digit8", bubbles: true }));
   assert.equal(a.run("weapon"), "mine");
   a.run("throwSnow(null)");
   assert.equal(a.run("world.mines.length"), 1);
@@ -1479,4 +1569,183 @@ test("a bigger map is a bigger room: the floor, screen and camera grow together,
   assert(Math.abs(width() - 14.7) < 0.01);
   assert(Math.abs(a.run("camera.position.length()") / cam0 - 1) < 0.01);
   assert(Math.abs(a.run("active.x")) < 14.4 && a.run("active.z") < 10, "back on the standard floor");
+});
+
+const screenOf = (a, x, y, z) =>
+  a.run(`(()=>{const p=new T.Vector3(${x},${y},${z}).project(camera);return {x:(p.x+1)*innerWidth/2,y:(1-p.y)*innerHeight/2}})()`);
+
+test("emotions open as a small island above the toolbar; the chosen one pops up over your avatar and the island closes", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.tick(0.1);
+  d.querySelector('[data-action="reaction"]').click();
+  const island = d.querySelector("#emotionIsland");
+  assert.equal(island.hidden, false);
+  assert.equal(d.querySelector("#modal").open, false, "no modal over the room");
+  assert.deepEqual([...island.querySelectorAll("[data-emoji]")].map((b) => b.dataset.emoji), ["heart", "firework", "laugh", "sad"]);
+  island.querySelector('[data-emoji="laugh"]').click();
+  assert.equal(island.hidden, true);
+  a.tick(0.3);
+  assert.equal(a.run("active.emote.type"), "laugh");
+  assert.equal(a.run("emotionEffects.effects[0].group.children.some(c=>c.isSprite)"), true, "a big face over the avatar");
+  assert(a.run("emotionEffects.effects[0].group.position.y") > a.run("active.y") + 2, "above the head");
+  assert.equal(a.server.of("act").at(-1).e, "laugh", "everyone sees it");
+  // Old emotions from older clients still play as one of the four.
+  a.server.emit({ t: "act", id: "lena", s: a.run("net.serverNow()"), k: "emote", e: "applause" });
+  a.tick(0.2);
+  assert(["heart", "firework", "laugh", "sad"].includes(a.run("players.find(p=>p.profile.id==='lena').emote?.type")));
+  // A click elsewhere closes the island.
+  d.querySelector('[data-action="reaction"]').click();
+  a.pointer("pointerdown", 600, 500);
+  assert.equal(island.hidden, true);
+});
+
+test("poll: created like in Telegram, appears for everyone next to the timer, votes show as percentages; the author ends it", () => {
+  const a = boot(),
+    d = a.w.document,
+    type = (input, value) => {
+      input.value = value;
+      input.dispatchEvent(new a.w.Event("input", { bubbles: true }));
+    };
+  a.tick(0.1);
+  assert(d.querySelector('[data-action="poll"]'), "a poll button in the toolbar");
+  d.querySelector('[data-action="poll"]').click();
+  assert.equal(d.querySelector("#modal").open, true);
+  assert.equal(d.querySelector("#pollCreate").disabled, true);
+  type(d.querySelector("#pollQuestion"), "Что смотрим?");
+  let rows = () => d.querySelectorAll("#pollOptions input");
+  assert.equal(rows().length, 2);
+  type(rows()[0], "Мультики");
+  assert.equal(d.querySelector("#pollCreate").disabled, true, "one option is not a poll");
+  type(rows()[1], "Документалку");
+  assert.equal(rows().length, 3, "a new empty option appears once the last is filled");
+  assert.equal(d.querySelector("#pollCreate").disabled, false);
+  d.querySelector("#pollAnon").checked = false;
+  d.querySelector("#pollForm").dispatchEvent(new a.w.Event("submit", { bubbles: true, cancelable: true }));
+  assert.equal(d.querySelector("#modal").open, false);
+  assert.deepEqual(a.server.of("poll.create").at(-1).options, ["Мультики", "Документалку"]);
+  const card = d.querySelector("#pollCard");
+  assert.equal(card.hidden, false);
+  assert.match(card.textContent, /Что смотрим\?/);
+  assert.match(card.textContent, /Открытый опрос/);
+  card.querySelector('[data-poll-pick="1"]').click();
+  assert.match(card.querySelector(".poll-result.mine").textContent, /100%.*Документалку/);
+  assert.match(card.textContent, /1 голос/);
+  assert.match(card.textContent, /Вы/, "an open poll shows who voted");
+  // Someone else votes: the card updates.
+  const poll = structuredClone(a.run("world.poll"));
+  poll.votes.anya = { c: [0], n: "Аня" };
+  a.server.emit({ t: "poll", poll });
+  assert.match(card.textContent, /2 голоса/);
+  assert.match(card.textContent, /50%/);
+  card.querySelector("[data-poll-close]").click();
+  assert.match(card.textContent, /завершён/);
+  assert.equal(card.querySelector("[data-poll-retract]"), null);
+  card.querySelector("[data-poll-clear]").click();
+  assert.equal(card.hidden, true);
+  assert.equal(a.run("world.poll"), null);
+});
+
+test("a poll someone else starts pops up with a toast; collapsed, the toolbar button brings it back", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.tick(0.1);
+  const poll = { id: "p1", q: "Пицца или суши?", options: ["Пицца", "Суши"], multi: true, anon: true, by: "Аня", owner: "anya-key", at: 1, closed: false, votes: {} };
+  a.server.emit({ t: "poll", poll, by: "anya", started: true });
+  const card = d.querySelector("#pollCard");
+  assert.equal(card.hidden, false);
+  assert.match(d.querySelector("#toast").textContent, /Аня начинает опрос/);
+  assert.equal(card.querySelector("[data-poll-close]"), null, "only the author ends it");
+  card.querySelector('[data-poll-pick="0"]').click();
+  card.querySelector('[data-poll-pick="1"]').click();
+  assert.equal(a.server.of("poll.vote").length, 0, "several answers wait for the button");
+  card.querySelector("[data-poll-submit]").click();
+  assert.deepEqual(a.server.of("poll.vote").at(-1).choices, [0, 1]);
+  card.querySelector("[data-poll-hide]").click();
+  assert.equal(card.hidden, true);
+  d.querySelector('[data-action="poll"]').click();
+  assert.equal(card.hidden, false, "the poll button shows it again instead of a new one");
+  assert.equal(d.querySelector("#modal").open, false);
+});
+
+test("pencil: B, strokes on the floor and on the board for everyone, colour and width, your own undo and a two-step clear", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.tick(0.1);
+  d.dispatchEvent(new a.w.KeyboardEvent("keydown", { code: "KeyB", key: "b", bubbles: true }));
+  assert.equal(a.run("tool"), "draw");
+  const island = d.querySelector("#drawIsland");
+  assert.equal(island.hidden, false);
+  island.querySelector('[data-pen-color="#4cc9f0"]').click();
+  island.querySelectorAll("[data-pen-width]")[2].click();
+  const from = screenOf(a, -2, 0, 4),
+    to = screenOf(a, 2, 0, 5);
+  a.pointer("pointerdown", from.x, from.y);
+  a.pointer("pointermove", (from.x + to.x) / 2, (from.y + to.y) / 2);
+  a.pointer("pointermove", to.x, to.y);
+  assert.equal(a.run("strokeLayer.previewMesh?.visible ?? true"), true);
+  a.pointer("pointerup", to.x, to.y);
+  const sent = a.server.of("draw.add").at(-1);
+  assert.equal(sent.on, "floor");
+  assert.equal(sent.c, "#4cc9f0");
+  assert.equal(sent.w, 0.16);
+  assert(Math.abs(sent.p[0] + 2) < 0.05 && Math.abs(sent.p.at(-1) - 5) < 0.05, `from (-2,4) to (2,5): ${sent.p}`);
+  assert.equal(a.run("world.strokes.length"), 1);
+  assert.equal(a.run("strokeLayer.meshes.size"), 1);
+  // On the board.
+  const onBoard = (dx, dy) =>
+    a.run(
+      `(()=>{const r=screenTiles[1].geometry.userData.rect;const p=screenPoint(r.x+r.width/2+${dx},r.y+r.height/2+${dy},.035);const v=new T.Vector3(p.x,p.y,p.z).project(camera);return {x:(v.x+1)*innerWidth/2,y:(1-v.y)*innerHeight/2}})()`,
+    );
+  const b0 = onBoard(-0.5, 0),
+    b1 = onBoard(0.5, 0.3);
+  a.pointer("pointerdown", b0.x, b0.y);
+  a.pointer("pointermove", b1.x, b1.y);
+  a.pointer("pointerup", b1.x, b1.y);
+  assert.equal(a.server.of("draw.add").at(-1).on, "wall");
+  assert.equal(a.run("strokeLayer.meshes.size"), 2);
+  // Someone else's stroke arrives.
+  a.server.emit({ t: "stroke", stroke: { id: "s-anya", by: "anya-key", on: "floor", c: "#ef476f", w: 0.08, p: [0, 0, 1, 1] } });
+  assert.equal(a.run("strokeLayer.meshes.size"), 3);
+  island.querySelector("[data-pen-undo]").click();
+  assert.equal(a.run("world.strokes.length"), 2, "only your last stroke goes");
+  assert.equal(a.run("world.strokes.some(s=>s.id==='s-anya')"), true);
+  island.querySelector("[data-pen-clear]").click();
+  assert.equal(a.run("world.strokes.length"), 2, "the first click only asks");
+  assert.match(island.querySelector("[data-pen-clear]").textContent, /Стереть всё\?/);
+  island.querySelector("[data-pen-clear]").click();
+  assert.equal(a.run("world.strokes.length"), 0);
+  assert.equal(a.run("strokeLayer.meshes.size"), 0);
+  a.run("setTool('snow')");
+  assert.equal(island.hidden, true);
+});
+
+test("shape tool: an island of nine figures; the chosen one is placed and remembered", () => {
+  const a = boot(),
+    d = a.w.document;
+  a.tick(0.1);
+  d.querySelector('[data-tool="cube"]').click();
+  const island = d.querySelector("#shapeIsland");
+  assert.equal(island.hidden, false);
+  assert.equal(island.querySelectorAll("[data-shape]").length, 9);
+  island.querySelector('[data-shape="torus"]').click();
+  const p = screenOf(a, 3, 0, 6);
+  const before = a.run("cubes.length");
+  a.pointer("pointerdown", p.x, p.y);
+  a.pointer("pointerup", p.x, p.y);
+  assert.equal(a.run("cubes.length"), before + 1);
+  assert.equal(a.run("cubes.at(-1).shape"), "torus");
+  assert.equal(a.run("cubeMeshes.get(cubes.at(-1).id).children[0].geometry.type"), "TorusGeometry");
+  assert.equal(JSON.parse(a.w.localStorage.getItem("kino-shape")), "torus");
+  assert.equal(island.hidden, true, "back to snowballs after placing");
+});
+
+test("the toolbar is a miniature island: small buttons, poll and pencil included", () => {
+  const css = fs.readFileSync(new URL("../dist/style.css", import.meta.url), "utf8");
+  const rule = (sel) => css.match(new RegExp(`\\n${sel.replace(/[.]/g, "\\.")} \\{([^}]*)\\}`))?.[1] || "";
+  assert.match(rule(".tool"), /width: 30px/);
+  assert.match(rule(".island svg"), /width: 16px/);
+  const a = boot();
+  for (const sel of ['[data-tool="draw"]', '[data-action="poll"]', '[data-action="reaction"]', '[data-tool="cube"]'])
+    assert(a.w.document.querySelector(`.island ${sel}`), sel);
 });

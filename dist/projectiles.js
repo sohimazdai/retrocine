@@ -5,17 +5,18 @@ export const CHARGE_MAX = 1.6,
   CHARGE_TIME = 1.1,
   PROJECTILE_GRAVITY = 12;
 export const PROJECTILES = [
-  { id: "snow", key: "1", emoji: "❄️", label: "Снежок", mass: 0.2, radius: 0.09, maxSpeed: 19, impact: 3, cooldown: 0.24, color: "#faf5ff" },
-  { id: "tomato", key: "2", emoji: "🍅", label: "Помидор", mass: 0.15, radius: 0.1, maxSpeed: 19, impact: 2, cooldown: 0.24, splat: "#d1352a", color: "#d8382b" },
-  { id: "tennis", key: "3", emoji: "🎾", label: "Теннисный мяч", mass: 0.06, radius: 0.075, maxSpeed: 22, impact: 1.5, cooldown: 0.24, bounce: 0.72, life: 4, color: "#d8ef4a" },
-  { id: "rock", key: "4", emoji: "🪨", label: "Камень", mass: 1, radius: 0.12, maxSpeed: 13, impact: 6, cooldown: 0.45, color: "#8b8680" },
-  { id: "brick", key: "5", emoji: "🧱", label: "Кирпич", mass: 2.5, radius: 0.13, maxSpeed: 9, impact: 9, cooldown: 1, color: "#a8543b" },
-  { id: "grenade", key: "6", emoji: "💣", label: "Граната", mass: 0.6, radius: 0.1, maxSpeed: 14, impact: 3, cooldown: 10, bounce: 0.35, fuse: 3, life: 3, explosion: { radius: 4.6, power: 15 }, color: "#4e5b3a" },
-  { id: "fireball", key: "7", emoji: "🔥", label: "Фаербол", mass: 0.3, radius: 0.17, maxSpeed: 17, gravity: 0.45, impact: 4, cooldown: 5, explodeOnContact: true, life: 5, explosion: { radius: 3.8, power: 12 }, color: "#ff8a2a" },
+  // Snowballs, tomatoes and rocks: at most twice a second (the server holds to it too).
+  { id: "snow", key: "1", emoji: "❄️", label: "Снежок", mass: 0.2, radius: 0.09, maxSpeed: 19, impact: 3, cooldown: 0.5, color: "#faf5ff" },
+  // Leaves no stain: bursts into juice and chunks that fly off and are gone.
+  { id: "tomato", key: "2", emoji: "🍅", label: "Помидор", mass: 0.15, radius: 0.1, maxSpeed: 19, impact: 2, cooldown: 0.5, color: "#d8382b" },
+  { id: "rock", key: "3", emoji: "🪨", label: "Камень", mass: 1, radius: 0.12, maxSpeed: 13, impact: 6, cooldown: 0.5, color: "#8b8680" },
+  { id: "brick", key: "4", emoji: "🧱", label: "Кирпич", mass: 2.5, radius: 0.13, maxSpeed: 9, impact: 9, cooldown: 1, color: "#a8543b" },
+  { id: "grenade", key: "5", emoji: "💣", label: "Граната", mass: 0.6, radius: 0.1, maxSpeed: 14, impact: 3, cooldown: 10, bounce: 0.35, fuse: 3, life: 3, explosion: { radius: 4.6, power: 15 }, color: "#4e5b3a" },
+  { id: "fireball", key: "6", emoji: "🔥", label: "Фаербол", mass: 0.3, radius: 0.17, maxSpeed: 17, gravity: 0.45, impact: 4, cooldown: 5, explodeOnContact: true, life: 5, explosion: { radius: 3.8, power: 12 }, color: "#ff8a2a" },
   // Shatters where it lands: everyone within the radius is slowed by half and cannot sprint or push.
-  { id: "icicle", key: "8", emoji: "🧊", label: "Сосулька", mass: 0.4, radius: 0.1, maxSpeed: 16, impact: 2, cooldown: 6, frostOnContact: true, life: 4, frost: { radius: 2.8, seconds: 3 }, color: "#bfe8ff" },
+  { id: "icicle", key: "7", emoji: "🧊", label: "Сосулька", mass: 0.4, radius: 0.1, maxSpeed: 16, impact: 2, cooldown: 6, frostOnContact: true, life: 4, frost: { radius: 2.8, seconds: 3 }, color: "#bfe8ff" },
   // Not thrown but set down at your feet; stepped on by anyone, it blinks and goes off 3 s later.
-  { id: "mine", key: "9", emoji: "🧨", label: "Мина", place: true, cooldown: 10, mine: { radius: 3.8, power: 14, fuse: 3000, arm: 1200, trigger: 0.6 }, color: "#3d4a32" },
+  { id: "mine", key: "8", emoji: "🧨", label: "Мина", place: true, cooldown: 10, mine: { radius: 3.8, power: 14, fuse: 3000, arm: 1200, trigger: 0.6 }, color: "#3d4a32" },
 ];
 export const projectile = (id) => PROJECTILES.find((p) => p.id === id) || PROJECTILES[0];
 

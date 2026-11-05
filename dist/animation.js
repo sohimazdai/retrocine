@@ -393,25 +393,7 @@ function applyEmote(rig, type, t, s) {
     rig.elbows.forEach((elbow) => (elbow.rotation.x = -1.35 * s));
     rig.head.rotation.z += Math.sin(t * 3) * 0.08 * s;
   }
-  if (type === "applause") {
-    const clap = (0.5 + Math.sin(t * 19) * 0.5) * s;
-    for (let i = 0; i < 2; i++) {
-      rig.arms[i].rotation.x = -1.05 * s;
-      rig.arms[i].rotation.y = (i ? -1 : 1) * 0.2;
-      rig.arms[i].rotation.z = (i ? -1 : 1) * (0.1 + clap * 0.9);
-      rig.elbows[i].rotation.x = -0.75 * s;
-    }
-    rig.torso.rotation.x += Math.sin(t * 19) * 0.025 * s;
-  }
-  if (type === "salute") {
-    rig.arms[1].position.y += 0.15 * s;
-    rig.arms[1].scale.y = 1 + 0.85 * s;
-    rig.arms[1].rotation.set(-2.5 * s, -0.15 * s, 0.1 * s);
-    rig.elbows[1].rotation.x = -0.1 * s;
-    rig.model.rotation.z = -0.025 * s;
-    rig.head.rotation.x = 0.12 * s;
-  }
-  if (type === "fire" || type === "firework") {
+  if (type === "firework") {
     for (let i = 0; i < 2; i++) {
       rig.arms[i].rotation.x = -2.3 * s;
       rig.arms[i].rotation.z = (i ? 1 : -1) * 0.5 * s;
@@ -419,18 +401,13 @@ function applyEmote(rig, type, t, s) {
     }
     rig.model.position.y += Math.max(0, Math.sin(t * 9)) * 0.06 * s;
   }
-  if (type === "sad" || type === "tears") {
+  if (type === "sad") {
     rig.head.rotation.x = 0.32 * s;
     rig.model.rotation.x += 0.09 * s;
     rig.torso.position.y -= 0.05 * s;
     rig.brows.forEach((brow, i) => (brow.rotation.z = (i ? 1 : -1) * 0.35 * s));
     rig.mouth.scale.set(1, 0.5, 1);
     rig.arms.forEach((arm, i) => (arm.rotation.z = (i ? 1 : -1) * 0.16 * s));
-    if (type === "tears") {
-      rig.arms[1].rotation.x = -1.5 * s;
-      rig.elbows[1].rotation.x = -1.1 * s;
-      rig.head.rotation.z += Math.sin(t * 18) * 0.04 * s;
-    }
   }
   if (type === "laugh") {
     rig.head.rotation.x = -0.18 * s;
@@ -443,14 +420,5 @@ function applyEmote(rig, type, t, s) {
       rig.arms[i].rotation.x = -0.65 * s;
       rig.elbows[i].rotation.x = -0.8 * s;
     }
-  }
-  if (type === "moai") {
-    rig.model.rotation.set(0, 0, 0);
-    rig.head.rotation.set(-0.04 * s, 0, 0);
-    rig.torso.rotation.set(0, 0, 0);
-    rig.model.position.y = 0;
-    rig.eyes.forEach((eye) => (eye.scale.y = 1 - 0.42 * s));
-    rig.arms.forEach((arm) => arm.rotation.set(0, 0, 0));
-    rig.elbows.forEach((elbow) => elbow.rotation.set(0, 0, 0));
   }
 }
